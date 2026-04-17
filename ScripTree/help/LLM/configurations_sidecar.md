@@ -49,13 +49,16 @@ file can be committed to version control while the sidecar stays local.
 - `path_prepend` — per-configuration PATH prepends, layered on top of
   `ToolDef.path_prepend`. Configuration entries go earlier in the final
   PATH than tool entries (higher search priority).
-- `ui_visibility` — dict of boolean flags controlling which UI elements
-  are visible in standalone mode. Only non-default values are stored.
-  Valid keys: `output_pane`, `extras_box`, `tools_sidebar`,
-  `command_line`, `copy_argv`, `clear_output`, `config_bar`,
-  `env_button`, `popup_on_error`, `popup_on_success`. All default to
-  `true` except `popup_on_error` and `popup_on_success` (default
-  `false`).
+- `ui_visibility` — dict controlling which UI elements are visible in
+  standalone mode. Only non-default values are stored. Boolean keys:
+  `output_pane`, `extras_box`, `tools_sidebar`, `command_line`,
+  `copy_argv`, `clear_output`, `env_button`, `popup_on_error`,
+  `popup_on_success`. All default to `true` except `popup_on_error`
+  and `popup_on_success` (default `false`).
+  String key: `config_bar` — `"hidden"`, `"read"`, or `"readwrite"`
+  (default `"readwrite"`). Legacy `true`/`false` values auto-migrate
+  to `"readwrite"`/`"hidden"`.
+  The Visibility button is always hidden in standalone mode.
 - `hidden_params` — list of param ID strings. These params are hidden
   from the form in standalone mode; their values come from `values`.
 - `prompt_credentials` — boolean, default `false`. When `true`, clicking

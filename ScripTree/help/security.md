@@ -84,6 +84,8 @@ denied for that user.
 | | `save_as_scriptree` | Save As for .scriptree files |
 | | `save_as_scriptreetree` | Save As for .scriptreetree files |
 | **Editing** | `edit_tool_definition` | Opening the tool definition editor |
+| | `read_configurations` | Switching between saved configurations (read-only) |
+| | `write_configurations` | Creating, saving, deleting, renaming configurations |
 | | `edit_configurations` | Modifying saved configurations |
 | | `edit_environment` | Changing environment variable overrides |
 | | `edit_visibility` | Changing UI visibility and hidden parameters |

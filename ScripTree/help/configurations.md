@@ -118,7 +118,9 @@ opened in **standalone mode** (View → Open in standalone window or CLI
 with `-configuration`). In the main IDE window, all elements are always
 visible.
 
-Open the **Visibility...** dialog from the configuration bar to toggle:
+Open the **Visibility...** dialog from the configuration bar to toggle.
+A note at the top reminds you that these settings only apply in
+standalone mode — when docked in the IDE, all elements stay visible.
 
 | Flag | Controls | Default |
 |------|----------|---------|
@@ -127,11 +129,23 @@ Open the **Visibility...** dialog from the configuration bar to toggle:
 | Command line editor | The editable command preview | on |
 | Copy argv button | The "Copy argv" action button | on |
 | Clear output button | The "Clear output" action button | on |
-| Configuration bar | The entire config combo + buttons row | on |
+| Configuration bar | Checkbox + dropdown (see below) | on / Read-Write |
 | Environment button | The "Env..." button | on |
 | Tools sidebar | The launcher tree (main window only) | on |
 | Popup dialog on error | Show error popup when output hidden | off |
 | Popup dialog on success | Show success popup when output hidden | off |
+
+### Configuration bar modes
+
+The configuration bar has three modes, set via a checkbox and dropdown:
+
+- **Unchecked** — the entire config bar is hidden in standalone
+- **Read only** — only the config dropdown is shown; users can switch
+  between configurations to view them, but cannot save, delete, or edit
+- **Read / Write** — full config bar with all buttons
+
+The **Visibility button itself is always hidden in standalone mode** —
+it's an IDE-only control. Edit visibility settings from the main window.
 
 When the output pane is hidden, enabling the popup flags ensures the user
 still sees the result.
