@@ -78,7 +78,11 @@ class UIVisibility:
     command_line: bool = True
     copy_argv: bool = True
     clear_output: bool = True
-    config_bar: bool = True
+    # Config bar mode: "hidden", "read", or "readwrite".
+    # "hidden" = no config bar at all in standalone.
+    # "read" = combo to switch configs, but no Save/Delete/Edit/Env buttons.
+    # "readwrite" = full config bar with all buttons.
+    config_bar: str = "readwrite"
     env_button: bool = True
     popup_on_error: bool = False
     popup_on_success: bool = False
@@ -206,7 +210,7 @@ def _config_to_dict(c: Configuration) -> dict[str, Any]:
         d["path_prepend"] = list(c.path_prepend)
     # UI visibility — only emit when non-default.
     if not c.ui_visibility.is_default():
-        vis: dict[str, bool] = {}
+        vis: dict[str, Any] = {}
         defaults = UIVisibility()
         for f in _VIS_FIELDS:
             val = getattr(c.ui_visibility, f)
@@ -227,10 +231,19 @@ def _vis_from_dict(raw: dict[str, Any] | None) -> UIVisibility:
     if not raw:
         return UIVisibility()
     defaults = UIVisibility()
-    kwargs: dict[str, bool] = {}
+    kwargs: dict[str, Any] = {}
     for f in _VIS_FIELDS:
         if f in raw:
-            kwargs[f] = bool(raw[f])
+            if f == "config_bar":
+                # String field: "hidden", "read", "readwrite".
+                # Legacy bool True → "readwrite", False → "hidden".
+                v = raw[f]
+                if isinstance(v, bool):
+                    kwargs[f] = "readwrite" if v else "hidden"
+                else:
+                    kwargs[f] = str(v) if v in ("hidden", "read", "readwrite") else "readwrite"
+            else:
+                kwargs[f] = bool(raw[f])
         else:
             kwargs[f] = getattr(defaults, f)
     return UIVisibility(**kwargs)
@@ -282,7 +295,7 @@ def safetree_visibility() -> UIVisibility:
         command_line=False,
         copy_argv=False,
         clear_output=False,
-        config_bar=False,
+        config_bar="hidden",
         env_button=False,
         popup_on_error=True,
         popup_on_success=True,

@@ -90,9 +90,20 @@ class TestApplyVisibility:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
         view._standalone_mode = True
-        vis = UIVisibility(config_bar=False)
+        vis = UIVisibility(config_bar="hidden")
         view._apply_visibility(vis)
         assert view._cfg_widget.isHidden()
+
+    def test_config_bar_read_only(self, tmp_path: Path) -> None:
+        tool, path = _saved_tool(tmp_path)
+        view = ToolRunnerView(tool, file_path=path)
+        view._standalone_mode = True
+        vis = UIVisibility(config_bar="read")
+        view._apply_visibility(vis)
+        assert not view._cfg_widget.isHidden()
+        assert view._btn_cfg_save.isHidden()
+        assert view._btn_cfg_delete.isHidden()
+        assert view._btn_cfg_visibility.isHidden()
 
     def test_env_button_hidden(self, tmp_path: Path) -> None:
         tool, path = _saved_tool(tmp_path)
@@ -138,7 +149,7 @@ class TestApplyVisibility:
         # _standalone_mode defaults to False.
         vis = UIVisibility(
             extras_box=False, command_line=False,
-            copy_argv=False, clear_output=False, config_bar=False,
+            copy_argv=False, clear_output=False, config_bar="hidden",
         )
         view._apply_visibility(vis)
         # Nothing should be hidden in docked mode.

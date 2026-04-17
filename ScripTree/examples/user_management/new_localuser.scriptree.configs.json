@@ -8,14 +8,31 @@
         "description": "",
         "full_name": "",
         "name": "",
-        "no_password": false,
-        "password_never_expires": false,
+        "no_password": true,
+        "password_never_expires": true,
         "user_may_not_change_password": false,
         "account_expires": "",
         "account_never_expires": false,
-        "disabled": false
+        "disabled": true
       },
-      "extras": []
+      "extras": [],
+      "ui_visibility": {
+        "output_pane": false,
+        "extras_box": false,
+        "tools_sidebar": false,
+        "command_line": false,
+        "copy_argv": false,
+        "clear_output": false,
+        "config_bar": false,
+        "env_button": false,
+        "popup_on_error": true,
+        "popup_on_success": true
+      },
+      "hidden_params": [
+        "disabled",
+        "no_password",
+        "password_never_expires"
+      ]
     }
   ]
 }

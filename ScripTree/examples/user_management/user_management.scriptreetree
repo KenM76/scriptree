@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "Windows User Management",
   "nodes": [
     {
@@ -8,38 +8,31 @@
       "children": [
         {
           "type": "leaf",
-          "path": "./get_localuser.scriptree",
-          "display_name": "List users"
+          "path": "./get_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./new_localuser.scriptree",
-          "display_name": "Create user"
+          "path": "./new_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./set_localuser.scriptree",
-          "display_name": "Modify user"
+          "path": "./set_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./rename_localuser.scriptree",
-          "display_name": "Rename user"
+          "path": "./rename_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./enable_localuser.scriptree",
-          "display_name": "Enable user"
+          "path": "./enable_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./disable_localuser.scriptree",
-          "display_name": "Disable user"
+          "path": "./disable_localuser.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./remove_localuser.scriptree",
-          "display_name": "Delete user"
+          "path": "./remove_localuser.scriptree"
         }
       ]
     },
@@ -49,28 +42,23 @@
       "children": [
         {
           "type": "leaf",
-          "path": "./get_localgroup.scriptree",
-          "display_name": "List groups"
+          "path": "./get_localgroup.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./new_localgroup.scriptree",
-          "display_name": "Create group"
+          "path": "./new_localgroup.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./set_localgroup.scriptree",
-          "display_name": "Modify group"
+          "path": "./set_localgroup.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./rename_localgroup.scriptree",
-          "display_name": "Rename group"
+          "path": "./rename_localgroup.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./remove_localgroup.scriptree",
-          "display_name": "Delete group"
+          "path": "./remove_localgroup.scriptree"
         }
       ]
     },
@@ -80,18 +68,15 @@
       "children": [
         {
           "type": "leaf",
-          "path": "./get_localgroupmember.scriptree",
-          "display_name": "List members"
+          "path": "./get_localgroupmember.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./add_localgroupmember.scriptree",
-          "display_name": "Add member"
+          "path": "./add_localgroupmember.scriptree"
         },
         {
           "type": "leaf",
-          "path": "./remove_localgroupmember.scriptree",
-          "display_name": "Remove member"
+          "path": "./remove_localgroupmember.scriptree"
         }
       ]
     }

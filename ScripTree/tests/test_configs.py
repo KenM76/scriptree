@@ -138,7 +138,7 @@ class TestUIVisibility:
         assert vis.command_line is True
         assert vis.copy_argv is True
         assert vis.clear_output is True
-        assert vis.config_bar is True
+        assert vis.config_bar == "readwrite"
         assert vis.env_button is True
         assert vis.popup_on_error is False
         assert vis.popup_on_success is False
@@ -156,7 +156,7 @@ class TestUIVisibility:
             ui_visibility=UIVisibility(
                 output_pane=False,
                 command_line=False,
-                config_bar=False,
+                config_bar="hidden",
                 popup_on_error=True,
             ),
         )
@@ -166,7 +166,7 @@ class TestUIVisibility:
         vis_dict = d["configurations"][0]["ui_visibility"]
         assert vis_dict["output_pane"] is False
         assert vis_dict["command_line"] is False
-        assert vis_dict["config_bar"] is False
+        assert vis_dict["config_bar"] == "hidden"
         assert vis_dict["popup_on_error"] is True
         assert "extras_box" not in vis_dict  # default, omitted
 
@@ -174,7 +174,7 @@ class TestUIVisibility:
         vis2 = s2.configurations[0].ui_visibility
         assert vis2.output_pane is False
         assert vis2.command_line is False
-        assert vis2.config_bar is False
+        assert vis2.config_bar == "hidden"
         assert vis2.popup_on_error is True
         assert vis2.extras_box is True  # default preserved
 

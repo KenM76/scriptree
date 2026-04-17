@@ -19,6 +19,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
@@ -35,13 +36,13 @@ from ..core.configs import UIVisibility
 from ..core.model import ParamDef
 
 # Maps UIVisibility field names to human-readable labels.
+# config_bar is handled separately (checkbox + dropdown).
 _VIS_LABELS: list[tuple[str, str]] = [
     ("output_pane", "Output pane"),
     ("extras_box", "Extra arguments box"),
     ("command_line", "Command line editor"),
     ("copy_argv", "Copy argv button"),
     ("clear_output", "Clear output button"),
-    ("config_bar", "Configuration bar"),
     ("env_button", "Environment button"),
     ("tools_sidebar", "Tools sidebar"),
     ("popup_on_error", "Popup dialog on error"),
@@ -93,12 +94,44 @@ class VisibilityEditorDialog(QDialog):
         vis_layout = QVBoxLayout(vis_group)
         vis_layout.setContentsMargins(8, 8, 8, 8)
 
+        note = QLabel(
+            "<i>These settings only take effect in <b>standalone mode</b> "
+            "(View \u2192 Open in standalone window, or the -standalone "
+            "CLI flag). When docked in the main IDE, all controls remain "
+            "visible.</i>"
+        )
+        note.setWordWrap(True)
+        vis_layout.addWidget(note)
+
         self._vis_checks: dict[str, QCheckBox] = {}
         for field_name, label in _VIS_LABELS:
             cb = QCheckBox(label)
             cb.setChecked(getattr(visibility, field_name))
             self._vis_checks[field_name] = cb
             vis_layout.addWidget(cb)
+
+        # Configuration bar — checkbox + dropdown for access level.
+        config_bar_row = QHBoxLayout()
+        self._chk_config_bar = QCheckBox("Configuration bar")
+        config_bar_mode = visibility.config_bar  # "hidden", "read", "readwrite"
+        self._chk_config_bar.setChecked(config_bar_mode != "hidden")
+        config_bar_row.addWidget(self._chk_config_bar)
+
+        self._cmb_config_bar = QComboBox()
+        self._cmb_config_bar.addItem("Read only", "read")
+        self._cmb_config_bar.addItem("Read / Write", "readwrite")
+        # Set current from the mode.
+        if config_bar_mode == "read":
+            self._cmb_config_bar.setCurrentIndex(0)
+        else:
+            self._cmb_config_bar.setCurrentIndex(1)
+        self._cmb_config_bar.setEnabled(config_bar_mode != "hidden")
+        config_bar_row.addWidget(self._cmb_config_bar)
+        config_bar_row.addStretch(1)
+
+        self._chk_config_bar.toggled.connect(self._cmb_config_bar.setEnabled)
+        vis_layout.addLayout(config_bar_row)
+
         vis_layout.addStretch(1)
         splitter.addWidget(vis_group)
 
@@ -165,10 +198,15 @@ class VisibilityEditorDialog(QDialog):
 
     def result_visibility(self) -> UIVisibility:
         """Return the UIVisibility reflecting the dialog's checkboxes."""
-        kwargs = {
+        kwargs: dict[str, Any] = {
             field: cb.isChecked()
             for field, cb in self._vis_checks.items()
         }
+        # Config bar: checkbox + dropdown → "hidden", "read", or "readwrite".
+        if not self._chk_config_bar.isChecked():
+            kwargs["config_bar"] = "hidden"
+        else:
+            kwargs["config_bar"] = self._cmb_config_bar.currentData()
         return UIVisibility(**kwargs)
 
     def result_hidden_params(self) -> list[str]:

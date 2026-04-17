@@ -1862,18 +1862,40 @@ class ToolRunnerView(QWidget):
         switch configurations and access every feature. The
         ``visibilityChanged`` signal still fires regardless so the
         StandaloneWindow / MainWindow can react.
+
+        ``config_bar`` is a string: "hidden", "read", or "readwrite".
+        - "hidden" — entire config bar hidden
+        - "read" — combo visible (switch configs), write buttons hidden
+        - "readwrite" — full config bar
+        The Visibility button is always hidden in standalone mode.
         """
         if self._standalone_mode:
             self._extras_box.setVisible(vis.extras_box)
             self._cmd_box.setVisible(vis.command_line)
             self._btn_preview.setVisible(vis.copy_argv)
-            # Clear-output button is hidden when either its own flag or
-            # the output pane flag is off — no point clearing invisible output.
             self._btn_clear_output.setVisible(
                 vis.clear_output and vis.output_pane
             )
-            self._cfg_widget.setVisible(vis.config_bar)
             self._btn_cfg_env.setVisible(vis.env_button)
+
+            # Config bar mode.
+            cb_mode = vis.config_bar  # "hidden", "read", "readwrite"
+            if cb_mode == "hidden":
+                self._cfg_widget.setVisible(False)
+            else:
+                self._cfg_widget.setVisible(True)
+                is_rw = cb_mode == "readwrite"
+                self._btn_cfg_save.setVisible(is_rw)
+                self._btn_cfg_save_as.setVisible(is_rw)
+                self._btn_cfg_delete.setVisible(is_rw)
+                self._btn_cfg_edit.setVisible(is_rw)
+                self._btn_cfg_env.setVisible(is_rw and vis.env_button)
+                self._chk_prompt_creds.setVisible(is_rw)
+
+            # Visibility button never shows in standalone mode —
+            # the user edits visibility from the IDE, not standalone.
+            self._btn_cfg_visibility.setVisible(False)
+
         # Output pane + tools sidebar are controlled by the parent
         # window; emit the full visibility object so it can decide.
         self.visibilityChanged.emit(vis)

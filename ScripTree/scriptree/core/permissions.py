@@ -167,6 +167,8 @@ CAPABILITIES: dict[str, str] = {
     "save_as_scriptreetree": "Save As .scriptreetree files",
     # editing
     "edit_tool_definition": "Edit tool definitions in the editor",
+    "read_configurations": "Switch between saved configurations (read-only access)",
+    "write_configurations": "Create, save, delete, and rename configurations",
     "edit_configurations": "Edit saved configurations",
     "edit_environment": "Edit environment variables",
     "edit_visibility": "Edit UI visibility and hidden parameters",

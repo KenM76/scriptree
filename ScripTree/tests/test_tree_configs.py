@@ -55,7 +55,7 @@ class TestSafetreeVisibility:
         assert vis.command_line is False
         assert vis.copy_argv is False
         assert vis.clear_output is False
-        assert vis.config_bar is False
+        assert vis.config_bar == "hidden"
         assert vis.env_button is False
         assert vis.tools_sidebar is False
 
