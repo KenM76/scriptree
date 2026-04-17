@@ -167,9 +167,43 @@ def _plugin_from_module(module: Any, source: str) -> PluginInfo | None:
 
 # --- loaders ---------------------------------------------------------------
 
+def _find_parsers_dir() -> Path | None:
+    """Locate the ``ScripTree/parsers/`` directory.
+
+    Walks up from this file (``scriptree/core/parser/plugin_api.py``)
+    to find the ``parsers/`` folder that sits alongside the
+    ``scriptree`` package directory.
+    """
+    here = Path(__file__).resolve().parent  # scriptree/core/parser/
+    # Up: parser → core → scriptree → ScripTree/
+    scriptree_dir = here.parent.parent.parent
+    candidate = scriptree_dir / "parsers"
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
 def load_builtin_plugins(registry: PluginRegistry) -> None:
-    """Load every module under ``scriptree.core.parser.plugins`` whose
-    name does not start with an underscore."""
+    """Load parser plugins from ``ScripTree/parsers/``.
+
+    Also falls back to the legacy ``scriptree.core.parser.plugins``
+    package if the external parsers directory is not found (e.g. in
+    test environments).
+
+    Files whose names start with ``_`` are skipped (they are internal
+    helpers, not standalone plugins).
+    """
+    # Primary: load from ScripTree/parsers/ directory.
+    parsers_dir = _find_parsers_dir()
+    if parsers_dir is not None:
+        count = load_plugins_from_dir(registry, parsers_dir)
+        if count > 0:
+            logger.debug(
+                "Loaded %d built-in plugin(s) from %s", count, parsers_dir
+            )
+            return
+
+    # Fallback: load from the in-package plugins subpackage.
     from . import plugins as plugins_pkg
 
     for mod_info in pkgutil.iter_modules(plugins_pkg.__path__):
@@ -189,18 +223,38 @@ def load_builtin_plugins(registry: PluginRegistry) -> None:
 
 
 def load_plugins_from_dir(registry: PluginRegistry, dir_path: Path) -> int:
-    """Load every ``.py`` file in ``dir_path`` as a user plugin.
+    """Load every ``.py`` file in ``dir_path`` as a parser plugin.
 
     Returns the number of plugins successfully loaded. Files whose
-    names start with ``_`` are skipped (same convention as built-ins).
+    names start with ``_`` are skipped (internal helpers, not plugins).
+
+    The directory is temporarily added to ``sys.path`` so that plugins
+    can import sibling helper modules (e.g. ``from _core import ...``).
     """
     if not dir_path.is_dir():
         return 0
+    # Add the plugin directory to sys.path so inter-plugin imports work.
+    dir_str = str(dir_path)
+    path_added = False
+    if dir_str not in sys.path:
+        sys.path.insert(0, dir_str)
+        path_added = True
+    loaded = 0
+    try:
+        return _load_plugins_from_dir_inner(registry, dir_path)
+    finally:
+        if path_added and dir_str in sys.path:
+            sys.path.remove(dir_str)
+
+
+def _load_plugins_from_dir_inner(
+    registry: PluginRegistry, dir_path: Path
+) -> int:
     loaded = 0
     for py_file in sorted(dir_path.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
-        module_name = f"scriptree_user_parser_{py_file.stem}"
+        module_name = f"scriptree_parser_{py_file.stem}"
         try:
             spec = importlib.util.spec_from_file_location(module_name, py_file)
             if spec is None or spec.loader is None:
