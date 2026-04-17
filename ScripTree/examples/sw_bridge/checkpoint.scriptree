@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge checkpoint",
+  "description": "Capture screenshots and measurements of the active SolidWorks model.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "checkpoint",
+    "{screenshotDir}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "screenshotDir",
+      "label": "Screenshot directory",
+      "description": "Folder where isometric and front view JPGs will be saved.",
+      "type": "path",
+      "widget": "folder",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "output",
+      "label": "Summary output",
+      "description": "Path where the bounding box, mass properties, and feature list will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "checkpoint_out.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

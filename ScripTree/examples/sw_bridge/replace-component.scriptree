@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge replace-component",
+  "description": "Replace a component with another throughout an open assembly tree.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "replace-component",
+    "{assyTitle}",
+    "{oldPath}",
+    "{newPath}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "assyTitle",
+      "label": "Assembly title fragment",
+      "description": "Window-title fragment of the assembly to modify.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "oldPath",
+      "label": "Old component path",
+      "description": "Full path to the component being replaced.",
+      "type": "path",
+      "widget": "file_open",
+      "required": true,
+      "default": "",
+      "file_filter": "SolidWorks (*.sldprt *.sldasm);;All files (*)"
+    },
+    {
+      "id": "newPath",
+      "label": "New component path",
+      "description": "Full path to the replacement component.",
+      "type": "path",
+      "widget": "file_open",
+      "required": true,
+      "default": "",
+      "file_filter": "SolidWorks (*.sldprt *.sldasm);;All files (*)"
+    },
+    {
+      "id": "output",
+      "label": "Output log",
+      "description": "Path where the replacement log will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "replace_log.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "name": "Get-LocalUser",
+  "description": "List local user accounts (optionally filter by name).",
+  "executable": "powershell.exe",
+  "working_directory": null,
+  "argument_template": [
+    "-NoProfile",
+    "-Command",
+    "Get-LocalUser",
+    "{name}"
+  ],
+  "params": [
+    {
+      "id": "name",
+      "label": "Name",
+      "description": "User name to look up (supports wildcards). Leave blank for all users.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "source": {
+    "mode": "powershell",
+    "help_text_cached": "\nNAME\n    Get-LocalUser\n    \nSYNTAX\n    Get-LocalUser [[-Name] <string[]>]  [<CommonParameters>]\n    \n    Get-LocalUser [[-SID] <SecurityIdentifier[]>]  [<CommonParameters>]\n    \n    \nPARAMETERS\n    -Name <string[]>\n        \n        Required?                    false\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           Default\n        Aliases                      None\n        Dynamic?                     false\n        \n    -SID <SecurityIdentifier[]>\n        \n        Required?                    false\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           SecurityIdentifier\n        Aliases                      None\n        Dynamic?                     false\n        \n    <CommonParameters>\n        This cmdlet supports the common parameters: Verbose, Debug,\n        ErrorAction, ErrorVariable, WarningAction, WarningVariable,\n        OutBuffer, PipelineVariable, and OutVariable. For more information, see \n        about_CommonParameters (https:/go.microsoft.com/fwlink/?LinkID=113216). \n    \n    \nINPUTS\n    System.String[]\n    System.Security.Principal.SecurityIdentifier[]\n    \n    \nOUTPUTS\n    System.Object\n    \nALIASES\n    glu\n    \n\nREMARKS\n    Get-Help cannot find the Help files for this cmdlet on this computer. It is displaying only partial help.\n        -- To download and install Help files for the module that includes this cmdlet, use Update-Help.\n        -- To view the Help topic for this cmdlet online, type: \"Get-Help Get-LocalUser -Online\" or \n           go to https://go.microsoft.com/fwlink/?LinkId=717980.\n\n\n\n"
+  }
+}

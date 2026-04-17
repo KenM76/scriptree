@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "active": "default",
+  "configurations": [
+    {
+      "name": "default",
+      "values": {
+        "input_object": "",
+        "name": ""
+      },
+      "extras": []
+    }
+  ]
+}

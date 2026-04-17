@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge compare-hardware",
+  "description": "Compare hardware components between two open SolidWorks assemblies.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "compare-hardware",
+    "{title1}",
+    "{title2}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "title1",
+      "label": "Assembly 1 title fragment",
+      "description": "Window-title fragment of the first (source) assembly.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "title2",
+      "label": "Assembly 2 title fragment",
+      "description": "Window-title fragment of the second (target) assembly.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "output",
+      "label": "Output file",
+      "description": "Path where the comparison report will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "hardware_diff.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

@@ -1,0 +1,728 @@
+{
+  "schema_version": 2,
+  "name": "Robocopy (mixed layout)",
+  "description": "Robust file copy for Windows. Copies files and directory trees with fine-grained control over what gets copied, how, and what gets logged.",
+  "executable": "robocopy",
+  "working_directory": null,
+  "argument_template": [
+    "{source}",
+    "{destination}",
+    "{file_pattern}",
+    "{subdirs?/S}",
+    "{empty_subdirs?/E}",
+    "{mirror?/MIR}",
+    "{move_files?/MOV}",
+    "{move_all?/MOVE}",
+    "{purge?/PURGE}",
+    "{restartable?/Z}",
+    "{backup_mode?/B}",
+    "{unbuffered?/J}",
+    "{create_only?/CREATE}",
+    "{copy_flags?/COPY:}",
+    "{dcopy_flags?/DCOPY:}",
+    "{sec?/SEC}",
+    "{copyall?/COPYALL}",
+    "{timfix?/TIMFIX}",
+    "{mt?/MT:}",
+    "{compress?/COMPRESS}",
+    "{lev?/LEV:}",
+    "{archive_only?/A}",
+    "{archive_reset?/M}",
+    "{xc?/XC}",
+    "{xn?/XN}",
+    "{xo?/XO}",
+    "{xx?/XX}",
+    "{xl?/XL}",
+    "{is?/IS}",
+    "{it?/IT}",
+    "{fft?/FFT}",
+    "{dst?/DST}",
+    "{xj?/XJ}",
+    "{max_size?/MAX:}",
+    "{min_size?/MIN:}",
+    "{maxage?/MAXAGE:}",
+    "{minage?/MINAGE:}",
+    "{xf?/XF }",
+    "{xd?/XD }",
+    "{ia?/IA:}",
+    "{xa?/XA:}",
+    "{retry?/R:}",
+    "{wait?/W:}",
+    "{reg?/REG}",
+    "{tbd?/TBD}",
+    "{lfsm?/LFSM}",
+    "{log_file?/LOG:}",
+    "{log_append?/LOG+:}",
+    "{list_only?/L}",
+    "{np?/NP}",
+    "{ndl?/NDL}",
+    "{nfl?/NFL}",
+    "{njh?/NJH}",
+    "{njs?/NJS}",
+    "{nc?/NC}",
+    "{ns?/NS}",
+    "{eta?/ETA}",
+    "{tee?/TEE}",
+    "{v?/V}",
+    "{unicode_log?/UNICODE}",
+    "{bytes?/BYTES}",
+    "{fp?/FP}"
+  ],
+  "params": [
+    {
+      "id": "source",
+      "label": "Source directory",
+      "description": "Source directory (drive:\\path or \\\\server\\share\\path)",
+      "type": "path",
+      "widget": "folder",
+      "required": true,
+      "default": "",
+      "section": "Source & Destination"
+    },
+    {
+      "id": "destination",
+      "label": "Destination directory",
+      "description": "Destination directory (drive:\\path or \\\\server\\share\\path)",
+      "type": "path",
+      "widget": "folder",
+      "required": true,
+      "default": "",
+      "section": "Source & Destination"
+    },
+    {
+      "id": "file_pattern",
+      "label": "File pattern",
+      "description": "Files to copy (names/wildcards). Default is *.* \u2014 leave blank to copy everything.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Source & Destination"
+    },
+    {
+      "id": "subdirs",
+      "label": "Copy subdirectories (/S)",
+      "description": "Copy subdirectories, but not empty ones",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "empty_subdirs",
+      "label": "Include empty subdirectories (/E)",
+      "description": "Copy subdirectories, including empty ones",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "mirror",
+      "label": "Mirror (/MIR)",
+      "description": "Mirror a directory tree \u2014 equivalent to /E plus /PURGE. WARNING: deletes destination files not in source!",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "move_files",
+      "label": "Move files (/MOV)",
+      "description": "Move files \u2014 delete from source after copying",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "move_all",
+      "label": "Move files and dirs (/MOVE)",
+      "description": "Move files AND directories \u2014 delete from source after copying",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "purge",
+      "label": "Purge destination (/PURGE)",
+      "description": "Delete destination files/dirs that no longer exist in source",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Mode"
+    },
+    {
+      "id": "restartable",
+      "label": "Restartable mode (/Z)",
+      "description": "Copy files in restartable mode \u2014 can resume after network interruption",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "backup_mode",
+      "label": "Backup mode (/B)",
+      "description": "Copy files in Backup mode \u2014 bypasses file ACLs (requires Backup privilege)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "unbuffered",
+      "label": "Unbuffered I/O (/J)",
+      "description": "Copy using unbuffered I/O \u2014 recommended for large files",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "create_only",
+      "label": "Create structure only (/CREATE)",
+      "description": "Create directory tree and zero-length files only \u2014 no data copied",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "copy_flags",
+      "label": "Copy flags (/COPY:)",
+      "description": "What to copy for files. D=Data, A=Attributes, T=Timestamps, S=Security, O=Owner, U=Auditing. Default is DAT.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Copy Options"
+    },
+    {
+      "id": "dcopy_flags",
+      "label": "Directory copy flags (/DCOPY:)",
+      "description": "What to copy for directories. D=Data, A=Attributes, T=Timestamps, E=EAs. Default is DA.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Copy Options"
+    },
+    {
+      "id": "sec",
+      "label": "Copy security (/SEC)",
+      "description": "Copy files with security info (equivalent to /COPY:DATS)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "copyall",
+      "label": "Copy all info (/COPYALL)",
+      "description": "Copy ALL file info (equivalent to /COPY:DATSOU)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "timfix",
+      "label": "Fix timestamps (/TIMFIX)",
+      "description": "Fix file times on all files, even skipped files",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "mt",
+      "label": "Multi-threaded (/MT:n)",
+      "description": "Number of threads for multi-threaded copies (1\u2013128, default 8). Leave blank to disable. Incompatible with /IPG and /EFSRAW.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Copy Options"
+    },
+    {
+      "id": "compress",
+      "label": "Network compression (/COMPRESS)",
+      "description": "Request network compression during file transfer, if applicable",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Copy Options"
+    },
+    {
+      "id": "lev",
+      "label": "Level depth (/LEV:n)",
+      "description": "Only copy the top n levels of the source directory tree. Leave blank for unlimited depth.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Copy Options"
+    },
+    {
+      "id": "archive_only",
+      "label": "Archive attribute only (/A)",
+      "description": "Copy only files with the Archive attribute set",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "archive_reset",
+      "label": "Archive attribute + reset (/M)",
+      "description": "Copy only files with the Archive attribute, then reset the attribute",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xc",
+      "label": "Exclude changed (/XC)",
+      "description": "Exclude changed files (same timestamp, different size)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xn",
+      "label": "Exclude newer (/XN)",
+      "description": "Exclude newer files \u2014 don't overwrite destination files that are newer than source",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xo",
+      "label": "Exclude older (/XO)",
+      "description": "Exclude older files \u2014 don't overwrite destination files that are older than source",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xx",
+      "label": "Exclude extra (/XX)",
+      "description": "Exclude extra files and directories (present in destination but not source)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xl",
+      "label": "Exclude lonely (/XL)",
+      "description": "Exclude lonely files (present in source but not destination)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "is",
+      "label": "Include same (/IS)",
+      "description": "Include same files (normally skipped because identical)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "it",
+      "label": "Include tweaked (/IT)",
+      "description": "Include tweaked files (same size, same timestamp, different attributes)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "fft",
+      "label": "FAT file times (/FFT)",
+      "description": "Assume FAT file times \u2014 2-second granularity. Use when copying between NTFS and FAT drives.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "dst",
+      "label": "DST compensation (/DST)",
+      "description": "Compensate for one-hour daylight saving time differences",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "xj",
+      "label": "Exclude junctions (/XJ)",
+      "description": "Exclude symbolic links and junction points (for both files and directories)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "File Selection"
+    },
+    {
+      "id": "max_size",
+      "label": "Max file size (/MAX:n)",
+      "description": "Exclude files bigger than n bytes. Leave blank for no limit.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "min_size",
+      "label": "Min file size (/MIN:n)",
+      "description": "Exclude files smaller than n bytes. Leave blank for no limit.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "maxage",
+      "label": "Max age (/MAXAGE:n)",
+      "description": "Exclude files older than n days (or n = YYYYMMDD date if \u2265 1900). Leave blank for no limit.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "minage",
+      "label": "Min age (/MINAGE:n)",
+      "description": "Exclude files newer than n days (or n = YYYYMMDD date if \u2265 1900). Leave blank for no limit.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "xf",
+      "label": "Exclude files (/XF)",
+      "description": "Exclude files matching given names/paths/wildcards (e.g. *.tmp *.log thumbs.db). Space-separated.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "xd",
+      "label": "Exclude directories (/XD)",
+      "description": "Exclude directories matching given names/paths (e.g. .git node_modules __pycache__). Space-separated.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "ia",
+      "label": "Include attributes (/IA:)",
+      "description": "Include only files with any of these attributes set. R=ReadOnly, A=Archive, S=System, H=Hidden, C=Compressed, N=Not indexed, E=Encrypted, T=Temporary, O=Offline.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "xa",
+      "label": "Exclude attributes (/XA:)",
+      "description": "Exclude files with any of these attributes set. R=ReadOnly, A=Archive, S=System, H=Hidden, C=Compressed, N=Not indexed, E=Encrypted, T=Temporary, O=Offline.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "File Selection"
+    },
+    {
+      "id": "retry",
+      "label": "Retries (/R:n)",
+      "description": "Number of retries on failed copies (default is 1,000,000). Set to 0 or low value for non-interactive use.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "3",
+      "section": "Retry"
+    },
+    {
+      "id": "wait",
+      "label": "Wait between retries (/W:n)",
+      "description": "Wait time between retries in seconds (default is 30)",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "5",
+      "section": "Retry"
+    },
+    {
+      "id": "reg",
+      "label": "Save /R:n /W:n to registry (/REG)",
+      "description": "Save the current /R and /W values as defaults in the registry",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Retry"
+    },
+    {
+      "id": "tbd",
+      "label": "Wait for share names (/TBD)",
+      "description": "Wait for share names To Be Defined (retry on ERROR 67)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Retry"
+    },
+    {
+      "id": "lfsm",
+      "label": "Low free space mode (/LFSM)",
+      "description": "Pause when destination free space drops below 10% of volume. Incompatible with /MT.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Retry"
+    },
+    {
+      "id": "list_only",
+      "label": "List only \u2014 no copy (/L)",
+      "description": "Dry run \u2014 list files that would be copied, but don't actually copy anything",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "log_file",
+      "label": "Log file (/LOG:)",
+      "description": "Write status to a log file (overwrite existing). Leave blank for console only.",
+      "type": "path",
+      "widget": "file_save",
+      "required": false,
+      "default": "",
+      "file_filter": "Log files (*.log *.txt);;All files (*)",
+      "section": "Logging"
+    },
+    {
+      "id": "log_append",
+      "label": "Log file \u2014 append (/LOG+:)",
+      "description": "Append status to an existing log file instead of overwriting. Leave blank to not use.",
+      "type": "path",
+      "widget": "file_save",
+      "required": false,
+      "default": "",
+      "file_filter": "Log files (*.log *.txt);;All files (*)",
+      "section": "Logging"
+    },
+    {
+      "id": "tee",
+      "label": "Tee to console (/TEE)",
+      "description": "Output to console window as well as the log file",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "v",
+      "label": "Verbose (/V)",
+      "description": "Produce verbose output, showing skipped files",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "np",
+      "label": "No progress (/NP)",
+      "description": "Don't display the per-file % progress indicator",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": true,
+      "section": "Logging"
+    },
+    {
+      "id": "eta",
+      "label": "Show ETA (/ETA)",
+      "description": "Show Estimated Time of Arrival of copied files",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "ndl",
+      "label": "No directory list (/NDL)",
+      "description": "Don't log directory names",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "nfl",
+      "label": "No file list (/NFL)",
+      "description": "Don't log file names",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "nc",
+      "label": "No file class (/NC)",
+      "description": "Don't log file classes (New, Older, Extra, etc.)",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "ns",
+      "label": "No file size (/NS)",
+      "description": "Don't log file sizes",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "njh",
+      "label": "No job header (/NJH)",
+      "description": "Don't print the robocopy banner at the top of the output",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "njs",
+      "label": "No job summary (/NJS)",
+      "description": "Don't print the summary statistics at the end",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "bytes",
+      "label": "Show sizes in bytes (/BYTES)",
+      "description": "Print file sizes in bytes instead of human-readable",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "fp",
+      "label": "Full pathnames (/FP)",
+      "description": "Include full pathnames of files in the output",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    },
+    {
+      "id": "unicode_log",
+      "label": "Unicode output (/UNICODE)",
+      "description": "Output status as Unicode",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Logging"
+    }
+  ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  },
+  "sections": [
+    {
+      "name": "Source & Destination",
+      "collapsed": false
+    },
+    {
+      "name": "Copy Mode",
+      "collapsed": false,
+      "layout": "tab"
+    },
+    {
+      "name": "Copy Options",
+      "collapsed": false,
+      "layout": "tab"
+    },
+    {
+      "name": "File Selection",
+      "collapsed": false,
+      "layout": "tab"
+    },
+    {
+      "name": "Retry",
+      "collapsed": true
+    },
+    {
+      "name": "Logging",
+      "collapsed": true
+    }
+  ]
+}

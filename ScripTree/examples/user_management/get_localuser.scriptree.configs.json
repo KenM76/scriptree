@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "active": "default",
+  "configurations": [
+    {
+      "name": "default",
+      "values": {
+        "name": ""
+      },
+      "extras": [],
+      "ui_visibility": {
+        "output_pane": false,
+        "extras_box": false,
+        "command_line": false,
+        "copy_argv": false,
+        "clear_output": false,
+        "env_button": false,
+        "popup_on_success": true
+      }
+    }
+  ]
+}

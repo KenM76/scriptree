@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge run-script",
+  "description": "Compile and run a C# script with SolidWorks API globals injected.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "run-script",
+    "{scriptFile}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "scriptFile",
+      "label": "C# script file",
+      "description": "Path to the .cs script to compile and execute.",
+      "type": "path",
+      "widget": "file_open",
+      "required": true,
+      "default": "",
+      "file_filter": "C# files (*.cs);;All files (*)"
+    },
+    {
+      "id": "output",
+      "label": "Output file",
+      "description": "Path where script stdout/stderr will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "script_out.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

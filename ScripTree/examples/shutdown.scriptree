@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "name": "shutdown",
+  "description": "",
+  "executable": "C:/Windows/System32/shutdown.exe",
+  "working_directory": null,
+  "argument_template": [
+    "{hybrid}",
+    "{soft}",
+    "{fw}",
+    "{f}",
+    "{p_u}"
+  ],
+  "params": [
+    {
+      "id": "hybrid",
+      "label": "/hybrid",
+      "description": "(Positional argument '[/hybrid]')",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "soft",
+      "label": "/soft",
+      "description": "(Positional argument '[/soft]')",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "fw",
+      "label": "/fw",
+      "description": "(Positional argument '[/fw]')",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "f",
+      "label": "/f",
+      "description": "(Positional argument '[/f]')",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "p_u",
+      "label": "P|u:",
+      "description": "(Positional argument '[p|u:]')",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "source": {
+    "mode": "heuristic",
+    "help_text_cached": "Usage: C:/Windows/System32/shutdown.exe [/i | /l | /s | /sg | /r | /g | /a | /p | /h | /e | /o] [/hybrid] [/soft] [/fw] [/f]\n    [/m \\\\computer][/t xxx][/d [p|u:]xx:yy [/c \"comment\"]]\n\n    No args    Display help. This is the same as typing /?.\n    /?         Display help. This is the same as not typing any options.\n    /i         Display the graphical user interface (GUI).\n               This must be the first option.\n    /l         Log off. This cannot be used with /m or /d options.\n    /s         Shutdown the computer.\n    /sg        Shutdown the computer. On the next boot, if Automatic Restart Sign-On\n               is enabled, automatically sign in and lock last interactive user.\n               After sign in, restart any registered applications.\n    /r         Full shutdown and restart the computer.\n    /g         Full shutdown and restart the computer. After the system is rebooted,\n               if Automatic Restart Sign-On is enabled, automatically sign in and\n               lock last interactive user.\n               After sign in, restart any registered applications.\n    /a         Abort a system shutdown.\n               This can only be used during the time-out period.\n               Combine with /fw to clear any pending boots to firmware.\n    /p         Turn off the local computer with no time-out or warning.\n               Can be used with /d and /f options.\n    /h         Hibernate the local computer.\n               Can be used with the /f option.\n    /hybrid    Performs a shutdown of the computer and prepares it for fast startup.\n               Must be used with /s option.\n    /fw        Combine with a shutdown option to cause the next boot to go to the\n               firmware user interface.\n    /e         Document the reason for an unexpected shutdown of a computer.\n    /o         Go to the advanced boot options menu and restart the computer.\n               Must be used with /r option.\n    /m \\\\computer Specify the target computer.\n    /t xxx     Set the time-out period before shutdown to xxx seconds.\n               The valid range is 0-315360000 (10 years), with a default of 30.\n               If the timeout period is greater than 0, the /f parameter is\n               implied.\n    /c \"comment\" Comment on the reason for the restart or shutdown.\n               Maximum of 512 characters allowed.\n    /f         Force running applications to close without forewarning users.\n               The /f parameter is implied when a value greater than 0 is\n               specified for the /t parameter.\n    /d [p|u:]xx:yy  Provide the reason for the restart or shutdown.\n               p indicates that the restart or shutdown is planned.\n               u indicates that the reason is user defined.\n               If neither p nor u is specified the restart or shutdown is\n               unplanned.\n               xx is the major reason number (positive integer less than 256).\n               yy is the minor reason number (positive integer less than 65536).\n\nReasons on this computer:\n(E = Expected U = Unexpected P = planned, C = customer defined)\nType\tMajor\tMinor\tTitle\n\n U  \t0\t0\tOther (Unplanned)\nE   \t0\t0\tOther (Unplanned)\nE P \t0\t0\tOther (Planned)\n U  \t0\t5\tOther Failure: System Unresponsive\nE   \t1\t1\tHardware: Maintenance (Unplanned)\nE P \t1\t1\tHardware: Maintenance (Planned)\nE   \t1\t2\tHardware: Installation (Unplanned)\nE P \t1\t2\tHardware: Installation (Planned)\nE   \t2\t2\tOperating System: Recovery (Unplanned)\nE P \t2\t2\tOperating System: Recovery (Planned)\n  P \t2\t3\tOperating System: Upgrade (Planned)\nE   \t2\t4\tOperating System: Reconfiguration (Unplanned)\nE P \t2\t4\tOperating System: Reconfiguration (Planned)\n  P \t2\t16\tOperating System: Service pack (Planned)\n    \t2\t17\tOperating System: Hot fix (Unplanned)\n  P \t2\t17\tOperating System: Hot fix (Planned)\n    \t2\t18\tOperating System: Security fix (Unplanned)\n  P \t2\t18\tOperating System: Security fix (Planned)\nE   \t4\t1\tApplication: Maintenance (Unplanned)\nE P \t4\t1\tApplication: Maintenance (Planned)\nE P \t4\t2\tApplication: Installation (Planned)\nE   \t4\t5\tApplication: Unresponsive\nE   \t4\t6\tApplication: Unstable\n U  \t5\t15\tSystem Failure: Stop error\n U  \t5\t19\tSecurity issue (Unplanned)\nE   \t5\t19\tSecurity issue (Unplanned)\nE P \t5\t19\tSecurity issue (Planned)\nE   \t5\t20\tLoss of network connectivity (Unplanned)\n U  \t6\t11\tPower Failure: Cord Unplugged\n U  \t6\t12\tPower Failure: Environment\n  P \t7\t0\tLegacy API shutdown\n"
+  }
+}

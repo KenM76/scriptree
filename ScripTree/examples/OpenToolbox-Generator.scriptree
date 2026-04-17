@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "name": "OpenToolbox Generator",
+  "description": "Generate SolidWorks hardware .sldprt files from spec definitions.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/Solidworks/OpenToolbox/src/OpenToolbox.Generator/bin/x64/Release/net48/OpenToolbox.Generator.exe",
+  "working_directory": null,
+  "argument_template": [
+    "{specsDir}",
+    "{outputDir}",
+    "--standard",
+    "{standard}",
+    "--type",
+    "{type}"
+  ],
+  "params": [
+    {
+      "id": "specsDir",
+      "label": "Specs directory",
+      "description": "Folder containing the YAML/JSON hardware spec files.",
+      "type": "path",
+      "widget": "folder",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "outputDir",
+      "label": "Output directory",
+      "description": "Folder where generated .sldprt files will be written.",
+      "type": "path",
+      "widget": "folder",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "standard",
+      "label": "Standard",
+      "description": "Hardware standard family to generate.",
+      "type": "enum",
+      "widget": "dropdown",
+      "required": true,
+      "default": "ansi_inch",
+      "choices": ["ansi_inch", "ansi_metric", "iso", "din"]
+    },
+    {
+      "id": "type",
+      "label": "Hardware type",
+      "description": "Which hardware part type to generate.",
+      "type": "enum",
+      "widget": "dropdown",
+      "required": true,
+      "default": "HexBolt",
+      "choices": ["HexBolt", "SocketHeadCapScrew", "HexNut", "FlatWasher", "LockWasher"]
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge run-macro",
+  "description": "Run a SolidWorks VBA macro by module and procedure name.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "run-macro",
+    "{macroFile}",
+    "{moduleName}",
+    "{procName}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "macroFile",
+      "label": "Macro file",
+      "description": "Path to the .swp macro file to load.",
+      "type": "path",
+      "widget": "file_open",
+      "required": true,
+      "default": "",
+      "file_filter": "SolidWorks macros (*.swp);;All files (*)"
+    },
+    {
+      "id": "moduleName",
+      "label": "Module name",
+      "description": "Name of the VBA module inside the macro.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "procName",
+      "label": "Procedure name",
+      "description": "Name of the procedure to invoke in the module.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": "main"
+    },
+    {
+      "id": "output",
+      "label": "Output file",
+      "description": "Path where macro output will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "macro_out.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

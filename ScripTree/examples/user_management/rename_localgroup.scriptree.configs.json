@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "active": "default",
+  "configurations": [
+    {
+      "name": "default",
+      "values": {
+        "name": "",
+        "new_name": ""
+      },
+      "extras": [],
+      "prompt_credentials": true
+    }
+  ]
+}

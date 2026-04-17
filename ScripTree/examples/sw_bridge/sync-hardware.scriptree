@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge sync-hardware",
+  "description": "One-shot compare + replace all mismatched hardware between two assemblies.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "sync-hardware",
+    "{srcTitle}",
+    "{tgtTitle}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "srcTitle",
+      "label": "Source assembly title",
+      "description": "Assembly whose hardware should be considered authoritative.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "tgtTitle",
+      "label": "Target assembly title",
+      "description": "Assembly to update so its hardware matches the source.",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "output",
+      "label": "Output log",
+      "description": "Path where the sync log will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "sync_log.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

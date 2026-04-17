@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "active": "default",
+  "configurations": [
+    {
+      "name": "default",
+      "values": {
+        "description": "",
+        "full_name": "",
+        "name": "",
+        "no_password": false,
+        "password_never_expires": false,
+        "user_may_not_change_password": false,
+        "account_expires": "",
+        "account_never_expires": false,
+        "disabled": false
+      },
+      "extras": []
+    }
+  ]
+}

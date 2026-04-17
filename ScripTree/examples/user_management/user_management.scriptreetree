@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "name": "Windows User Management",
+  "nodes": [
+    {
+      "type": "folder",
+      "name": "Users",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localuser.scriptree",
+          "display_name": "List users"
+        },
+        {
+          "type": "leaf",
+          "path": "./new_localuser.scriptree",
+          "display_name": "Create user"
+        },
+        {
+          "type": "leaf",
+          "path": "./set_localuser.scriptree",
+          "display_name": "Modify user"
+        },
+        {
+          "type": "leaf",
+          "path": "./rename_localuser.scriptree",
+          "display_name": "Rename user"
+        },
+        {
+          "type": "leaf",
+          "path": "./enable_localuser.scriptree",
+          "display_name": "Enable user"
+        },
+        {
+          "type": "leaf",
+          "path": "./disable_localuser.scriptree",
+          "display_name": "Disable user"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localuser.scriptree",
+          "display_name": "Delete user"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Groups",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localgroup.scriptree",
+          "display_name": "List groups"
+        },
+        {
+          "type": "leaf",
+          "path": "./new_localgroup.scriptree",
+          "display_name": "Create group"
+        },
+        {
+          "type": "leaf",
+          "path": "./set_localgroup.scriptree",
+          "display_name": "Modify group"
+        },
+        {
+          "type": "leaf",
+          "path": "./rename_localgroup.scriptree",
+          "display_name": "Rename group"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localgroup.scriptree",
+          "display_name": "Delete group"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Group Membership",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localgroupmember.scriptree",
+          "display_name": "List members"
+        },
+        {
+          "type": "leaf",
+          "path": "./add_localgroupmember.scriptree",
+          "display_name": "Add member"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localgroupmember.scriptree",
+          "display_name": "Remove member"
+        }
+      ]
+    }
+  ]
+}

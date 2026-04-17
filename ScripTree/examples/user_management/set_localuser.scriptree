@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "name": "Set-LocalUser",
+  "description": "Modify properties of an existing local user account.",
+  "executable": "powershell.exe",
+  "working_directory": null,
+  "argument_template": [
+    "-NoProfile",
+    "-Command",
+    "Set-LocalUser",
+    [
+      "-AccountExpires",
+      "{account_expires}"
+    ],
+    "{account_never_expires?-AccountNeverExpires}",
+    [
+      "-Description",
+      "{description}"
+    ],
+    [
+      "-FullName",
+      "{full_name}"
+    ],
+    "{name}",
+    "{password_never_expires?-PasswordNeverExpires}",
+    "{user_may_change_password?-UserMayChangePassword}"
+  ],
+  "params": [
+    {
+      "id": "account_expires",
+      "label": "Account Expires",
+      "description": "New expiration date (e.g. \"2025-12-31\").",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Account Options"
+    },
+    {
+      "id": "account_never_expires",
+      "label": "Account Never Expires",
+      "description": "Set the account to never expire.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Account Options"
+    },
+    {
+      "id": "description",
+      "label": "Description",
+      "description": "New description for the account.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Identity"
+    },
+    {
+      "id": "full_name",
+      "label": "Full Name",
+      "description": "New display name for the user.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Identity"
+    },
+    {
+      "id": "name",
+      "label": "Name",
+      "description": "Name of the user account to modify.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "section": "Identity"
+    },
+    {
+      "id": "password_never_expires",
+      "label": "Password Never Expires",
+      "description": "Whether the password should never expire.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Password Options"
+    },
+    {
+      "id": "user_may_change_password",
+      "label": "User May Change Password",
+      "description": "Whether the user can change their own password.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false,
+      "section": "Password Options"
+    }
+  ],
+  "source": {
+    "mode": "powershell",
+    "help_text_cached": "\nNAME\n    Set-LocalUser\n    \nSYNTAX\n    Set-LocalUser [-Name] <string> [-AccountExpires <datetime>] [-AccountNeverExpires] [-Description <string>] \n    [-FullName <string>] [-Password <securestring>] [-PasswordNeverExpires <bool>] [-UserMayChangePassword <bool>] \n    [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    Set-LocalUser [-InputObject] <LocalUser> [-AccountExpires <datetime>] [-AccountNeverExpires] [-Description \n    <string>] [-FullName <string>] [-Password <securestring>] [-PasswordNeverExpires <bool>] [-UserMayChangePassword \n    <bool>] [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    Set-LocalUser [-SID] <SecurityIdentifier> [-AccountExpires <datetime>] [-AccountNeverExpires] [-Description \n    <string>] [-FullName <string>] [-Password <securestring>] [-PasswordNeverExpires <bool>] [-UserMayChangePassword \n    <bool>] [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    \nPARAMETERS\n    -AccountExpires <datetime>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -AccountNeverExpires\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -Confirm\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      cf\n        Dynamic?                     false\n        \n    -Description <string>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -FullName <string>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -InputObject <LocalUser>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           InputObject\n        Aliases                      None\n        Dynamic?                     false\n        \n    -Name <string>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           Name\n        Aliases                      None\n        Dynamic?                     false\n        \n    -Password <securestring>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -PasswordNeverExpires <bool>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -SID <SecurityIdentifier>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           SecurityIdentifier\n        Aliases                      None\n        Dynamic?                     false\n        \n    -UserMayChangePassword <bool>\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      None\n        Dynamic?                     false\n        \n    -WhatIf\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      wi\n        Dynamic?                     false\n        \n    <CommonParameters>\n        This cmdlet supports the common parameters: Verbose, Debug,\n        ErrorAction, ErrorVariable, WarningAction, WarningVariable,\n        OutBuffer, PipelineVariable, and OutVariable. For more information, see \n        about_CommonParameters (https:/go.microsoft.com/fwlink/?LinkID=113216). \n    \n    \nINPUTS\n    Microsoft.PowerShell.Commands.LocalUser\n    System.String\n    System.Security.Principal.SecurityIdentifier\n    \n    \nOUTPUTS\n    System.Object\n    \nALIASES\n    slu\n    \n\nREMARKS\n    Get-Help cannot find the Help files for this cmdlet on this computer. It is displaying only partial help.\n        -- To download and install Help files for the module that includes this cmdlet, use Update-Help.\n        -- To view the Help topic for this cmdlet online, type: \"Get-Help Set-LocalUser -Online\" or \n           go to https://go.microsoft.com/fwlink/?LinkId=717984.\n\n\n\n"
+  },
+  "sections": [
+    {
+      "name": "Identity",
+      "collapsed": false,
+      "layout": "collapse"
+    },
+    {
+      "name": "Password Options",
+      "collapsed": true,
+      "layout": "collapse"
+    },
+    {
+      "name": "Account Options",
+      "collapsed": true,
+      "layout": "collapse"
+    }
+  ]
+}

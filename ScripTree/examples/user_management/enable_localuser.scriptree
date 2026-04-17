@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "name": "Enable-LocalUser",
+  "description": "Enable a disabled local user account.",
+  "executable": "powershell.exe",
+  "working_directory": null,
+  "argument_template": [
+    "-NoProfile",
+    "-Command",
+    "Enable-LocalUser",
+    "{input_object}",
+    "{name}"
+  ],
+  "params": [
+    {
+      "id": "input_object",
+      "label": "Input Object",
+      "description": "",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "name",
+      "label": "Name",
+      "description": "Name of the user account to enable.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "source": {
+    "mode": "powershell",
+    "help_text_cached": "\nNAME\n    Enable-LocalUser\n    \nSYNTAX\n    Enable-LocalUser [-InputObject] <LocalUser[]> [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    Enable-LocalUser [-Name] <string[]> [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    Enable-LocalUser [-SID] <SecurityIdentifier[]> [-WhatIf] [-Confirm]  [<CommonParameters>]\n    \n    \nPARAMETERS\n    -Confirm\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      cf\n        Dynamic?                     false\n        \n    -InputObject <LocalUser[]>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           InputObject\n        Aliases                      None\n        Dynamic?                     false\n        \n    -Name <string[]>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           Default\n        Aliases                      None\n        Dynamic?                     false\n        \n    -SID <SecurityIdentifier[]>\n        \n        Required?                    true\n        Position?                    0\n        Accept pipeline input?       true (ByValue, ByPropertyName)\n        Parameter set name           SecurityIdentifier\n        Aliases                      None\n        Dynamic?                     false\n        \n    -WhatIf\n        \n        Required?                    false\n        Position?                    Named\n        Accept pipeline input?       false\n        Parameter set name           (All)\n        Aliases                      wi\n        Dynamic?                     false\n        \n    <CommonParameters>\n        This cmdlet supports the common parameters: Verbose, Debug,\n        ErrorAction, ErrorVariable, WarningAction, WarningVariable,\n        OutBuffer, PipelineVariable, and OutVariable. For more information, see \n        about_CommonParameters (https:/go.microsoft.com/fwlink/?LinkID=113216). \n    \n    \nINPUTS\n    Microsoft.PowerShell.Commands.LocalUser[]\n    System.String[]\n    System.Security.Principal.SecurityIdentifier[]\n    \n    \nOUTPUTS\n    System.Object\n    \nALIASES\n    elu\n    \n\nREMARKS\n    Get-Help cannot find the Help files for this cmdlet on this computer. It is displaying only partial help.\n        -- To download and install Help files for the module that includes this cmdlet, use Update-Help.\n        -- To view the Help topic for this cmdlet online, type: \"Get-Help Enable-LocalUser -Online\" or \n           go to https://go.microsoft.com/fwlink/?LinkId=717985.\n\n\n\n"
+  }
+}

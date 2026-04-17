@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "sw_bridge list-components",
+  "description": "List all components in a SolidWorks assembly by title fragment.",
+  "executable": "C:/Users/Ken/OneDrive/Kens_Projects/Claude/sw_bridge/bin/Release/net10.0-windows/sw_bridge.exe",
+  "working_directory": null,
+  "argument_template": [
+    "list-components",
+    "{title}",
+    "{output}"
+  ],
+  "params": [
+    {
+      "id": "title",
+      "label": "Assembly title fragment",
+      "description": "Part of the SolidWorks window title identifying the target assembly (e.g. 'widget_asm').",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "output",
+      "label": "Output file",
+      "description": "Path where the component list will be written.",
+      "type": "path",
+      "widget": "file_save",
+      "required": true,
+      "default": "components.txt",
+      "file_filter": "Text files (*.txt);;All files (*)"
+    }
+  ],
+  "source": { "mode": "manual", "help_text_cached": null }
+}

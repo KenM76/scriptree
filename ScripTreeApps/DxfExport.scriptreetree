@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "DXF Export Suite",
+  "description": "Three-tool suite for exporting plasma-cutting DXFs from SolidWorks assemblies. Start with DXF Export for the full pipeline, or run individual stages separately.",
+  "nodes": [
+    {
+      "type": "leaf",
+      "path": "./dxf-export/dxf-export.scriptree",
+      "display_name": "DXF Export (full pipeline)"
+    },
+    {
+      "type": "folder",
+      "name": "Individual stages",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./dxf-cleanup/dxf-cleanup.scriptree",
+          "display_name": "DXF Cleanup (single file)"
+        },
+        {
+          "type": "leaf",
+          "path": "./dxf-to-pdf/dxf-to-pdf.scriptree",
+          "display_name": "DXF to PDF (folder → PDF)"
+        }
+      ]
+    }
+  ]
+}
