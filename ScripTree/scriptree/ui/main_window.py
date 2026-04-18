@@ -719,4 +719,6 @@ class MainWindow(QMainWindow):
         # Settings INI path (stored in the current INI as a redirect).
         new_settings_path = dlg.result_settings_path()
         self._settings.setValue("settings_path", new_settings_path)
+        new_pc_path = dlg.result_personal_configs_path()
+        self._settings.setValue("personal_configs_path", new_pc_path)
         self.statusBar().showMessage("Settings saved.", 3000)

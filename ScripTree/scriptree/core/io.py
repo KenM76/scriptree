@@ -187,6 +187,8 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["file_filter"] = p.file_filter
     if p.section:
         d["section"] = p.section
+    if p.no_persist:
+        d["no_persist"] = True
     return d
 
 
@@ -238,6 +240,7 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         choice_labels=choice_labels,
         file_filter=d.get("file_filter", ""),
         section=d.get("section", ""),
+        no_persist=bool(d.get("no_persist", False)),
     )
 
 

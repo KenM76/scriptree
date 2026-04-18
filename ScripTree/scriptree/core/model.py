@@ -89,6 +89,12 @@ class ParamDef:
     # the form when the tool declares ``sections`` at all. If the
     # tool has no sections at all, this field is ignored.
     section: str = ""
+    # When True, the parameter's value is never written to any saved
+    # configuration. The user's most recent entry is kept in the form
+    # during the session but is lost when the tool is reloaded (the
+    # widget returns to ``default``). Useful for passwords, tokens,
+    # and other sensitive or scratch values.
+    no_persist: bool = False
 
     def label_for_choice(self, value: str) -> str:
         """Return the descriptive label for a choice value, or the value itself.

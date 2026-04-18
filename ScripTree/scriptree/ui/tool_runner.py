@@ -37,6 +37,7 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -52,6 +53,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -63,10 +65,16 @@ from ..core.configs import (
     Configuration,
     ConfigurationSet,
     UIVisibility,
+    add_location_to_personal,
     default_configuration_set,
     is_reserved_config_name,
     load_configs,
+    load_personal_configs_for,
+    next_available_suffix_num,
+    personal_configs_path,
     save_configs,
+    save_personal_configs,
+    save_personal_configs_at,
 )
 from ..core.io import save_tool
 from ..core.model import ParamDef, ToolDef
@@ -308,6 +316,195 @@ class ConfigurationEditDialog(QDialog):
             cfg.name = item.text().strip()
             result.append(cfg)
         return result
+
+
+# --- save-as (personal / shared) dialog ----------------------------------
+
+class SaveConfigAsDialog(QDialog):
+    """Prompt for a configuration name plus storage location.
+
+    The caller supplies flags indicating which storages the user has
+    permission to write to — the disallowed radio button is disabled.
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        *,
+        can_write_shared: bool,
+        can_write_personal: bool,
+        initial_name: str = "",
+        initial_storage: str = "shared",
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Save configuration as")
+        self.setMinimumWidth(360)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("New configuration name:"))
+        self._name_edit = QLineEdit(initial_name)
+        layout.addWidget(self._name_edit)
+
+        layout.addWidget(QLabel("Save to:"))
+        self._radio_shared = QRadioButton(
+            "Shared \u2014 next to the tool, visible to other users"
+        )
+        self._radio_personal = QRadioButton(
+            "Personal \u2014 your own folder, invisible to others"
+        )
+        group = QButtonGroup(self)
+        group.addButton(self._radio_shared)
+        group.addButton(self._radio_personal)
+
+        self._radio_shared.setEnabled(can_write_shared)
+        self._radio_personal.setEnabled(can_write_personal)
+        if initial_storage == "personal" and can_write_personal:
+            self._radio_personal.setChecked(True)
+        elif can_write_shared:
+            self._radio_shared.setChecked(True)
+        elif can_write_personal:
+            self._radio_personal.setChecked(True)
+
+        layout.addWidget(self._radio_shared)
+        layout.addWidget(self._radio_personal)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def result_name(self) -> str:
+        return self._name_edit.text().strip()
+
+    def result_storage(self) -> str:
+        return "personal" if self._radio_personal.isChecked() else "shared"
+
+
+# --- personal-config collision dialog -------------------------------------
+
+class PersonalConfigCollisionDialog(QDialog):
+    """Prompted when loading a tool whose filename matches an existing
+    personal sidecar at a different location.
+
+    Offers three choices:
+
+    - **CREATE_NEW** — a new personal sidecar with the next available
+      ``-NNN`` suffix. The existing file is untouched.
+    - **USE_EXISTING** — reuse one of the existing files, appending
+      the current tool's parent directory to ``source_locations``.
+    - **UPDATE_LOCATION** — reuse one of the existing files, replacing
+      ``source_locations`` with just the current tool's parent.
+    """
+
+    CREATE_NEW = 1
+    USE_EXISTING = 2
+    UPDATE_LOCATION = 3
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        tool_path: Path,
+        candidates: list[Path],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Personal configuration collision")
+        self.setMinimumWidth(520)
+        self._candidates = list(candidates)
+        self._chosen_action: int = self.CREATE_NEW
+
+        layout = QVBoxLayout(self)
+
+        header = QLabel(
+            f"<b>A personal configuration for <code>{tool_path.name}</code> "
+            f"was found, but it's associated with a different "
+            f"location.</b>"
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        info = QLabel(
+            f"You're loading the tool from:<br>"
+            f"<code>{tool_path.parent}</code>"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        if len(candidates) > 1:
+            layout.addWidget(QLabel("Pick the existing file to use:"))
+            self._candidate_list = QListWidget()
+            for cand in candidates:
+                self._candidate_list.addItem(cand.name)
+            self._candidate_list.setCurrentRow(0)
+            layout.addWidget(self._candidate_list)
+        else:
+            self._candidate_list = None
+            layout.addWidget(QLabel(
+                f"Existing file: <code>{candidates[0].name}</code>"
+            ))
+
+        layout.addWidget(QLabel("<b>What would you like to do?</b>"))
+
+        btn_create = QPushButton("Create a new personal file")
+        btn_create.setToolTip(
+            "Keep the existing file untouched and create a new personal "
+            "sidecar for this tool's location."
+        )
+        btn_create.clicked.connect(self._accept_create_new)
+        layout.addWidget(btn_create)
+
+        btn_use = QPushButton(
+            "Use existing \u2014 add this location to it"
+        )
+        btn_use.setToolTip(
+            "Reuse the existing personal configurations. This location "
+            "will be added alongside any others already stored."
+        )
+        btn_use.clicked.connect(self._accept_use_existing)
+        layout.addWidget(btn_use)
+
+        btn_update = QPushButton(
+            "Use existing \u2014 replace old locations with this one"
+        )
+        btn_update.setToolTip(
+            "Reuse the existing personal configurations. Other stored "
+            "locations will be forgotten (useful when the tool has "
+            "been moved)."
+        )
+        btn_update.clicked.connect(self._accept_update_location)
+        layout.addWidget(btn_update)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept_create_new(self) -> None:
+        self._chosen_action = self.CREATE_NEW
+        self.accept()
+
+    def _accept_use_existing(self) -> None:
+        self._chosen_action = self.USE_EXISTING
+        self.accept()
+
+    def _accept_update_location(self) -> None:
+        self._chosen_action = self.UPDATE_LOCATION
+        self.accept()
+
+    def chosen_action(self) -> int:
+        return self._chosen_action
+
+    def selected_candidate(self) -> Path | None:
+        if not self._candidates:
+            return None
+        if self._candidate_list is None:
+            return self._candidates[0]
+        row = self._candidate_list.currentRow()
+        if 0 <= row < len(self._candidates):
+            return self._candidates[row]
+        return None
 
 
 # --- worker thread --------------------------------------------------------
@@ -662,6 +859,13 @@ class ToolRunnerView(QWidget):
         # Wrapped in a QWidget so the MainWindow can show/hide it
         # based on whether the form dock is floating.
         self._cfg_set: ConfigurationSet = default_configuration_set()
+        # Personal configurations live in a separate sidecar in the
+        # user_configs/ directory. Loaded on demand when the tool opens.
+        self._personal_cfg_set: ConfigurationSet | None = None
+        self._personal_cfg_path: Path | None = None
+        # Which set the currently-selected config belongs to. Stored as
+        # (storage, name) so the combo handler can route correctly.
+        self._active_selection: tuple[str, str] = ("shared", "default")
         self._cfg_loading = False
         self._cfg_widget = QWidget()
         cfg_layout = QHBoxLayout(self._cfg_widget)
@@ -1039,10 +1243,11 @@ class ToolRunnerView(QWidget):
         # Merge in hidden param values from the active configuration.
         hidden = getattr(self, "_active_hidden_params", [])
         if hidden:
-            cfg = self._cfg_set.active_config()
-            for pid in hidden:
-                if pid not in values and pid in cfg.values:
-                    values[pid] = cfg.values[pid]
+            cfg, _set, _storage = self._active_config_and_set()
+            if cfg is not None:
+                for pid in hidden:
+                    if pid not in values and pid in cfg.values:
+                        values[pid] = cfg.values[pid]
         return values
 
     def _resolve_for_preview(self) -> ResolvedCommand | None:
@@ -1297,11 +1502,7 @@ class ToolRunnerView(QWidget):
         try:
             # Thread per-configuration env overrides into the resolve
             # so the child process inherits tool + config env layers.
-            cfg = (
-                self._cfg_set.active_config()
-                if self._cfg_set.configurations
-                else None
-            )
+            cfg, _set, _storage = self._active_config_and_set()
             # Load global env from application settings.
             from ..core.app_settings import get_settings
             from .settings_dialog import (
@@ -1424,8 +1625,8 @@ class ToolRunnerView(QWidget):
         Called when the active configuration changes to reflect whether
         cached credentials exist for the new config.
         """
-        cfg = self._cfg_set.active_config()
-        if not cfg.prompt_credentials:
+        cfg, _set, _storage = self._active_config_and_set()
+        if cfg is None or not cfg.prompt_credentials:
             self._user_indicator.setVisible(False)
             return
         store = get_session_store()
@@ -1492,7 +1693,8 @@ class ToolRunnerView(QWidget):
         self.runningChanged.emit(self._file_path or "", False)
 
         # Popup dialogs when output pane is hidden.
-        vis = self._cfg_set.active_config().ui_visibility
+        _cfg, _set, _storage = self._active_config_and_set()
+        vis = _cfg.ui_visibility if _cfg is not None else UIVisibility()
         if exit_code != 0 and vis.popup_on_error:
             stderr_text = "".join(self._stderr_buffer[-20:]).strip()
             QMessageBox.critical(
@@ -1749,7 +1951,14 @@ class ToolRunnerView(QWidget):
     # --- configurations (sidecar) ---------------------------------------
 
     def _load_or_init_configs(self) -> None:
-        """Load the sidecar file, or build an in-memory default set."""
+        """Load shared + personal sidecars, or build an in-memory default set.
+
+        Shared sidecar lives next to the .scriptree file; personal sidecar
+        lives in the ``user_configs/`` directory and may need a collision
+        prompt if a file with the same tool filename already exists for a
+        different location.
+        """
+        # --- Shared ---
         if self._file_path:
             try:
                 loaded = load_configs(self._file_path)
@@ -1757,23 +1966,130 @@ class ToolRunnerView(QWidget):
                 loaded = None
             if loaded is not None:
                 self._cfg_set = loaded
-                # Apply the active configuration's values to the form.
-                self._apply_configuration(self._cfg_set.active_config())
-                return
-        # Fresh set seeded with the current widget defaults.
-        self._cfg_set = default_configuration_set(self._collect_values())
+            else:
+                self._cfg_set = default_configuration_set(
+                    self._collect_values()
+                )
+        else:
+            self._cfg_set = default_configuration_set(self._collect_values())
+
+        # --- Personal ---
+        if self._file_path:
+            self._load_personal_configs_with_collision_prompt()
+
+        # Apply the active configuration (shared by default for initial load).
+        self._active_selection = ("shared", self._cfg_set.active)
+        self._apply_configuration(self._cfg_set.active_config())
+
+    def _load_personal_configs_with_collision_prompt(self) -> None:
+        """Load the personal sidecar, prompting if there's a collision."""
+        from ..core.permissions import get_app_permissions, can_read_personal
+        perms = get_app_permissions()
+        if not can_read_personal(perms):
+            return
+
+        try:
+            cfg_set, candidates = load_personal_configs_for(self._file_path)
+        except Exception:  # noqa: BLE001 — corrupt sidecar shouldn't crash
+            cfg_set, candidates = None, []
+
+        if cfg_set is not None:
+            # Exact location match — use it.
+            self._personal_cfg_set = cfg_set
+            # Figure out which candidate file this came from.
+            from ..core.configs import find_personal_config_candidates
+            for cand in find_personal_config_candidates(self._file_path):
+                try:
+                    import json as _json
+                    data = _json.loads(cand.read_text(encoding="utf-8"))
+                    if data.get("source_filename", "").lower() == \
+                            Path(self._file_path).name.lower():
+                        locs = [
+                            str(Path(l).resolve()).lower()
+                            for l in data.get("source_locations", [])
+                        ]
+                        if str(Path(self._file_path).resolve().parent).lower() in locs:
+                            self._personal_cfg_path = cand
+                            break
+                except Exception:  # noqa: BLE001
+                    continue
+            return
+
+        if not candidates:
+            # No personal sidecar yet — none loaded.
+            return
+
+        # Candidates exist but none by location — prompt the user.
+        dlg = PersonalConfigCollisionDialog(
+            self, Path(self._file_path), candidates,
+        )
+        result = dlg.exec()
+        if result != QDialog.DialogCode.Accepted:
+            # Cancel — treat as no personal configs loaded.
+            return
+
+        action = dlg.chosen_action()
+        chosen = dlg.selected_candidate()
+
+        if action == PersonalConfigCollisionDialog.CREATE_NEW:
+            # Leave personal set empty; first Save As Personal will
+            # create {stem}.NNN-scriptree.configs.json with N = next avail.
+            return
+
+        if chosen is None:
+            return
+
+        tool_parent = str(Path(self._file_path).resolve().parent)
+        replace = action == PersonalConfigCollisionDialog.UPDATE_LOCATION
+        try:
+            add_location_to_personal(
+                chosen, tool_parent, replace=replace
+            )
+        except Exception as e:  # noqa: BLE001
+            self._status.setText(
+                f"<span style='color:#b00020'>Personal config update "
+                f"failed: {e}</span>"
+            )
+            return
+
+        # Now load it.
+        try:
+            import json as _json
+            data = _json.loads(chosen.read_text(encoding="utf-8"))
+            from ..core.configs import configs_from_dict
+            self._personal_cfg_set = configs_from_dict(data)
+            self._personal_cfg_path = chosen
+        except Exception as e:  # noqa: BLE001
+            self._status.setText(
+                f"<span style='color:#b00020'>Personal config load "
+                f"failed: {e}</span>"
+            )
 
     def _refresh_cfg_combo(self) -> None:
-        """Repopulate the configuration combobox from the current set."""
+        """Repopulate the combobox with shared + personal configurations.
+
+        Each item stores a ``(storage, name)`` tuple in its user data so
+        handlers can route to the correct ConfigurationSet. Personal
+        entries are prefixed with a lock glyph to distinguish them
+        visually.
+        """
         self._cfg_loading = True
         try:
             self._cfg_combo.clear()
             for c in self._cfg_set.configurations:
-                self._cfg_combo.addItem(c.name)
-            # Select the active entry.
-            idx = self._cfg_combo.findText(self._cfg_set.active)
-            if idx >= 0:
-                self._cfg_combo.setCurrentIndex(idx)
+                self._cfg_combo.addItem(c.name, ("shared", c.name))
+            if self._personal_cfg_set is not None:
+                for c in self._personal_cfg_set.configurations:
+                    self._cfg_combo.addItem(
+                        f"\U0001f512 {c.name}",
+                        ("personal", c.name),
+                    )
+            # Select the active entry using (storage, name) tuple.
+            storage, name = self._active_selection
+            for i in range(self._cfg_combo.count()):
+                if self._cfg_combo.itemData(i) == (storage, name):
+                    self._cfg_combo.setCurrentIndex(i)
+                    break
         finally:
             self._cfg_loading = False
 
@@ -1803,17 +2119,62 @@ class ToolRunnerView(QWidget):
         self._chk_prompt_creds.setEnabled(can_write)
 
     def _save_cfg_sidecar(self) -> bool:
-        """Persist the sidecar file. Returns True on success."""
-        if not self._file_path or self._read_only:
+        """Persist both shared and personal sidecars (as permitted).
+
+        Shared is written only if ``can_write_shared`` and the tool file
+        is not read-only. Personal is written only if
+        ``can_write_personal`` — it's never affected by the tool's
+        read-only flag since it lives in the user's own directory.
+        """
+        if not self._file_path:
             return False
-        try:
-            save_configs(self._file_path, self._cfg_set)
-            return True
-        except Exception as e:  # noqa: BLE001
-            self._status.setText(
-                f"<span style='color:#b00020'>Config save failed: {e}</span>"
-            )
-            return False
+        from ..core.permissions import (
+            get_app_permissions,
+            can_write_shared,
+            can_write_personal,
+        )
+        perms = get_app_permissions()
+        ok = True
+
+        # Shared sidecar.
+        if not self._read_only and can_write_shared(perms):
+            try:
+                save_configs(self._file_path, self._cfg_set)
+            except Exception as e:  # noqa: BLE001
+                self._status.setText(
+                    f"<span style='color:#b00020'>Shared config save "
+                    f"failed: {e}</span>"
+                )
+                ok = False
+
+        # Personal sidecar.
+        if (
+            self._personal_cfg_set is not None
+            and self._personal_cfg_set.configurations
+            and can_write_personal(perms)
+        ):
+            try:
+                if self._personal_cfg_path is None:
+                    # First save — allocate a new numbered file.
+                    self._personal_cfg_path = save_personal_configs(
+                        self._file_path,
+                        self._personal_cfg_set,
+                        suffix_num=next_available_suffix_num(
+                            self._file_path
+                        ),
+                    )
+                else:
+                    save_personal_configs_at(
+                        self._personal_cfg_path,
+                        self._personal_cfg_set,
+                    )
+            except Exception as e:  # noqa: BLE001
+                self._status.setText(
+                    f"<span style='color:#b00020'>Personal config save "
+                    f"failed: {e}</span>"
+                )
+                ok = False
+        return ok
 
     def _apply_configuration(self, cfg: Configuration) -> None:
         """Push a configuration's values + extras into the widgets.
@@ -1835,9 +2196,17 @@ class ToolRunnerView(QWidget):
             # Rebuild the form — _populate_form_rows reads _active_hidden_params.
             self._populate_form_rows()
 
+        # Build a set of no_persist param IDs — skip applying their
+        # saved values so the widget keeps the user's current entry
+        # (or ``ParamDef.default`` on fresh load).
+        no_persist_ids = {
+            p.id for p in self._tool.params if p.no_persist
+        }
         self._updating = True
         try:
             for pid, value in cfg.values.items():
+                if pid in no_persist_ids:
+                    continue
                 widget = self._widgets.get(pid)
                 if widget is None:
                     continue
@@ -1903,13 +2272,18 @@ class ToolRunnerView(QWidget):
     def _on_cfg_combo_changed(self, _idx: int) -> None:
         if self._cfg_loading:
             return
-        name = self._cfg_combo.currentText()
-        if not name:
+        data = self._cfg_combo.currentData()
+        if not data:
             return
-        cfg = self._cfg_set.find(name)
+        storage, name = data
+        cfg = self._find_in_set(storage, name)
         if cfg is None:
             return
-        self._cfg_set.active = name
+        self._active_selection = (storage, name)
+        if storage == "shared":
+            self._cfg_set.active = name
+        elif self._personal_cfg_set is not None:
+            self._personal_cfg_set.active = name
         self._apply_configuration(cfg)
         # Save the active-pointer change so it sticks across sessions.
         self._save_cfg_sidecar()
@@ -1920,30 +2294,109 @@ class ToolRunnerView(QWidget):
         self._history_index = -1
         self._push_history_snapshot()
         self._refresh_edit_buttons()
-        self._status.setText(f"Loaded configuration '{name}'.")
+        label = f"\U0001f512 {name}" if storage == "personal" else name
+        self._status.setText(f"Loaded configuration '{label}'.")
+
+    def _find_in_set(self, storage: str, name: str) -> Configuration | None:
+        """Look up a configuration by (storage, name)."""
+        if storage == "shared":
+            return self._cfg_set.find(name)
+        if self._personal_cfg_set is not None:
+            return self._personal_cfg_set.find(name)
+        return None
+
+    def _active_config_and_set(self) -> tuple[Configuration | None, ConfigurationSet | None, str]:
+        """Return the active (config, set, storage)."""
+        storage, name = self._active_selection
+        if storage == "personal" and self._personal_cfg_set is not None:
+            return self._personal_cfg_set.find(name), self._personal_cfg_set, "personal"
+        return self._cfg_set.find(name), self._cfg_set, "shared"
 
     def _cfg_save(self) -> None:
-        """Overwrite the active configuration with the current state."""
+        """Overwrite the active configuration with the current state.
+
+        Routes to the right ConfigurationSet based on the active
+        selection's storage. no_persist param values are filtered out.
+        """
         if not self._file_path:
             return
-        cfg = self._cfg_set.active_config()
-        cfg.values = dict(self._collect_values())
+        cfg, cfg_set, storage = self._active_config_and_set()
+        if cfg is None:
+            return
+
+        # Check permission for this storage.
+        from ..core.permissions import (
+            get_app_permissions,
+            can_write_shared,
+            can_write_personal,
+        )
+        perms = get_app_permissions()
+        if storage == "shared" and not can_write_shared(perms):
+            QMessageBox.warning(
+                self, "Permission denied",
+                "You don't have permission to write shared "
+                "configurations. Try Save As \u2192 Personal.",
+            )
+            return
+        if storage == "personal" and not can_write_personal(perms):
+            QMessageBox.warning(
+                self, "Permission denied",
+                "You don't have permission to write personal "
+                "configurations.",
+            )
+            return
+
+        cfg.values = dict(self._persistent_values())
         cfg.extras = list(self._extras)
         if self._save_cfg_sidecar():
-            self._status.setText(f"Saved configuration '{cfg.name}'.")
+            label = (
+                f"\U0001f512 {cfg.name}" if storage == "personal" else cfg.name
+            )
+            self._status.setText(f"Saved configuration '{label}'.")
+
+    def _persistent_values(self) -> dict[str, Any]:
+        """Collect form values, filtered to exclude no_persist params.
+
+        Used for writing configurations. ``_collect_values`` is the full
+        read that includes every param (used for runs, previews, and undo
+        snapshots).
+        """
+        values = dict(self._collect_values())
+        for p in self._tool.params:
+            if p.no_persist and p.id in values:
+                del values[p.id]
+        return values
 
     def _cfg_save_as(self) -> None:
-        """Prompt for a new name and create a new configuration."""
+        """Prompt for a new name + storage (shared/personal) and save."""
         if not self._file_path:
             return
-        name, ok = QInputDialog.getText(
-            self,
-            "Save configuration as",
-            "New configuration name:",
+
+        from ..core.permissions import (
+            get_app_permissions,
+            can_write_shared,
+            can_write_personal,
         )
-        if not ok:
+        perms = get_app_permissions()
+        write_shared = can_write_shared(perms) and not self._read_only
+        write_personal = can_write_personal(perms)
+        if not (write_shared or write_personal):
+            QMessageBox.warning(
+                self, "Permission denied",
+                "You don't have permission to save any configurations.",
+            )
             return
-        name = name.strip()
+
+        dlg = SaveConfigAsDialog(
+            self,
+            can_write_shared=write_shared,
+            can_write_personal=write_personal,
+            initial_storage=self._active_selection[0],
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        name = dlg.result_name().strip()
+        storage = dlg.result_storage()
         if not name:
             return
         if is_reserved_config_name(name):
@@ -1954,40 +2407,65 @@ class ToolRunnerView(QWidget):
                 "cannot be used for user configurations.",
             )
             return
-        if self._cfg_set.find(name) is not None:
+
+        # Pick the target set.
+        if storage == "personal":
+            if self._personal_cfg_set is None:
+                self._personal_cfg_set = ConfigurationSet(
+                    active=name,
+                    configurations=[],
+                    source_filename=Path(self._file_path).name,
+                    source_locations=[
+                        str(Path(self._file_path).resolve().parent)
+                    ],
+                )
+            target_set = self._personal_cfg_set
+        else:
+            target_set = self._cfg_set
+
+        existing = target_set.find(name)
+        if existing is not None:
             reply = QMessageBox.question(
                 self,
                 "Overwrite configuration?",
-                f"A configuration named '{name}' already exists. "
-                "Overwrite it?",
+                f"A configuration named '{name}' already exists in "
+                f"{storage}. Overwrite it?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            existing = self._cfg_set.find(name)
-            assert existing is not None
-            existing.values = dict(self._collect_values())
+            existing.values = dict(self._persistent_values())
             existing.extras = list(self._extras)
+            existing.storage = storage
         else:
-            self._cfg_set.configurations.append(
+            target_set.configurations.append(
                 Configuration(
                     name=name,
-                    values=dict(self._collect_values()),
+                    values=dict(self._persistent_values()),
                     extras=list(self._extras),
+                    storage=storage,
                 )
             )
-        self._cfg_set.active = name
+
+        target_set.active = name
+        self._active_selection = (storage, name)
+
         if self._save_cfg_sidecar():
             self._refresh_cfg_combo()
             self._refresh_cfg_buttons()
-            self._status.setText(f"Saved configuration '{name}'.")
+            label = f"\U0001f512 {name}" if storage == "personal" else name
+            self._status.setText(f"Saved configuration '{label}'.")
 
     def _cfg_delete(self) -> None:
-        """Remove the active configuration after confirmation."""
-        if len(self._cfg_set.configurations) <= 1:
+        """Remove the active configuration (shared or personal)."""
+        cfg, cfg_set, storage = self._active_config_and_set()
+        if cfg is None or cfg_set is None:
             return
-        cfg = self._cfg_set.active_config()
+        # Can't delete the last shared config (must always have one);
+        # personal sets can be emptied completely.
+        if storage == "shared" and len(cfg_set.configurations) <= 1:
+            return
         reply = QMessageBox.question(
             self,
             "Delete configuration?",
@@ -1997,17 +2475,41 @@ class ToolRunnerView(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        self._cfg_set.configurations = [
-            c for c in self._cfg_set.configurations if c.name != cfg.name
+        cfg_set.configurations = [
+            c for c in cfg_set.configurations if c.name != cfg.name
         ]
-        # Move active to the first remaining entry and re-apply it.
-        new_active = self._cfg_set.configurations[0]
-        self._cfg_set.active = new_active.name
-        self._apply_configuration(new_active)
+
+        # Pick the next active config to display.
+        if cfg_set.configurations:
+            new_active = cfg_set.configurations[0]
+            cfg_set.active = new_active.name
+            self._active_selection = (storage, new_active.name)
+            self._apply_configuration(new_active)
+        else:
+            # Personal set emptied — fall back to shared's active config
+            # and clean up the empty personal sidecar file.
+            if storage == "personal":
+                if (
+                    self._personal_cfg_path is not None
+                    and self._personal_cfg_path.exists()
+                ):
+                    try:
+                        self._personal_cfg_path.unlink()
+                    except OSError:
+                        pass
+                self._personal_cfg_set = None
+                self._personal_cfg_path = None
+            shared_active = self._cfg_set.active_config()
+            self._active_selection = ("shared", shared_active.name)
+            self._apply_configuration(shared_active)
+
         if self._save_cfg_sidecar():
             self._refresh_cfg_combo()
             self._refresh_cfg_buttons()
-            self._status.setText(f"Deleted configuration '{cfg.name}'.")
+            label = (
+                f"\U0001f512 {cfg.name}" if storage == "personal" else cfg.name
+            )
+            self._status.setText(f"Deleted configuration '{label}'.")
 
     def _cfg_edit_env(self) -> None:
         """Open the env-editor popup for the active configuration.
@@ -2019,7 +2521,9 @@ class ToolRunnerView(QWidget):
         """
         if not self._file_path:
             return
-        cfg = self._cfg_set.active_config()
+        cfg, _cfg_set, _storage = self._active_config_and_set()
+        if cfg is None:
+            return
         dlg = EnvEditorDialog(
             cfg.env,
             cfg.path_prepend,
@@ -2070,7 +2574,9 @@ class ToolRunnerView(QWidget):
         """
         if not self._file_path:
             return
-        cfg = self._cfg_set.active_config()
+        cfg, _set, _storage = self._active_config_and_set()
+        if cfg is None:
+            return
         # Import here to avoid circular imports — the editor is a
         # separate module created in Phase 3.
         try:
@@ -2106,7 +2612,9 @@ class ToolRunnerView(QWidget):
 
     def _on_prompt_creds_toggled(self, checked: bool) -> None:
         """Handle the 'Prompt for alternate credentials' checkbox toggle."""
-        cfg = self._cfg_set.active_config()
+        cfg, _set, _storage = self._active_config_and_set()
+        if cfg is None:
+            return
         cfg.prompt_credentials = checked
         self._save_cfg_sidecar()
         # When unchecked, clear any cached credentials for this config
@@ -2123,18 +2631,29 @@ class ToolRunnerView(QWidget):
     def apply_named_configuration(self, config_name: str) -> bool:
         """Switch to a named configuration and apply it.
 
-        Returns True if the configuration was found and applied.
-        Used by StandaloneWindow and CLI ``-configuration`` flag.
+        Searches the shared set first, then personal. Returns True if
+        the configuration was found and applied. Used by StandaloneWindow
+        and the CLI ``-configuration`` flag.
         """
         cfg = self._cfg_set.find(config_name)
+        storage = "shared"
+        if cfg is None and self._personal_cfg_set is not None:
+            cfg = self._personal_cfg_set.find(config_name)
+            storage = "personal"
         if cfg is None:
             return False
-        self._cfg_set.active = config_name
+        if storage == "shared":
+            self._cfg_set.active = config_name
+        else:
+            assert self._personal_cfg_set is not None
+            self._personal_cfg_set.active = config_name
+        self._active_selection = (storage, config_name)
         self._cfg_loading = True
         try:
-            idx = self._cfg_combo.findText(config_name)
-            if idx >= 0:
-                self._cfg_combo.setCurrentIndex(idx)
+            for i in range(self._cfg_combo.count()):
+                if self._cfg_combo.itemData(i) == (storage, config_name):
+                    self._cfg_combo.setCurrentIndex(i)
+                    break
         finally:
             self._cfg_loading = False
         self._apply_configuration(cfg)
@@ -2143,7 +2662,10 @@ class ToolRunnerView(QWidget):
     @property
     def active_visibility(self) -> UIVisibility:
         """The UIVisibility of the currently active configuration."""
-        return self._cfg_set.active_config().ui_visibility
+        cfg, _set, _storage = self._active_config_and_set()
+        if cfg is None:
+            return UIVisibility()
+        return cfg.ui_visibility
 
     @property
     def read_only(self) -> bool:

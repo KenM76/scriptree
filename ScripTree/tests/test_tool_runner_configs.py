@@ -85,11 +85,20 @@ class TestConfigBarWithFilePath:
     def test_save_as_creates_new_config(self, tmp_path: Path, monkeypatch) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("verbose", True)),
-        )
+        # Monkeypatch the SaveConfigAsDialog to return ("verbose", "shared")
+        # without actually showing the dialog.
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k):
+                pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self):
+                return "verbose"
+            def result_storage(self):
+                return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._widgets["name"].set_value("goodbye")
         view._cfg_save_as()
         names = view._cfg_set.names()
@@ -107,11 +116,15 @@ class TestConfigBarWithFilePath:
     ) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("   ", True)),
-        )
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self): return "   "
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._cfg_save_as()
         assert view._cfg_set.names() == ["default"]
 
@@ -120,11 +133,15 @@ class TestConfigBarWithFilePath:
     ) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("", False)),
-        )
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Rejected
+            def result_name(self): return ""
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._cfg_save_as()
         assert view._cfg_set.names() == ["default"]
 
@@ -137,6 +154,7 @@ class TestConfigBarWithFilePath:
             Configuration(name="extra", values={"name": "x"}, extras=[])
         )
         view._cfg_set.active = "extra"
+        view._active_selection = ("shared", "extra")
         view._refresh_cfg_combo()
         view._refresh_cfg_buttons()
         view._cfg_delete()
@@ -155,11 +173,15 @@ class TestConfigBarWithFilePath:
     ) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("alt", True)),
-        )
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self): return "alt"
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._widgets["name"].set_value("world")
         view._cfg_save_as()  # creates 'alt' with name=world
         # Flip back to default via combo.
@@ -170,11 +192,15 @@ class TestConfigBarWithFilePath:
     def test_sidecar_loaded_on_reopen(self, tmp_path: Path, monkeypatch) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("saved_one", True)),
-        )
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self): return "saved_one"
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._widgets["name"].set_value("persisted")
         view._cfg_save_as()
         # Simulate reopen.
@@ -252,11 +278,15 @@ class TestActiveRoundTrip:
     def test_active_pointer_persisted(self, tmp_path: Path, monkeypatch) -> None:
         tool, path = _saved_tool(tmp_path)
         view = ToolRunnerView(tool, file_path=path)
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("b", True)),
-        )
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self): return "b"
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         view._cfg_save_as()
         # Sidecar should now have active='b'
         loaded = load_configs(path)

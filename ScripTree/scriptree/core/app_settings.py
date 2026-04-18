@@ -79,3 +79,44 @@ def get_settings() -> QSettings:
 
     # Default: create/use the project-root INI.
     return QSettings(str(default_path), QSettings.Format.IniFormat)
+
+
+def _default_user_configs_dir() -> Path:
+    """Default location for per-user configuration files."""
+    return _find_scriptree_dir() / "user_configs"
+
+
+def get_personal_configs_dir() -> Path:
+    """Return the directory for per-user configuration sidecars.
+
+    Resolution order:
+
+    1. ``SCRIPTREE_USER_CONFIGS_DIR`` environment variable (sanitized).
+    2. ``personal_configs_path`` key in the settings INI.
+    3. Default: ``<ScripTree app dir>/user_configs/``.
+
+    The directory is created if it doesn't exist.
+    """
+    # 1. Environment variable.
+    env_val = os.environ.get("SCRIPTREE_USER_CONFIGS_DIR", "").strip()
+    if env_val:
+        env_val = _sanitize_path(env_val)
+        if env_val:
+            p = Path(env_val)
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+
+    # 2. Settings INI redirect.
+    qs = get_settings()
+    custom = qs.value("personal_configs_path", "", type=str)
+    if custom:
+        custom = _sanitize_path(custom)
+        if custom:
+            p = Path(custom)
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+
+    # 3. Default.
+    p = _default_user_configs_dir()
+    p.mkdir(parents=True, exist_ok=True)
+    return p

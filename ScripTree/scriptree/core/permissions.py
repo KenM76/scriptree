@@ -167,8 +167,12 @@ CAPABILITIES: dict[str, str] = {
     "save_as_scriptreetree": "Save As .scriptreetree files",
     # editing
     "edit_tool_definition": "Edit tool definitions in the editor",
-    "read_configurations": "Switch between saved configurations (read-only access)",
-    "write_configurations": "Create, save, delete, and rename configurations",
+    "read_configurations": "Switch between saved configurations (legacy, covers both shared and personal)",
+    "write_configurations": "Create, save, delete, and rename configurations (legacy, covers both shared and personal)",
+    "read_shared_configurations": "Switch between shared configurations",
+    "write_shared_configurations": "Save to the shared configurations sidecar",
+    "read_personal_configurations": "Switch between personal configurations",
+    "write_personal_configurations": "Save to the personal configurations folder",
     "edit_configurations": "Edit saved configurations",
     "edit_environment": "Edit environment variables",
     "edit_visibility": "Edit UI visibility and hidden parameters",
@@ -222,6 +226,12 @@ class PermissionSet:
     conflicts: list[PermissionConflict] = field(default_factory=list)
     app_permissions_dir: str = ""
     file_permissions_dir: str = ""
+    # Set of capability names whose file was actually found in the
+    # permissions directory (either app-level or per-file). Capabilities
+    # missing from this set were resolved using defaults / fallbacks.
+    # Used by helpers like ``can_read_shared`` to decide whether the
+    # new granular capability is deployed or should fall back to legacy.
+    deployed: set[str] = field(default_factory=set)
 
     def can(self, capability: str) -> bool:
         """Return True if the capability is allowed."""
@@ -418,6 +428,10 @@ def load_permissions(
             resolved = True
 
         result.allowed[cap] = resolved
+        # Track whether this capability was deployed (file exists in
+        # either app-level or per-file permissions dir).
+        if app_val is not None or file_val is not None:
+            result.deployed.add(cap)
 
         # Detect conflicts: both sources have explicit values that disagree.
         if (app_val is not None and file_val is not None
@@ -459,3 +473,51 @@ def reset_cached_permissions() -> None:
     ``get_app_permissions()`` will re-read from disk."""
     global _cached_app_permissions
     _cached_app_permissions = None
+
+
+# ── Granular shared/personal capability helpers ─────────────────────────
+#
+# Four new capabilities (``read_shared_configurations``,
+# ``write_shared_configurations``, ``read_personal_configurations``,
+# ``write_personal_configurations``) provide fine-grained control over
+# who can read/write shared vs personal configurations. When a new
+# capability's permission file is NOT present in the deployment, we
+# fall back to the legacy ``read_configurations`` / ``write_configurations``
+# so existing deployments continue to work unchanged.
+
+
+def _granular_or_legacy(
+    ps: PermissionSet, new_cap: str, legacy_cap: str
+) -> bool:
+    """Use ``new_cap`` if it's deployed; else fall back to ``legacy_cap``."""
+    if new_cap in ps.deployed:
+        return ps.can(new_cap)
+    return ps.can(legacy_cap)
+
+
+def can_read_shared(ps: PermissionSet) -> bool:
+    """Can the user switch between SHARED configurations?"""
+    return _granular_or_legacy(
+        ps, "read_shared_configurations", "read_configurations"
+    )
+
+
+def can_write_shared(ps: PermissionSet) -> bool:
+    """Can the user save/delete/rename SHARED configurations?"""
+    return _granular_or_legacy(
+        ps, "write_shared_configurations", "write_configurations"
+    )
+
+
+def can_read_personal(ps: PermissionSet) -> bool:
+    """Can the user switch between PERSONAL configurations?"""
+    return _granular_or_legacy(
+        ps, "read_personal_configurations", "read_configurations"
+    )
+
+
+def can_write_personal(ps: PermissionSet) -> bool:
+    """Can the user save/delete/rename PERSONAL configurations?"""
+    return _granular_or_legacy(
+        ps, "write_personal_configurations", "write_configurations"
+    )

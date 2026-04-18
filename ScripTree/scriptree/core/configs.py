@@ -29,6 +29,7 @@ without a QApplication.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,10 @@ class Configuration:
     ui_visibility: UIVisibility = field(default_factory=UIVisibility)
     hidden_params: list[str] = field(default_factory=list)
     prompt_credentials: bool = False
+    # "shared" (next to the .scriptree, visible to all users) or
+    # "personal" (in the user_configs/ directory). Default "shared"
+    # matches legacy sidecar behavior.
+    storage: str = "shared"
 
 
 @dataclass
@@ -126,10 +131,18 @@ class ConfigurationSet:
     must match one of the ``configurations`` entries. An empty list is
     not a valid state — callers should guarantee at least one entry
     (use :func:`default_configuration_set`).
+
+    ``source_filename`` and ``source_locations`` are only populated for
+    personal sidecars. They record the tool filename and the parent
+    directories where that tool has been loaded from, so a personal
+    sidecar moved or copied between machines can be matched up with the
+    right tool even when multiple tools share a filename.
     """
 
     active: str = "default"
     configurations: list[Configuration] = field(default_factory=list)
+    source_filename: str = ""
+    source_locations: list[str] = field(default_factory=list)
 
     def find(self, name: str) -> Configuration | None:
         for c in self.configurations:
@@ -189,11 +202,18 @@ def save_configs(tool_path: str | Path, cfg_set: ConfigurationSet) -> None:
 
 
 def configs_to_dict(cfg_set: ConfigurationSet) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "schema_version": CONFIGS_SCHEMA_VERSION,
         "active": cfg_set.active,
         "configurations": [_config_to_dict(c) for c in cfg_set.configurations],
     }
+    # Source info is only populated for personal sidecars. Emit only
+    # when non-empty to keep shared sidecars compact.
+    if cfg_set.source_filename:
+        d["source_filename"] = cfg_set.source_filename
+    if cfg_set.source_locations:
+        d["source_locations"] = list(cfg_set.source_locations)
+    return d
 
 
 def _config_to_dict(c: Configuration) -> dict[str, Any]:
@@ -223,6 +243,9 @@ def _config_to_dict(c: Configuration) -> dict[str, Any]:
     # Prompt credentials — only emit when True.
     if c.prompt_credentials:
         d["prompt_credentials"] = True
+    # Storage — emit only when not the default ("shared").
+    if c.storage and c.storage != "shared":
+        d["storage"] = c.storage
     return d
 
 
@@ -269,6 +292,7 @@ def configs_from_dict(data: dict[str, Any]) -> ConfigurationSet:
             ui_visibility=_vis_from_dict(c.get("ui_visibility")),
             hidden_params=[str(p) for p in (c.get("hidden_params") or [])],
             prompt_credentials=bool(c.get("prompt_credentials", False)),
+            storage=str(c.get("storage", "shared")),
         )
         for c in raw_configs
     ]
@@ -277,7 +301,16 @@ def configs_from_dict(data: dict[str, Any]) -> ConfigurationSet:
     active = str(data.get("active", configs[0].name))
     if not any(c.name == active for c in configs):
         active = configs[0].name
-    return ConfigurationSet(active=active, configurations=configs)
+    source_filename = str(data.get("source_filename", ""))
+    source_locations = [
+        str(loc) for loc in (data.get("source_locations") or [])
+    ]
+    return ConfigurationSet(
+        active=active,
+        configurations=configs,
+        source_filename=source_filename,
+        source_locations=source_locations,
+    )
 
 
 # --- safetree reserved configuration --------------------------------------
@@ -453,3 +486,232 @@ def tree_configs_from_dict(data: dict[str, Any]) -> TreeConfigurationSet:
     if not any(c.name == active for c in configs):
         active = configs[0].name
     return TreeConfigurationSet(active=active, configurations=configs)
+
+
+# ── Personal configurations (user-local sidecars) ─────────────────────────
+
+# Naming scheme: ``<stem>.NNN-scriptree.configs.json`` for tool sidecars,
+# ``<stem>.NNN-scriptreetree.treeconfigs.json`` for tree sidecars.
+#
+# Putting the 3-digit suffix BEFORE ``scriptree`` has three benefits:
+#   1. Alphabetical sort groups all variants of one tool together
+#      (``robocopy.000-scriptree..., robocopy.001-scriptree...``).
+#   2. A single glob ``*-scriptree.configs.json`` finds every personal
+#      tool sidecar in the folder (useful for IT audit).
+#   3. The shared sidecar (``robocopy.scriptree.configs.json``) has no
+#      digit prefix so it never matches the personal glob.
+
+_PERSONAL_TOOL_RE = re.compile(
+    r"^(?P<stem>.+?)\.(?P<num>\d{3})-scriptree\.configs\.json$",
+    re.IGNORECASE,
+)
+_PERSONAL_TREE_RE = re.compile(
+    r"^(?P<stem>.+?)\.(?P<num>\d{3})-scriptreetree\.treeconfigs\.json$",
+    re.IGNORECASE,
+)
+
+
+def _is_tree_path(tool_path: str | Path) -> bool:
+    return str(tool_path).lower().endswith(".scriptreetree")
+
+
+def _tool_stem(tool_path: str | Path) -> str:
+    """Return the tool's filename without its ``.scriptree(tree)`` suffix."""
+    name = Path(tool_path).name
+    # Strip ``.scriptreetree`` first to avoid the shorter suffix
+    # matching a tree file.
+    lower = name.lower()
+    if lower.endswith(".scriptreetree"):
+        return name[: -len(".scriptreetree")]
+    if lower.endswith(".scriptree"):
+        return name[: -len(".scriptree")]
+    return name
+
+
+def personal_configs_path(
+    tool_path: str | Path,
+    *,
+    suffix_num: int = 0,
+    personal_dir: Path | None = None,
+) -> Path:
+    """Build the path to a personal sidecar file for ``tool_path``.
+
+    ``suffix_num`` is formatted as a zero-padded 3-digit string.  When
+    ``personal_dir`` is None the caller is responsible for resolving
+    it via :func:`scriptree.core.app_settings.get_personal_configs_dir`
+    and passing the result — keeping configs.py Qt-free.
+    """
+    if personal_dir is None:
+        from .app_settings import get_personal_configs_dir
+        personal_dir = get_personal_configs_dir()
+    stem = _tool_stem(tool_path)
+    num = f"{int(suffix_num):03d}"
+    if _is_tree_path(tool_path):
+        fname = f"{stem}.{num}-scriptreetree.treeconfigs.json"
+    else:
+        fname = f"{stem}.{num}-scriptree.configs.json"
+    return personal_dir / fname
+
+
+def find_personal_config_candidates(
+    tool_path: str | Path,
+    *,
+    personal_dir: Path | None = None,
+) -> list[Path]:
+    """Find all personal sidecar files whose filename stem matches.
+
+    Returns candidates sorted numerically by the 3-digit suffix.  The
+    caller MUST still verify the file's internal ``source_filename``
+    matches the tool being loaded — two different tools may share the
+    same stem by coincidence.
+    """
+    if personal_dir is None:
+        from .app_settings import get_personal_configs_dir
+        personal_dir = get_personal_configs_dir()
+    if not personal_dir.is_dir():
+        return []
+    stem = _tool_stem(tool_path)
+    is_tree = _is_tree_path(tool_path)
+    regex = _PERSONAL_TREE_RE if is_tree else _PERSONAL_TOOL_RE
+
+    results: list[tuple[int, Path]] = []
+    for entry in personal_dir.iterdir():
+        if not entry.is_file():
+            continue
+        m = regex.match(entry.name)
+        if m is None:
+            continue
+        if m.group("stem").lower() != stem.lower():
+            continue
+        results.append((int(m.group("num")), entry))
+    results.sort(key=lambda t: t[0])
+    return [p for _, p in results]
+
+
+def next_available_suffix_num(
+    tool_path: str | Path,
+    *,
+    personal_dir: Path | None = None,
+) -> int:
+    """Return max(existing suffix numbers) + 1, or 0 if none exist."""
+    cands = find_personal_config_candidates(
+        tool_path, personal_dir=personal_dir
+    )
+    if not cands:
+        return 0
+    regex = (
+        _PERSONAL_TREE_RE if _is_tree_path(tool_path) else _PERSONAL_TOOL_RE
+    )
+    nums = []
+    for p in cands:
+        m = regex.match(p.name)
+        if m is not None:
+            nums.append(int(m.group("num")))
+    return (max(nums) + 1) if nums else 0
+
+
+def load_personal_configs_for(
+    tool_path: str | Path,
+    *,
+    personal_dir: Path | None = None,
+) -> tuple[ConfigurationSet | None, list[Path]]:
+    """Find the personal sidecar for ``tool_path``.
+
+    Returns a ``(cfg_set, candidates)`` pair:
+
+    - If exactly one candidate's ``source_filename`` matches AND its
+      ``source_locations`` contains the tool's parent directory, returns
+      ``(cfg_set, [])``.
+    - If there are filename-matching candidates but none by location,
+      returns ``(None, matches)`` so the caller can prompt the user.
+    - If no filename-matching candidate exists, returns ``(None, [])``.
+    """
+    tool_abs = Path(tool_path).resolve()
+    tool_filename = tool_abs.name
+    tool_parent = str(tool_abs.parent)
+
+    candidates = find_personal_config_candidates(
+        tool_path, personal_dir=personal_dir
+    )
+    filename_matches: list[tuple[Path, ConfigurationSet]] = []
+    for cand in candidates:
+        try:
+            data = json.loads(cand.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cfg_set = configs_from_dict(data)
+        if cfg_set.source_filename.lower() != tool_filename.lower():
+            continue
+        filename_matches.append((cand, cfg_set))
+
+    # Look for a location match among filename matches.
+    for cand, cfg_set in filename_matches:
+        locs_normalized = [
+            str(Path(loc).resolve()).lower()
+            for loc in cfg_set.source_locations
+        ]
+        if str(Path(tool_parent).resolve()).lower() in locs_normalized:
+            return cfg_set, []
+
+    if filename_matches:
+        return None, [c for c, _ in filename_matches]
+    return None, []
+
+
+def save_personal_configs(
+    tool_path: str | Path,
+    cfg_set: ConfigurationSet,
+    *,
+    suffix_num: int = 0,
+    personal_dir: Path | None = None,
+) -> Path:
+    """Write ``cfg_set`` to a personal sidecar for ``tool_path``.
+
+    Automatically sets ``cfg_set.source_filename`` to the tool's
+    filename and ensures the tool's parent directory is in
+    ``source_locations``. Returns the path written.
+    """
+    tool_abs = Path(tool_path).resolve()
+    cfg_set.source_filename = tool_abs.name
+    parent = str(tool_abs.parent)
+    if parent not in cfg_set.source_locations:
+        cfg_set.source_locations.append(parent)
+    path = personal_configs_path(
+        tool_path, suffix_num=suffix_num, personal_dir=personal_dir
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(configs_to_dict(cfg_set), indent=2), encoding="utf-8"
+    )
+    return path
+
+
+def save_personal_configs_at(
+    path: Path, cfg_set: ConfigurationSet
+) -> None:
+    """Write ``cfg_set`` to the exact given path (no name mangling)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(configs_to_dict(cfg_set), indent=2), encoding="utf-8"
+    )
+
+
+def add_location_to_personal(
+    personal_path: Path,
+    tool_abs_parent: str,
+    *,
+    replace: bool = False,
+) -> None:
+    """Mutate an existing personal sidecar's ``source_locations``.
+
+    - ``replace=False`` (default): append ``tool_abs_parent`` if not
+      already present.
+    - ``replace=True``: replace the list with just ``[tool_abs_parent]``.
+    """
+    data = json.loads(personal_path.read_text(encoding="utf-8"))
+    cfg_set = configs_from_dict(data)
+    if replace:
+        cfg_set.source_locations = [tool_abs_parent]
+    elif tool_abs_parent not in cfg_set.source_locations:
+        cfg_set.source_locations.append(tool_abs_parent)
+    save_personal_configs_at(personal_path, cfg_set)

@@ -148,6 +148,37 @@ class SettingsDialog(QDialog):
 
         root.addWidget(settings_group)
 
+        # --- Personal configurations folder ---
+        pc_group = QGroupBox("Personal configurations folder")
+        pc_lay = QVBoxLayout(pc_group)
+
+        pc_hint = QLabel(
+            "<i>Where your personal configurations are stored. "
+            "Personal configs are private to you and live outside the "
+            "shared tool sidecar. Leave blank for the default "
+            "(<code>ScripTree/user_configs/</code>).</i>"
+        )
+        pc_hint.setWordWrap(True)
+        pc_lay.addWidget(pc_hint)
+
+        pc_row = QHBoxLayout()
+        self._personal_configs_edit = QLineEdit()
+        self._personal_configs_edit.setPlaceholderText(
+            "(default — ScripTree/user_configs/)"
+        )
+        saved_pc = settings.value("personal_configs_path", "", type=str)
+        self._personal_configs_edit.setText(saved_pc)
+        pc_row.addWidget(self._personal_configs_edit, stretch=1)
+
+        self._btn_browse_personal = QPushButton("Browse...")
+        self._btn_browse_personal.clicked.connect(
+            self._browse_personal_configs_dir
+        )
+        pc_row.addWidget(self._btn_browse_personal)
+        pc_lay.addLayout(pc_row)
+
+        root.addWidget(pc_group)
+
         # --- Global environment variables ---
         env_group = QGroupBox("Global environment variables")
         env_lay = QVBoxLayout(env_group)
@@ -246,6 +277,14 @@ class SettingsDialog(QDialog):
         if path:
             self._settings_path_edit.setText(path)
 
+    def _browse_personal_configs_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Select personal configurations folder",
+            self._personal_configs_edit.text(),
+        )
+        if path:
+            self._personal_configs_edit.setText(path)
+
     # --- result accessors ---
 
     def result_permissions_path(self) -> str:
@@ -253,6 +292,9 @@ class SettingsDialog(QDialog):
 
     def result_settings_path(self) -> str:
         return self._settings_path_edit.text().strip()
+
+    def result_personal_configs_path(self) -> str:
+        return self._personal_configs_edit.text().strip()
 
     def result_remember_layout(self) -> bool:
         return self._chk_remember_layout.isChecked()

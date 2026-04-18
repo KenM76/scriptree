@@ -345,14 +345,16 @@ class TestSafetreeBlockedInUI:
 
         view = ToolRunnerView(tool, file_path=str(tool_path))
 
-        # Monkeypatch QInputDialog to return "safetree".
-        from PySide6.QtWidgets import QInputDialog
-
-        monkeypatch.setattr(
-            QInputDialog,
-            "getText",
-            staticmethod(lambda *a, **k: ("safetree", True)),
-        )
+        # Monkeypatch SaveConfigAsDialog to return "safetree".
+        from scriptree.ui import tool_runner as _tr
+        class _FakeDlg:
+            def __init__(self, *a, **k): pass
+            def exec(self):
+                from PySide6.QtWidgets import QDialog
+                return QDialog.DialogCode.Accepted
+            def result_name(self): return "safetree"
+            def result_storage(self): return "shared"
+        monkeypatch.setattr(_tr, "SaveConfigAsDialog", _FakeDlg)
         # Monkeypatch QMessageBox.warning to capture the call.
         from PySide6.QtWidgets import QMessageBox
 

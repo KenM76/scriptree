@@ -248,6 +248,17 @@ class ToolEditorView(QWidget):
         )
         self._prop_required = QCheckBox()
         self._prop_required.toggled.connect(self._on_prop_required_changed)
+        self._prop_no_persist = QCheckBox()
+        self._prop_no_persist.setToolTip(
+            "When checked, the parameter's value is never written into "
+            "any saved configuration. Useful for passwords, tokens, and "
+            "other sensitive or scratch values. The user's most recent "
+            "entry is kept during the session but is lost when the tool "
+            "is reloaded (the widget returns to the default)."
+        )
+        self._prop_no_persist.toggled.connect(
+            self._on_prop_no_persist_changed
+        )
         self._prop_default = QLineEdit()
         self._prop_default.textChanged.connect(self._on_prop_default_changed)
         self._prop_choices = QLineEdit()
@@ -281,6 +292,7 @@ class ToolEditorView(QWidget):
         self._prop_layout.addRow("Type:", self._prop_type)
         self._prop_layout.addRow("Widget:", self._prop_widget)
         self._prop_layout.addRow("Required:", self._prop_required)
+        self._prop_layout.addRow("Do not save value:", self._prop_no_persist)
         self._prop_layout.addRow("Default:", self._prop_default)
         self._prop_layout.addRow("Choices:", self._prop_choices)
         self._prop_layout.addRow("File filter:", self._prop_filter)
@@ -560,6 +572,7 @@ class ToolEditorView(QWidget):
             self._prop_desc.setText("")
             self._prop_type.setCurrentIndex(0)
             self._prop_required.setChecked(False)
+            self._prop_no_persist.setChecked(False)
             self._prop_default.setText("")
             self._prop_choices.setText("")
             self._prop_filter.setText("")
@@ -583,6 +596,7 @@ class ToolEditorView(QWidget):
             if widget_idx >= 0:
                 self._prop_widget.setCurrentIndex(widget_idx)
             self._prop_required.setChecked(param.required)
+            self._prop_no_persist.setChecked(param.no_persist)
             self._prop_default.setText(
                 "" if param.default is None else str(param.default)
             )
@@ -677,6 +691,14 @@ class ToolEditorView(QWidget):
         param = self._current_param()
         if param:
             param.required = checked
+            self._update_preview()
+
+    def _on_prop_no_persist_changed(self, checked: bool) -> None:
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param:
+            param.no_persist = bool(checked)
             self._update_preview()
 
     def _on_prop_default_changed(self, text: str) -> None:
