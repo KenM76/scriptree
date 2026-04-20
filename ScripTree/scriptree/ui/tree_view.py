@@ -44,6 +44,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -822,12 +823,76 @@ class TreeLauncherView(QWidget):
         path_data = item.data(0, _ROLE_PATH)
         if not path_data:
             return  # folder
+        # If the referenced .scriptree file is missing, offer the
+        # recovery dialog instead of a generic critical popup — the
+        # path stays copy-pasteable, and the user can Browse to a
+        # replacement if they have permission to edit the tree.
+        if not Path(path_data).exists():
+            self._offer_missing_tool_recovery(item, path_data)
+            return
         try:
             tool = load_tool(path_data)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Load error", str(e))
             return
         self.toolSelected.emit(tool, path_data)
+
+    def _offer_missing_tool_recovery(
+        self, item: QTreeWidgetItem, missing_path: str
+    ) -> None:
+        """Show the recovery dialog for a missing .scriptree leaf.
+
+        If the user picks a replacement and has permission to edit the
+        tree, update the leaf's stored path and persist the tree.
+        """
+        from .recovery_dialog import MissingFileRecoveryDialog
+        from ..core.permissions import get_app_permissions
+
+        perms = get_app_permissions()
+        # Replacing the leaf path modifies the tree — so the user needs
+        # both edit_tree_structure AND the ability to save the tree.
+        can_replace = (
+            perms.can("edit_tree_structure")
+            and perms.can("save_scriptreetree")
+            and not getattr(self, "_tree_read_only", False)
+        )
+
+        dlg = MissingFileRecoveryDialog(
+            self,
+            title="Tool file not found",
+            message=(
+                f"The tool file referenced by this tree leaf no longer "
+                f"exists. This usually means the file was moved, "
+                f"renamed, or deleted after the tree was saved."
+            ),
+            missing_path=missing_path,
+            allow_replace=can_replace,
+            file_filter="ScripTree files (*.scriptree);;All files (*)",
+            browse_caption="Select replacement .scriptree file",
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_path = dlg.selected_replacement()
+        if not new_path:
+            return
+
+        # Update the item's stored path, persist the tree, and open the
+        # tool from its new location.
+        resolved = str(Path(new_path).resolve())
+        item.setData(0, _ROLE_PATH, resolved)
+        # Update the visible label from the new file's tool.name.
+        try:
+            tool = load_tool(resolved)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Replacement failed",
+                f"Could not load the replacement file:\n{e}",
+            )
+            return
+        item.setText(0, tool.name or Path(resolved).stem)
+        self._mark_dirty()
+        self._save_tree()  # quiet; only writes if possible
+        self.toolSelected.emit(tool, resolved)
 
     # --- QTreeWidget → TreeDef rebuild ----------------------------------
 

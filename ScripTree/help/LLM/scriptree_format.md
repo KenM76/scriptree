@@ -12,7 +12,7 @@ disagree, the code wins — open an issue and fix the docs.
   "description": "string, optional, default \"\"",
   "executable": "string, required — absolute or PATH-resolvable",
   "working_directory": "string or null, optional",
-  "argument_template": ["list[str], required, may be empty"],
+  "argument_template": [/* list of strings AND/OR nested lists; see below */],
   "params": [/* list[ParamDef], may be empty */],
   "sections": [/* list[SectionDef], may be empty/omitted */],
   "env": { "KEY": "value" },
@@ -34,9 +34,14 @@ disagree, the code wins — open an issue and fix the docs.
 - `executable` — must exist on disk at load time? No. ScripTree
   tolerates missing executables; the user sees an error at Run time.
 - `working_directory` — if null, `dirname(executable)` is used as cwd.
-- `argument_template` — a list of strings. Each string is either a
-  single token (literal or `{placeholder}`) or a space-separated group
-  that emits together. See [argument_template.md](argument_template.md).
+- `argument_template` — a list whose entries are either **strings**
+  (one argv token each) or **nested lists of strings** (a *token
+  group* that emits all elements together or drops them together).
+  **For flag + value pairs use a nested list** — writing
+  `"--out {out}"` as a single string produces one argv token with
+  a literal space, which almost every CLI rejects. Correct:
+  `["--out", "{out}"]`. See [argument_template.md](argument_template.md)
+  for the full grammar and common mistakes.
 - `params` — order matters; it's the form layout order within each
   section.
 - `sections` — may be omitted. If present, defines section ordering and
@@ -200,7 +205,9 @@ The `tool_from_dict` function enforces:
 1. `schema_version` is an int and ≤ current version.
 2. `name` is a non-empty string.
 3. `executable` is a non-empty string.
-4. `argument_template` is a list of strings.
+4. `argument_template` is a list whose entries are each either a
+   string (single argv token) or a list of strings (token group that
+   emits/drops as a unit).
 5. Every `ParamDef.id` matches `^[A-Za-z_][A-Za-z0-9_]*$`.
 6. Every `ParamDef.id` is unique within `params[]`.
 7. Every `ParamDef.type` and `widget` is from the allowed sets above.

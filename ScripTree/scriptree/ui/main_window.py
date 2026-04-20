@@ -45,6 +45,7 @@ import PySide6QtAds as ads
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -326,15 +327,39 @@ class MainWindow(QMainWindow):
     def _open_recent(self, path: str) -> None:
         p = Path(path)
         if not p.exists():
-            QMessageBox.warning(
-                self, "File not found",
-                f"The file no longer exists:\n{path}",
+            # Offer the recovery dialog with a selectable path the user
+            # can copy, plus a Browse option for picking a replacement.
+            from .recovery_dialog import MissingFileRecoveryDialog
+            is_tree = path.endswith(".scriptreetree")
+            file_filter = (
+                "ScripTree tree files (*.scriptreetree);;All files (*)"
+                if is_tree else
+                "ScripTree files (*.scriptree);;All files (*)"
             )
+            dlg = MissingFileRecoveryDialog(
+                self,
+                title="Recent file not found",
+                message=(
+                    "This file has moved, been renamed, or been "
+                    "deleted since it was last opened."
+                ),
+                missing_path=path,
+                allow_replace=True,
+                file_filter=file_filter,
+                browse_caption="Select replacement file",
+            )
+            accepted = dlg.exec() == QDialog.DialogCode.Accepted
+            replacement = dlg.selected_replacement() if accepted else None
+            # Remove the dead entry either way.
             self._recent_files = [
                 f for f in self._recent_files if f != path
             ]
             self._save_recent_files()
             self._rebuild_recent_menu()
+            if replacement:
+                # Recurse to open the replacement — it'll go through
+                # the same code path and land in the right place.
+                self._open_recent(str(Path(replacement).resolve()))
             return
         if path.endswith(".scriptreetree"):
             if not self._confirm_discard_tree():

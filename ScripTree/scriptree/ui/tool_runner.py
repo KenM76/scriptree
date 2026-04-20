@@ -1539,6 +1539,23 @@ class ToolRunnerView(QWidget):
             QMessageBox.warning(self, "Validation error", str(e))
             return
 
+        # --- executable existence pre-check ---
+        # Catch the most common run failure (the tool's executable file
+        # was moved/renamed/deleted) before Popen and offer a recovery
+        # dialog, the same way tree leaves do. If the executable is a
+        # bare name resolved via PATH we skip the check — shutil.which
+        # handles PATH resolution in a way that's equivalent to what
+        # the OS does.
+        exe_path = cmd.argv[0] if cmd.argv else ""
+        if exe_path and self._executable_seems_missing(exe_path):
+            if not self._offer_missing_executable_recovery(exe_path):
+                return
+            # Replacement was applied to self._tool.executable. Reflect
+            # it in the already-built command so the run uses the new
+            # path without re-running the full resolver.
+            if cmd.argv:
+                cmd.argv[0] = self._tool.executable
+
         # --- credential prompt (run-as-different-user) ---
         credentials: tuple[str, str, str] | None = None
         if cfg is not None and cfg.prompt_credentials:
@@ -1616,6 +1633,72 @@ class ToolRunnerView(QWidget):
         path = self._file_path or "<unsaved>"
         cfg_name = self._cfg_set.active
         return f"{path}::{cfg_name}"
+
+    @staticmethod
+    def _executable_seems_missing(exe_path: str) -> bool:
+        """Heuristic: does the executable not exist?
+
+        - If ``exe_path`` contains a path separator, check the file
+          directly (doesn't exist → missing).
+        - Otherwise it's a bare name like ``python`` or ``robocopy``;
+          ask ``shutil.which`` to resolve it via PATH. Only flag as
+          missing if ``which`` returns None (i.e. it's not on PATH).
+        """
+        import shutil
+        if "/" in exe_path or "\\" in exe_path or ":" in exe_path:
+            return not Path(exe_path).exists()
+        return shutil.which(exe_path) is None
+
+    def _offer_missing_executable_recovery(self, exe_path: str) -> bool:
+        """Show recovery dialog for a missing tool executable.
+
+        Returns True if the user picked a replacement and the run can
+        proceed with the new path. Returns False if the user dismissed
+        (abort the run).
+        """
+        from .recovery_dialog import MissingFileRecoveryDialog
+        from ..core.permissions import get_app_permissions
+        from ..core.io import save_tool
+
+        perms = get_app_permissions()
+        can_replace = (
+            perms.can("edit_tool_definition")
+            and perms.can("save_scriptree")
+            and not self._read_only
+        )
+
+        dlg = MissingFileRecoveryDialog(
+            self,
+            title="Executable not found",
+            message=(
+                "The tool's executable could not be located. This "
+                "usually means the program was moved, renamed, or "
+                "uninstalled since this tool was set up."
+            ),
+            missing_path=exe_path,
+            allow_replace=can_replace,
+            file_filter="Executables (*.exe *.bat *.cmd *.py *.sh);;All files (*)",
+            browse_caption="Select replacement executable",
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+        new_path = dlg.selected_replacement()
+        if not new_path:
+            return False
+
+        # Update the tool definition and persist it.
+        self._tool.executable = str(Path(new_path).resolve())
+        if self._file_path:
+            try:
+                save_tool(self._tool, self._file_path)
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.warning(
+                    self, "Save failed",
+                    f"Updated the executable path but couldn't save "
+                    f"the tool file:\n{e}\n\n"
+                    "The change will be lost when ScripTree restarts.",
+                )
+        return True
 
     def _update_user_indicator(
         self, username: str = "", domain: str = ""
