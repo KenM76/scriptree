@@ -181,49 +181,50 @@ def _parse(help_text: str) -> ToolDef:
     )
 
 
-# Shell metacharacters that should never appear in generated template
-# tokens. These could be injected via crafted --help output.
-_DANGEROUS_CHARS = re.compile(r"[;|&`$<>!]")
+# Null bytes truncate argv at the OS level on every platform we
+# support (POSIX and Windows). Everything else — shell metacharacters,
+# glob stars, backslashes, braces, parens — is LEGITIMATE in tool
+# defaults and argument templates. ScripTree always uses
+# ``subprocess.Popen(argv, shell=False)``, so argv tokens are passed
+# as literal bytes to the child process and never interpreted as
+# shell syntax. Stripping "dangerous" characters from parser output
+# silently corrupts real-world defaults like ``$HOME/.config``,
+# ``*.txt`` glob patterns, ``<input>``/``<output>`` placeholders in
+# help text, and flags like ``!`` used by rsync, ffmpeg, and friends.
+_NULL_BYTE = re.compile(r"\x00")
+# Control characters (except \t \n \r) in cached help text — these
+# can confuse terminals and log viewers if ever re-rendered.
+_CACHED_HELP_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _sanitize_parsed_tool(tool: ToolDef) -> None:
-    """Strip dangerous shell metacharacters from a parser-generated ToolDef.
+    """Minimal post-parse cleanup.
 
-    This runs after every parser plugin to prevent crafted help text
-    from injecting shell commands into the argument template or param
-    defaults. Only literal tokens are sanitized — placeholder syntax
-    like ``{param_id}`` and ``{param_id?--flag}`` is preserved.
+    Only strips null bytes — which break argv at the OS level — and
+    control characters from cached help text. Every other character
+    is preserved verbatim so that tool defaults and argument templates
+    round-trip exactly as the parser produced them.
+
+    Shell metacharacters in argv tokens are safe with ``shell=False``,
+    which is used for every tool launch.
     """
     clean_template: list = []
     for entry in tool.argument_template:
         if isinstance(entry, list):
-            clean_template.append([
-                _DANGEROUS_CHARS.sub("", tok)
-                if "{" not in tok else tok
-                for tok in entry
-            ])
+            clean_template.append([_NULL_BYTE.sub("", tok) for tok in entry])
         elif isinstance(entry, str):
-            if "{" not in entry:
-                clean_template.append(_DANGEROUS_CHARS.sub("", entry))
-            else:
-                clean_template.append(entry)
+            clean_template.append(_NULL_BYTE.sub("", entry))
         else:
             clean_template.append(entry)
     tool.argument_template = clean_template
 
-    # Sanitize param defaults — a crafted help text could embed
-    # shell metacharacters in default values.
     for param in tool.params:
         if isinstance(param.default, str) and param.default:
-            param.default = _DANGEROUS_CHARS.sub("", param.default)
+            param.default = _NULL_BYTE.sub("", param.default)
 
-    # Strip control characters (except \t \n \r) from cached help text
-    # to prevent terminal escape injection if ever rendered.
     if tool.source.help_text_cached:
-        tool.source.help_text_cached = re.sub(
-            r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]",
-            "",
-            tool.source.help_text_cached,
+        tool.source.help_text_cached = _CACHED_HELP_CTRL.sub(
+            "", tool.source.help_text_cached
         )
 
 

@@ -205,8 +205,14 @@ class TestResolveCwd:
 
 class TestDisplay:
     def test_display_quotes_spaces(self) -> None:
+        """Quoting is platform-specific: single quotes on POSIX
+        (shlex.quote), double quotes on Windows (list2cmdline)."""
+        import sys
         cmd = ResolvedCommand(argv=["echo", "hello world"], cwd=None)
-        assert cmd.display() == "echo 'hello world'"
+        if sys.platform == "win32":
+            assert cmd.display() == 'echo "hello world"'
+        else:
+            assert cmd.display() == "echo 'hello world'"
 
 
 class TestSpawnStreaming:

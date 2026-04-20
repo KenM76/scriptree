@@ -201,15 +201,23 @@ def validate_resolved_path(
 def split_command(cmd: str) -> list[str]:
     """Split a command string into an argv list without using a shell.
 
-    On Windows, uses ``CommandLineToArgvW`` for correct handling of
-    quoted paths (e.g. ``"C:\\Program Files\\tool.exe" arg1``).
-    On other platforms, uses ``shlex.split``.
+    Cross-platform:
+    - On Windows, uses ``CommandLineToArgvW`` for correct handling of
+      quoted paths (e.g. ``"C:\\Program Files\\tool.exe" arg1``) and
+      Windows-style backslash escaping. POSIX ``shlex.split`` would
+      mangle paths like ``C:\\Users\\Ken`` because ``\\U`` is treated
+      as an escape.
+    - On Linux/macOS, uses :func:`shlex.split` with POSIX mode.
 
-    This should be used instead of ``shell=True`` for menu commands
-    and any other user-supplied command strings.
+    An empty/whitespace-only input returns an empty list on both
+    platforms — we explicitly short-circuit because
+    ``CommandLineToArgvW("")`` returns the calling process's exe
+    name (documented Windows quirk), which is never what we want.
     """
     import shlex
     import sys
+    if not cmd.strip():
+        return []
     if sys.platform == "win32":
         try:
             import ctypes

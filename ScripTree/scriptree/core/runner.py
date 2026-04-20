@@ -60,10 +60,24 @@ class ResolvedCommand:
     def display(self) -> str:
         """Human-readable shell-style representation for the live preview.
 
-        Not safe for actual shell execution — the real spawn uses argv.
+        Cross-platform quoting:
+        - On Windows, uses :func:`subprocess.list2cmdline` which wraps
+          tokens containing spaces or tabs in double quotes and
+          escapes embedded quotes. Matches what ``Popen`` would pass
+          to ``CreateProcessW`` and what users expect to see in a
+          Windows command line.
+        - On POSIX platforms, uses :func:`shlex.quote` which wraps in
+          single quotes where needed — the standard POSIX convention.
+
+        Not safe for actual shell execution — the real spawn uses the
+        argv list directly, bypassing any shell.
         """
+        import sys
         if not self.argv:
             return ""
+        if sys.platform == "win32":
+            import subprocess
+            return subprocess.list2cmdline(self.argv)
         return " ".join(shlex.quote(a) for a in self.argv)
 
 
@@ -681,10 +695,32 @@ def reconcile_edit(
     the return shape.
     """
     import shlex
+    import sys
+
+    # Cross-platform command splitting with strict unclosed-quote
+    # detection:
+    # - First run a non-POSIX shlex validator that rejects unclosed
+    #   quotes on every platform (posix=False preserves backslashes so
+    #   Windows paths like C:\Users\Ken aren't mangled by the check).
+    # - Then do the real split: CommandLineToArgvW on Windows (keeps
+    #   backslashes in paths intact), shlex.split(posix=True) on POSIX.
+    try:
+        # Validation pass — raises ValueError on unclosed quotes.
+        list(shlex.shlex(edited_text, posix=False, punctuation_chars=""))
+    except ValueError:
+        return ReconcileResult(
+            values=dict(current_values),
+            extras=[],
+            ok=False,
+        )
 
     try:
-        tokens = shlex.split(edited_text, posix=True)
-    except ValueError:
+        if sys.platform == "win32":
+            from .sanitize import split_command
+            tokens = split_command(edited_text)
+        else:
+            tokens = shlex.split(edited_text, posix=True)
+    except (ValueError, OSError):
         return ReconcileResult(
             values=dict(current_values),
             extras=[],
@@ -819,10 +855,11 @@ def reconcile_edit(
                 consumed[tok_idx] = True
                 cursor += 1
                 continue
-            # shlex strips outer quotes on parse, so an embedded
-            # template like ``"{name}"`` matches any non-flag token
-            # as a fallback — the user's ``"hello"`` becomes the
-            # shlex token ``hello`` which we then assign to ``name``.
+            # Both shlex (POSIX) and CommandLineToArgvW (Windows) strip
+            # outer quotes on parse, so an embedded template like
+            # ``"{name}"`` matches any non-flag token as a fallback —
+            # the user's ``"hello"`` becomes the plain token ``hello``
+            # which we then assign to ``name``.
             if prefix == '"' and suffix == '"' and not _FLAG_LOOKING.match(tok):
                 new_values[pid] = tok
                 consumed[tok_idx] = True
