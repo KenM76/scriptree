@@ -244,6 +244,14 @@ class ToolDef:
     # ``MenuItemDef.menu`` into top-level menus.
     menus: list[MenuItemDef] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
+    # Absolute path of the ``.scriptree`` file this tool was loaded
+    # from — populated by ``load_tool()``. Used at run time to resolve
+    # relative paths (``executable``, ``working_directory``,
+    # ``path_prepend`` entries) against the .scriptree file's own
+    # directory rather than against the process's CWD, so the folder
+    # containing the tool can be moved without breaking the tool.
+    # NOT serialized to disk; derived from the file's own location.
+    loaded_from: str | None = None
 
     def param_by_id(self, param_id: str) -> ParamDef | None:
         for p in self.params:

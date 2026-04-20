@@ -160,11 +160,20 @@ def save_tool(tool: ToolDef, path: str | Path) -> None:
     Path(path).write_text(
         json.dumps(tool_to_dict(tool), indent=2), encoding="utf-8"
     )
+    # Update the in-memory tool to remember where it now lives — so
+    # subsequent relative-path resolution uses the current file
+    # location (important for Save As).
+    tool.loaded_from = str(Path(path).resolve())
 
 
 def load_tool(path: str | Path) -> ToolDef:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return tool_from_dict(data)
+    tool = tool_from_dict(data)
+    # Remember where we loaded from so relative paths in the tool
+    # definition can be resolved against this file's directory at
+    # run time, regardless of where the process was launched from.
+    tool.loaded_from = str(Path(path).resolve())
+    return tool
 
 
 def _param_to_dict(p: ParamDef) -> dict[str, Any]:

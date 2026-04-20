@@ -10,8 +10,8 @@ disagree, the code wins — open an issue and fix the docs.
   "schema_version": 2,
   "name": "string, required",
   "description": "string, optional, default \"\"",
-  "executable": "string, required — absolute or PATH-resolvable",
-  "working_directory": "string or null, optional",
+  "executable": "string, required — absolute, relative-to-.scriptree, or bare PATH name",
+  "working_directory": "string or null, optional — absolute or relative-to-.scriptree",
   "argument_template": [/* list of strings AND/OR nested lists; see below */],
   "params": [/* list[ParamDef], may be empty */],
   "sections": [/* list[SectionDef], may be empty/omitted */],
@@ -33,7 +33,21 @@ disagree, the code wins — open an issue and fix the docs.
 - `name` — user-visible. May contain spaces. Used as the window title.
 - `executable` — must exist on disk at load time? No. ScripTree
   tolerates missing executables; the user sees an error at Run time.
+  **Relative paths** (starting with ``./`` or ``../``, or any path
+  that isn't absolute and isn't a bare PATH name like ``python``)
+  are resolved against the **.scriptree file's directory** at run
+  time, not against the process's current working directory. This
+  makes a folder containing a .scriptree and its sibling executables
+  portable — move the folder, the tool still works. Bare names like
+  ``python``, ``robocopy``, or ``ffmpeg`` fall back to PATH resolution
+  (they don't exist as sibling files).
 - `working_directory` — if null, `dirname(executable)` is used as cwd.
+  **Relative paths** are resolved against the .scriptree file's
+  directory at run time, same as ``executable``.
+- `path_prepend` — entries' relative paths are resolved against
+  ``working_directory`` (or the resolved executable directory), which
+  in turn anchors on the .scriptree file's location. Net effect:
+  a fully relative ToolDef is portable without manual path fixups.
 - `argument_template` — a list whose entries are either **strings**
   (one argv token each) or **nested lists of strings** (a *token
   group* that emits all elements together or drops them together).

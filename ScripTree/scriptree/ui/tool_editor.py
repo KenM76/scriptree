@@ -24,6 +24,7 @@ clicked — Cancel discards them. The editor returns the final
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from pathlib import Path
 from typing import Any
 
@@ -1134,6 +1135,7 @@ class ToolEditorView(QWidget):
             path = self._ask_save_path()
             if path is None:
                 return
+        self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
         self.saved.emit(self._tool, path)
@@ -1152,9 +1154,58 @@ class ToolEditorView(QWidget):
         if errors:
             QMessageBox.warning(self, "Validation errors", "\n".join(errors))
             return
+        self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
         self.saved.emit(self._tool, path)
+
+    def _maybe_relativize_paths(self, save_path: str) -> None:
+        """Convert ``executable`` and ``working_directory`` to paths
+        relative to ``save_path``'s directory when they live inside
+        that directory tree.
+
+        Makes the containing folder portable — moving it preserves
+        the link to the sibling executable/helper files. Paths that
+        point outside the save folder are left absolute (they're
+        almost certainly system tools or shared resources). Bare
+        names like ``python`` or empty strings are untouched.
+
+        Mirrors the behavior of ``tree_view._maybe_relative`` for
+        tree leaf paths.
+        """
+        save_dir = Path(save_path).resolve().parent
+
+        def _relativize(raw: str) -> str:
+            if not raw:
+                return raw
+            p = Path(raw)
+            if not p.is_absolute():
+                # Already relative — leave it alone (user's choice).
+                return raw
+            try:
+                target = p.resolve()
+            except (OSError, ValueError):
+                return raw
+            try:
+                rel = os.path.relpath(target, save_dir)
+            except ValueError:
+                # Different drives on Windows — can't relativize.
+                return raw
+            rel_posix = rel.replace("\\", "/")
+            # Only rewrite when the target is INSIDE save_dir's tree.
+            # If it's outside, relpath produces ``../..`` chains that
+            # are usually worse than just keeping absolute.
+            if rel_posix.startswith("../"):
+                return raw
+            if not rel_posix.startswith("./"):
+                rel_posix = "./" + rel_posix
+            return rel_posix
+
+        self._tool.executable = _relativize(self._tool.executable)
+        if self._tool.working_directory:
+            self._tool.working_directory = _relativize(
+                self._tool.working_directory
+            )
 
     def _ask_save_path(self) -> str | None:
         default_name = (self._tool.name or "tool") + ".scriptree"

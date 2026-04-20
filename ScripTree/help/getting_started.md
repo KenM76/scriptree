@@ -100,6 +100,23 @@ the command line, extras box, configuration bar, etc.
 See [configurations.md](configurations.md) for visibility and hidden
 parameter setup.
 
+## Portable tool folders
+
+You can keep a `.scriptree` file together with its helper scripts,
+executables, and vendor directories in one folder, then move that
+folder anywhere without breaking anything. Relative paths in the
+tool's `executable`, `working_directory`, and `path_prepend` fields
+are resolved **against the .scriptree file's own location** — not
+against wherever you happened to launch ScripTree from.
+
+Writing them is easy: when you Save the tool in the editor, any
+absolute path that sits inside the save folder is automatically
+rewritten to `./subpath` form. Paths that point outside (like
+`/usr/bin/python` or bare names like `python`) stay as-is.
+
+This is the same self-contained folder model that `.scriptreetree`
+files already use for their tool references.
+
 ## Custom menus
 
 Add menus to any tool or tree by adding a `"menus"` array to the JSON:

@@ -84,6 +84,54 @@ class ResolvedCommand:
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(\?[^}]*)?\}")
 
 
+def resolve_tool_path(
+    path: str,
+    tool_file: str | Path | None,
+) -> str:
+    """Resolve a tool-def path against the .scriptree file's directory.
+
+    When ``tool_file`` is known (set by ``load_tool`` / ``save_tool``
+    as ``ToolDef.loaded_from``), relative paths are resolved against
+    that file's parent directory — NOT against the process's CWD.
+    This is what lets a folder containing a .scriptree and its sibling
+    executables be moved around without breaking.
+
+    Behavior:
+
+    - Empty string → returned as-is (no resolution).
+    - Absolute path (``C:\\...``, ``/...``, UNC) → returned as-is.
+    - Relative path + ``tool_file`` is None → returned as-is (legacy
+      behavior, resolved against the process CWD at spawn time).
+    - Relative path + ``tool_file`` is set → if the resolved file
+      exists on disk, return the resolved absolute path. Otherwise
+      return the original string so that bare names like ``python``
+      continue to resolve via PATH.
+
+    The "exists" check is what lets bare names (``python``, ``robocopy``)
+    continue to work: they don't exist as a sibling file of the
+    .scriptree, so we fall back to the original string which Popen
+    will look up via PATH.
+    """
+    if not path:
+        return path
+    p = Path(path)
+    if p.is_absolute():
+        return path
+    # Also treat UNC-ish paths (starting with backslash or forward slash)
+    # as absolute — the Path.is_absolute check handles this on POSIX
+    # but not always on Windows for leading `/`.
+    if path.startswith(("/", "\\")):
+        return path
+    if tool_file is None:
+        return path  # no anchor available; defer to old behavior
+    base = Path(tool_file).resolve().parent
+    resolved = (base / p).resolve(strict=False)
+    if resolved.exists():
+        return str(resolved)
+    # Fall back to the original so bare-name PATH lookup still works.
+    return path
+
+
 def resolve(
     tool: ToolDef,
     values: dict[str, Any],
@@ -95,6 +143,11 @@ def resolve(
     ``ignore_required`` is used by the live preview so that required
     params left blank still produce a best-effort preview instead of
     raising.
+
+    Relative-path fields (``executable``, ``working_directory``) are
+    resolved against ``tool.loaded_from`` when it's set, so the folder
+    containing the .scriptree can be moved freely without updating
+    absolute paths.
     """
     if not tool.executable:
         raise RunnerError("Tool has no executable.")
@@ -110,7 +163,11 @@ def resolve(
         if errors:
             raise RunnerError("\n".join(errors))
 
-    argv: list[str] = [tool.executable]
+    # Resolve executable against the .scriptree directory when the
+    # stored value is relative.
+    exe = resolve_tool_path(tool.executable, tool.loaded_from)
+
+    argv: list[str] = [exe]
     for entry in tool.argument_template:
         if isinstance(entry, list):
             # Token group: resolve each inner token; if ANY comes back
@@ -133,11 +190,14 @@ def resolve(
                 continue
             argv.append(emitted)
 
-    cwd = tool.working_directory
-    if not cwd:
+    # working_directory: resolve against the .scriptree dir if relative.
+    cwd_raw = tool.working_directory
+    if cwd_raw:
+        cwd = resolve_tool_path(cwd_raw, tool.loaded_from)
+    else:
         # Default to the executable's directory so tools that read
         # config files relative to their own location still work.
-        exe_parent = Path(tool.executable).parent
+        exe_parent = Path(exe).parent
         cwd = str(exe_parent) if exe_parent.as_posix() else None
 
     return ResolvedCommand(argv=argv, cwd=cwd)
@@ -315,12 +375,19 @@ def build_env(
 
     # PATH prepend: resolve relative dirs against tool.working_directory
     # (else the exe directory) so paths in the sidecar can be written
-    # as "./bin" or "vendor" and still behave sanely.
+    # as "./bin" or "vendor" and still behave sanely. When the tool's
+    # own working_directory / executable fields are themselves relative,
+    # resolve them first against ``tool.loaded_from`` so the anchor is
+    # stable regardless of where the process was launched from.
     anchor: Path | None = None
     if tool.working_directory:
-        anchor = Path(tool.working_directory)
+        wd_resolved = resolve_tool_path(
+            tool.working_directory, tool.loaded_from
+        )
+        anchor = Path(wd_resolved)
     elif tool.executable:
-        parent = Path(tool.executable).parent
+        exe_resolved = resolve_tool_path(tool.executable, tool.loaded_from)
+        parent = Path(exe_resolved).parent
         if parent.as_posix():
             anchor = parent
 
