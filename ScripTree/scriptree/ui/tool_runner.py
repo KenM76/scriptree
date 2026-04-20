@@ -1269,12 +1269,21 @@ class ToolRunnerView(QWidget):
         executable) for its basename so the preview isn't dominated by
         a long install path. The stored ``_extras`` and the real argv
         used at run time are unaffected — this is purely cosmetic.
+
+        Cross-platform quoting matches ``ResolvedCommand.display()``:
+        double quotes on Windows (``subprocess.list2cmdline`` — native
+        convention, safe to paste into cmd.exe), single quotes on POSIX
+        (``shlex.quote`` — standard).
         """
         if not cmd.argv:
             return ""
         argv = list(cmd.argv)
         if not self._show_full_path:
             argv[0] = Path(argv[0]).name
+        import sys
+        if sys.platform == "win32":
+            import subprocess
+            return subprocess.list2cmdline(argv)
         return " ".join(shlex.quote(a) for a in argv)
 
     def _update_live_cmd(self, *_: Any) -> None:
