@@ -35,5 +35,17 @@ scriptree.ini
 # User tools (local, not shared)
 ScripTreeApps/
 
+# Vendored dependency binaries — populated by lib/update_lib.py,
+# platform-specific and large (PySide6 alone is ~300 MB). Not
+# appropriate for git. Directory structure, .gitkeep files,
+# README.md, requirements.txt, and update_lib.py are tracked;
+# actual installed contents and auto-generated manifests are not.
+# (Manifests carry install timestamps that would churn every
+# refresh — the source of truth for WHAT is requirements.txt.)
+lib/pypi/*
+!lib/pypi/.gitkeep
+lib/_manifests/*
+!lib/_manifests/.gitkeep
+
 # Claude Code
 .claude/

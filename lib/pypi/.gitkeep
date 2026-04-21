@@ -1,0 +1,3 @@
+# Binary wheels are installed here by update_lib.py. The contents are
+# gitignored (they're large and platform-specific). See ../README.md
+# for first-time setup instructions.

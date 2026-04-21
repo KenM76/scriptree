@@ -6,13 +6,19 @@ A universal GUI generator for command-line tools. Define a tool once — by poin
 
 ```bash
 # Prerequisites: Python 3.11+
-pip install PySide6
 
-# Launch
+# Option A: vendor everything into the project (portable, recommended)
+python lib/update_lib.py        # one-time install into lib/pypi/
+python run_scriptree.py
+
+# Option B: use your system Python environment
+pip install PySide6
 python run_scriptree.py
 ```
 
 Or on Windows, double-click `run_scriptree.bat`. If PySide6 is missing, the launcher will offer to install it.
+
+**Option A makes the folder portable** — after `update_lib.py` runs once, you can zip the entire project folder and drop it on any other machine with the same OS/architecture and Python 3.11+. No pip, no network, no admin rights required.
 
 ## Key Features
 
@@ -35,14 +41,34 @@ ScripTree/
 ├── run_scriptree.bat       ← Windows launcher
 ├── run_scriptree.sh        ← Linux / macOS launcher
 ├── permissions/            ← capability permission files
+├── lib/                    ← vendored deps (portable install)
+│   ├── requirements.txt    ← pinned versions
+│   ├── update_lib.py       ← install / refresh / audit
+│   ├── _manifests/         ← provenance notes per package
+│   └── pypi/               ← installed packages (gitignored)
 ├── ScripTree/              ← application code
 │   ├── scriptree/          ← Python package
-│   ├── tests/              ← test suite (537 tests)
+│   ├── tests/              ← test suite (600+ tests)
 │   ├── examples/           ← example tools
 │   ├── help/               ← documentation
 │   └── pyproject.toml
 └── ScripTreeApps/          ← user tools and trees
 ```
+
+## Updating vendored dependencies
+
+When a security advisory drops for one of the pinned packages:
+
+```bash
+# 1. Edit lib/requirements.txt, bump the version.
+# 2. Refresh:
+python lib/update_lib.py --upgrade
+
+# Periodically check for CVEs:
+python lib/update_lib.py --audit
+```
+
+Every installed package gets a provenance note in `lib/_manifests/` showing its version, source, and install timestamp.
 
 ## Documentation
 

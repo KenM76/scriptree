@@ -5,12 +5,22 @@ This is the top-level entry point. It adds the ScripTree package
 directory to ``sys.path`` so ``scriptree`` is importable, then
 delegates to ``scriptree.main.main()``.
 
+**Vendored dependencies:** If ``lib/pypi/`` contains packages (run
+``python lib/update_lib.py`` once to populate it), they are preferred
+over any system-installed versions. This makes the whole folder
+self-contained and portable. Set ``SCRIPTREE_USE_SYSTEM_DEPS=1`` to
+disable this and fall back to the system Python environment.
+
 Environment variables:
 
     SCRIPTREE_PYTHON
         Path to an alternate Python executable (e.g. a PortableApps
         Python). When set, ScripTree offers to install dependencies
         into that Python environment as well as the current one.
+
+    SCRIPTREE_USE_SYSTEM_DEPS
+        When set to ``1``, skip the vendored ``lib/pypi/`` directory
+        and use whatever the system Python provides.
 
 Usage::
 
@@ -159,6 +169,24 @@ def _install_packages(python_exe: str, packages: list[str]) -> bool:
         return False
 
 
+def _inject_vendored_libs():
+    """Prepend ``lib/pypi/`` to ``sys.path`` so vendored deps win.
+
+    When ``SCRIPTREE_USE_SYSTEM_DEPS=1`` is set, this is a no-op and
+    the system Python environment provides everything.
+    """
+    if os.environ.get("SCRIPTREE_USE_SYSTEM_DEPS", "").strip() == "1":
+        return
+    here = Path(__file__).resolve().parent
+    pypi = here / "lib" / "pypi"
+    if pypi.is_dir():
+        # Only inject if there's something in there besides .gitkeep,
+        # so an empty lib/pypi/ doesn't mask the dep-missing check.
+        entries = [p for p in pypi.iterdir() if p.name != ".gitkeep"]
+        if entries:
+            sys.path.insert(0, str(pypi))
+
+
 def _check_dependencies():
     """Check that required packages are installed. If any are missing,
     offer to install them automatically."""
@@ -175,20 +203,37 @@ def _check_dependencies():
     names = ", ".join(missing)
 
     # Ask the user if they want to auto-install.
+    # Prefer the vendored workflow (lib/update_lib.py) if this project
+    # has the lib/ folder — it keeps the install self-contained.
+    here = Path(__file__).resolve().parent
+    have_vendor_workflow = (here / "lib" / "update_lib.py").is_file()
+    vendor_hint = (
+        "\n\nTip: this project has a vendored-deps workflow. You can\n"
+        "also run:\n\n    python lib/update_lib.py\n\n"
+        "to install into lib/pypi/ instead of your system Python."
+        if have_vendor_workflow else ""
+    )
+
     want_install = _yesno_box(
         f"ScripTree is missing required dependencies:\n\n"
         f"    {names}\n\n"
         f"Would you like ScripTree to download and install them now?\n\n"
-        f"(Requires an internet connection. This may take a minute.)",
+        f"(Requires an internet connection. This may take a minute.)"
+        + vendor_hint,
         "ScripTree \u2014 Missing Dependencies",
     )
 
     if not want_install:
-        print(
+        msg = (
             f"ScripTree cannot run without: {names}\n"
-            f"To install manually, run:  pip install {' '.join(missing)}",
-            file=sys.stderr,
+            f"To install manually, run:  pip install {' '.join(missing)}"
         )
+        if have_vendor_workflow:
+            msg += (
+                "\nOr use the vendored workflow:  "
+                "python lib/update_lib.py"
+            )
+        print(msg, file=sys.stderr)
         sys.exit(1)
 
     # Pick which Python to install into.
@@ -237,6 +282,7 @@ def _check_dependencies():
 # ── Launch ─────────────────────────────────────────────────────────────
 
 _check_python_version()
+_inject_vendored_libs()
 _check_dependencies()
 
 # Add the ScripTree subdirectory (which contains the ``scriptree`` package)

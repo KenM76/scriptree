@@ -1,0 +1,17 @@
+# ScripTree vendored dependencies.
+#
+# Edit this file to change the pinned version, then run:
+#   python lib/update_lib.py --upgrade
+#
+# Rules:
+# - ALWAYS pin to an exact version (==X.Y.Z). This is vendoring,
+#   not a dev environment; reproducibility matters more than freshness.
+# - When bumping a version, check the release notes for breaking
+#   changes and update the provenance note in lib/_manifests/.
+# - Run `python lib/update_lib.py --audit` regularly to see if any
+#   pinned versions have disclosed CVEs.
+
+# --- Core UI framework ---
+# PySide6 — Qt bindings for Python. Our only required runtime dep.
+# Includes shiboken6 as a transitive requirement.
+PySide6==6.6.3.1
