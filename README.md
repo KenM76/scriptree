@@ -7,8 +7,8 @@ A universal GUI generator for command-line tools. Define a tool once — by poin
 ```bash
 # Prerequisites: Python 3.11+
 
-# Option A: vendor everything into the project (portable, recommended)
-python lib/update_lib.py        # one-time install into lib/pypi/
+# Option A: vendor into the project, trimmed to the ~65 MB minimum (recommended)
+python lib/update_lib.py --trim
 python run_scriptree.py
 
 # Option B: use your system Python environment
@@ -18,7 +18,7 @@ python run_scriptree.py
 
 Or on Windows, double-click `run_scriptree.bat`. If PySide6 is missing, the launcher will offer to install it.
 
-**Option A makes the folder portable** — after `update_lib.py` runs once, you can zip the entire project folder and drop it on any other machine with the same OS/architecture and Python 3.11+. No pip, no network, no admin rights required.
+**Option A makes the folder portable** — after `update_lib.py --trim` runs once, you can zip the entire project folder and drop it on any other machine with the same OS/architecture and Python 3.11+. No pip, no network, no admin rights required. The `--trim` flag strips unused Qt modules (WebEngine, QML, Quick/3D, Multimedia, PDF, Charts, translations, dev tools) — ScripTree only uses `QtCore`/`QtGui`/`QtWidgets`, so you save ~400 MB.
 
 ## Key Features
 
@@ -61,14 +61,14 @@ When a security advisory drops for one of the pinned packages:
 
 ```bash
 # 1. Edit lib/requirements.txt, bump the version.
-# 2. Refresh:
-python lib/update_lib.py --upgrade
+# 2. Refresh + re-trim in one go:
+python lib/update_lib.py --upgrade --trim
 
 # Periodically check for CVEs:
 python lib/update_lib.py --audit
 ```
 
-Every installed package gets a provenance note in `lib/_manifests/` showing its version, source, and install timestamp.
+Every installed package gets a provenance note in `lib/_manifests/` showing its version, source, and install timestamp. `--trim` also writes `lib/_manifests/trim_log.md` listing exactly which files were removed and how much space was freed.
 
 ## Documentation
 

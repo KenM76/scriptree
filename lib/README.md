@@ -33,26 +33,39 @@ are not.
 On a freshly cloned repo (or any machine where `lib/pypi/` is empty):
 
 ```bash
+# Install + trim to the ~64 MB minimum footprint (recommended).
+python lib/update_lib.py --trim
+
+# OR: install the full ~460 MB PySide6 wheel (if you need modules
+# beyond QtCore/QtGui/QtWidgets — e.g. you're extending ScripTree
+# with a plugin that uses QtNetwork, QtSql, QtWebEngine, etc.).
 python lib/update_lib.py
 ```
 
-This runs `pip install --target lib/pypi/ -r lib/requirements.txt`
-under the hood, then writes a provenance note for each package to
-`lib/_manifests/`.
+`--trim` removes Qt modules ScripTree doesn't use: WebEngine (137 MB
+alone), QML runtime, Quick/3D, Multimedia, PDF, Charts, translations,
+developer tools, and so on. ScripTree itself only imports
+`QtCore`, `QtGui`, and `QtWidgets` — everything else is fair game.
 
-After this runs, `python run_scriptree.py` will use the vendored libs
-automatically. Zip the folder, move it, ship it — it will work as long
-as the target machine matches the OS/architecture that ran
+Expected size after `--trim` on Windows: ~60–70 MB.
+
+After either step, `python run_scriptree.py` will use the vendored
+libs automatically. Zip the folder, move it, ship it — it will work
+as long as the target machine matches the OS/architecture that ran
 `update_lib.py`.
 
 ## Refreshing to a newer version (security updates)
 
 1. Edit `lib/requirements.txt` — bump the pinned version.
-2. Run `python lib/update_lib.py --upgrade`.
+2. Run `python lib/update_lib.py --upgrade --trim`.
 
 `--upgrade` wipes `lib/pypi/` first so old binaries aren't left lying
-around after a downgrade. The default (no flag) is additive: it only
-installs what's missing.
+around after a downgrade. `--trim` then reapplies the minimal-footprint
+filter. The default (no flag) is additive: it only installs what's
+missing.
+
+You can also run `python lib/update_lib.py --trim` on its own to
+re-trim an existing install without reinstalling.
 
 ## Keeping an eye on vulnerable packages
 

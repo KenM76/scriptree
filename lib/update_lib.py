@@ -3,18 +3,30 @@
 
 Usage:
 
-    python lib/update_lib.py              # install anything missing
-    python lib/update_lib.py --upgrade    # wipe lib/pypi/ first, reinstall
-    python lib/update_lib.py --audit      # check pinned versions for CVEs
-    python lib/update_lib.py --dry-run    # show what would happen
+    python lib/update_lib.py                  # install anything missing
+    python lib/update_lib.py --upgrade        # wipe lib/pypi/, reinstall
+    python lib/update_lib.py --audit          # check pinned versions for CVEs
+    python lib/update_lib.py --trim           # remove unused Qt modules
+    python lib/update_lib.py --upgrade --trim # full refresh + trim in one go
+    python lib/update_lib.py --dry-run        # preview without changes
 
-Under the hood this is just a thin wrapper around::
+Trim strategy
+-------------
 
-    pip install --target lib/pypi/ -r lib/requirements.txt
+PySide6 ships the entire Qt framework — WebEngine, QML, Quick/3D,
+Multimedia, PDF, Charts, Designer, translations for dozens of
+languages, developer tooling, and more. ScripTree only imports
+``QtCore``, ``QtGui``, and ``QtWidgets``. ``--trim`` deletes the
+unused pieces, shrinking ``lib/pypi/`` by ~3/4 without affecting
+functionality.
 
-plus provenance-note generation so every installed top-level package
-ends up with a ``lib/_manifests/<package>.md`` file describing where it
-came from, when, and exactly which version is on disk.
+Trim is opt-in, not default. Power users might want the full
+install (e.g. if they're extending ScripTree with a plugin that
+uses QtNetwork, QtSql, etc. — add the module to TRIM_KEEP_EXTRA
+below or skip ``--trim``).
+
+Every trim writes ``lib/_manifests/trim_log.md`` recording exactly
+what was removed and how much space was freed.
 
 See ``lib/README.md`` for the rationale and full workflow.
 """
@@ -98,10 +110,372 @@ def _refresh_manifests() -> None:
     installed = _installed_packages()
     if MANIFEST_DIR.is_dir():
         for existing in MANIFEST_DIR.glob("*.md"):
+            if existing.stem == "trim_log":
+                continue  # don't touch the trim log
             if existing.stem not in installed:
                 existing.unlink()
     for name, version in installed.items():
         _write_manifest(name, version, source="PyPI (via pip install)")
+
+
+# ── Trim: remove unused Qt modules ────────────────────────────────────
+
+# Qt submodules ScripTree imports. Everything else is fair game for
+# trimming. Extend this list if you add imports like QtNetwork.
+#
+# Names match the Qt module DLL/PYD root. For example, adding
+# "QtNetwork" here would keep ``Qt6Network.dll`` and ``QtNetwork.pyd``.
+TRIM_KEEP_MODULES = {
+    "QtCore",
+    "QtGui",
+    "QtWidgets",
+}
+
+# Extra files/directories always kept regardless of trim. These are
+# Qt's runtime plumbing (C runtime, platform plugins, etc.) that Qt
+# won't start without, even if we only use the three core modules.
+TRIM_ALWAYS_KEEP = {
+    # Core C++ runtime libs shipped with Qt6.
+    "vcruntime*.dll",
+    "msvcp*.dll",
+    "concrt*.dll",
+    # The ICU libs (Unicode) are dependencies of Qt6Core.
+    "icu*.dll",
+    # d3dcompiler is a dependency of QtGui on Windows for software
+    # rendering paths. Keep it to be safe.
+    "d3dcompiler_*.dll",
+    # Package metadata — keep the dist-info dirs so pip knows what's
+    # installed and tooling like pip-audit still works.
+    "*.dist-info",
+    # Essential Python-level files.
+    "__init__.py",
+    "py.typed",
+    "*.pyi",
+    # Config and runtime support files.
+    "qt.conf",
+    # shiboken6 (Qt-Python binding glue) is mandatory.
+    "shiboken6",
+    "shiboken6.abi3.so",
+    "*Shiboken*.dll",
+    "*Shiboken*.pyd",
+}
+
+# Top-level items under PySide6/ to remove entirely when trimming.
+# Paths are relative to lib/pypi/PySide6/.
+TRIM_REMOVE_DIRS = {
+    "translations",      # ~43 MB — we don't localize.
+    "qml",               # ~19 MB — QML templates (we use Widgets).
+    "resources",         # ~18 MB — WebEngine resources, mostly.
+    "metatypes",         # ~11 MB — QML type metadata.
+    "doc",               # any included docs.
+    "examples",          # Qt examples bundled with some wheels.
+    "include",           # Qt C++ headers.
+    "mkspecs",           # qmake build configs.
+    "typesystems",       # shiboken build-time data.
+    "glue",              # shiboken build-time data.
+    "support",           # Qt Creator integration files.
+    "Assistant.app",     # Qt Assistant (doc viewer).
+    "Designer.app",
+    "Linguist.app",
+}
+
+# Globs removed anywhere in PySide6/. Executables, dev tools, and
+# modules we don't import.
+TRIM_REMOVE_GLOBS = {
+    # Qt developer command-line tools (not needed at runtime).
+    "lupdate*",
+    "lrelease*",
+    "linguist*",
+    "designer*",
+    "assistant*",
+    "qmllint*",
+    "qmlformat*",
+    "qmlls*",
+    "qmlsc*",
+    "qmlcachegen*",
+    "qmltestrunner*",
+    "qmlplugindump*",
+    "qmlimportscanner*",
+    "qmltyperegistrar*",
+    "qdbus*",
+    "qtdiag*",
+    "qtpaths*",
+    "qmake*",
+    "uic*",
+    "rcc*",
+    "moc*",
+    "androiddeployqt*",
+    "pyside6-*",
+    "shiboken6.exe",
+    "shiboken6-*",
+    # Translation binary files outside translations/ (unlikely but
+    # cheap to match).
+    "*.qm",
+    # Giant modules we don't use.
+    "Qt6WebEngine*.dll",
+    "Qt6WebEngine*.dylib",
+    "libQt6WebEngine*.so*",
+    "Qt6Quick*.dll",
+    "libQt6Quick*.so*",
+    "Qt6Qml*.dll",
+    "libQt6Qml*.so*",
+    "Qt6Pdf*.dll",
+    "libQt6Pdf*.so*",
+    "Qt6Charts*.dll",
+    "libQt6Charts*.so*",
+    "Qt6DataVisualization*.dll",
+    "libQt6DataVisualization*.so*",
+    "Qt63D*.dll",
+    "libQt63D*.so*",
+    "Qt6Designer*.dll",
+    "libQt6Designer*.so*",
+    "Qt6Multimedia*.dll",
+    "libQt6Multimedia*.so*",
+    "Qt6Spatial*.dll",
+    "libQt6Spatial*.so*",
+    "Qt6ShaderTools*.dll",
+    "libQt6ShaderTools*.so*",
+    "Qt6Sensors*.dll",
+    "libQt6Sensors*.so*",
+    "Qt6Bluetooth*.dll",
+    "libQt6Bluetooth*.so*",
+    "Qt6Nfc*.dll",
+    "libQt6Nfc*.so*",
+    "Qt6SerialPort*.dll",
+    "libQt6SerialPort*.so*",
+    "Qt6Positioning*.dll",
+    "libQt6Positioning*.so*",
+    "Qt6TextToSpeech*.dll",
+    "libQt6TextToSpeech*.so*",
+    "Qt6WebSockets*.dll",
+    "libQt6WebSockets*.so*",
+    "Qt6WebChannel*.dll",
+    "libQt6WebChannel*.so*",
+    "Qt6HttpServer*.dll",
+    "libQt6HttpServer*.so*",
+    "Qt6OpenGL*.dll",
+    "libQt6OpenGL*.so*",
+    "Qt6Test*.dll",
+    "libQt6Test*.so*",
+    "Qt6Scxml*.dll",
+    "libQt6Scxml*.so*",
+    "Qt6RemoteObjects*.dll",
+    "libQt6RemoteObjects*.so*",
+    "Qt6SpatialAudio*.dll",
+    "Qt6StateMachine*.dll",
+    "Qt6Concurrent*.dll",
+    "libQt6Concurrent*.so*",
+    "Qt6Help*.dll",
+    "Qt6UiTools*.dll",
+    "libQt6UiTools*.so*",
+    "Qt6Sql*.dll",
+    "libQt6Sql*.so*",
+    "Qt6Svg*.dll",
+    "libQt6Svg*.so*",
+    "Qt6Xml*.dll",
+    "libQt6Xml*.so*",
+    "Qt6Network*.dll",
+    "libQt6Network*.so*",
+    "Qt6VirtualKeyboard*.dll",
+    "libQt6VirtualKeyboard*.so*",
+    # FFmpeg (audio/video codecs used by Qt Multimedia).
+    "avcodec-*.dll",
+    "avformat-*.dll",
+    "avutil-*.dll",
+    "swresample-*.dll",
+    "swscale-*.dll",
+    # OpenGL software renderer (we use native).
+    "opengl32sw.dll",
+    # D3D shader compiler variants we don't need.
+}
+
+# Plugin subdirectories. KEEP minimal set; remove everything else.
+# Qt WILL refuse to start a GUI app on Windows without platforms/
+# and typically needs styles/ for QStyleFactory. Others are optional.
+TRIM_PLUGINS_KEEP = {
+    "platforms",      # mandatory (qwindows.dll / libqxcb.so / libqcocoa.dylib)
+    "styles",         # QStyleFactory — we use windowsvista / windows11 / fusion
+    "imageformats",   # allow PNG/JPG/ICO icons (tiny)
+    "iconengines",    # SVG icon engine (tiny, commonly used)
+    "platforminputcontexts",  # IME support — small, safe to keep
+}
+
+
+def _matches(name: str, patterns: set[str]) -> bool:
+    """Return True if ``name`` matches any glob in ``patterns``."""
+    import fnmatch
+    return any(fnmatch.fnmatch(name, pat) for pat in patterns)
+
+
+def _iter_module_related(pypi_dir: Path, keep_modules: set[str]):
+    """Yield paths to all Qt module files (QtXxx.pyd, Qt6Xxx.dll, etc.)
+    that we do NOT want to keep, based on ``keep_modules``.
+
+    We preserve files where the Qt module name appears in ``keep_modules``;
+    any other ``Qt6<Name>.dll`` or ``Qt<Name>.pyd`` gets flagged.
+    """
+    import re
+    pyside = pypi_dir / "PySide6"
+    if not pyside.is_dir():
+        return
+    # Match QtXxx.pyd / QtXxx.abi3.so / Qt6Xxx.dll / libQt6Xxx.so.*
+    pyd_re = re.compile(r"^Qt([A-Za-z0-9]+)\.(pyd|abi3\.so|so)$", re.IGNORECASE)
+    dll_re = re.compile(r"^(?:lib)?Qt6([A-Za-z0-9]+)(?:\.dll|\.dylib|\.so(?:\.\d+)*)$", re.IGNORECASE)
+    for entry in pyside.iterdir():
+        if not entry.is_file():
+            continue
+        m = pyd_re.match(entry.name) or dll_re.match(entry.name)
+        if m is None:
+            continue
+        module_name = f"Qt{m.group(1)}"
+        if module_name in keep_modules:
+            continue
+        # Already handled by TRIM_REMOVE_GLOBS for some big modules —
+        # but this catches everything including the small ones (e.g.
+        # Qt6Xml.dll, Qt6Svg.dll) so we end up with a clean minimal set.
+        yield entry
+
+
+def _dir_size(path: Path) -> int:
+    """Return total size in bytes of a path (file or directory)."""
+    if not path.exists():
+        return 0
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file():
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def cmd_trim(args: argparse.Namespace) -> int:
+    """Remove unused Qt modules from lib/pypi/PySide6/.
+
+    Runs idempotently — re-running after a fresh install is safe.
+    Writes a log to lib/_manifests/trim_log.md.
+    """
+    pyside = PYPI_DIR / "PySide6"
+    if not pyside.is_dir():
+        print(
+            f"No PySide6 vendored at {pyside}. Run "
+            "`python lib/update_lib.py` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    to_remove: list[Path] = []
+
+    # Top-level directories to prune.
+    for dname in TRIM_REMOVE_DIRS:
+        p = pyside / dname
+        if p.exists():
+            to_remove.append(p)
+
+    # Glob-matched files anywhere under PySide6/.
+    for entry in pyside.iterdir():
+        if entry.is_file() and _matches(entry.name, TRIM_REMOVE_GLOBS):
+            if not _matches(entry.name, TRIM_ALWAYS_KEEP):
+                to_remove.append(entry)
+
+    # Qt module PYD/DLL files not in TRIM_KEEP_MODULES.
+    for p in _iter_module_related(PYPI_DIR, TRIM_KEEP_MODULES):
+        if not _matches(p.name, TRIM_ALWAYS_KEEP):
+            to_remove.append(p)
+
+    # Plugin subdirs outside the keep list.
+    plugins_dir = pyside / "plugins"
+    if plugins_dir.is_dir():
+        for plugin in plugins_dir.iterdir():
+            if plugin.is_dir() and plugin.name not in TRIM_PLUGINS_KEEP:
+                to_remove.append(plugin)
+
+    # De-duplicate and sort by size so the log is informative.
+    seen: set[Path] = set()
+    unique = []
+    for p in to_remove:
+        if p not in seen and p.exists():
+            seen.add(p)
+            unique.append(p)
+    sized = [(p, _dir_size(p)) for p in unique]
+    sized.sort(key=lambda t: -t[1])
+
+    total_before = _dir_size(pyside)
+    total_freed = sum(s for _, s in sized)
+
+    if args.dry_run:
+        print(f"\n-- dry run: would remove {len(sized)} item(s) --\n")
+        for p, size in sized:
+            print(f"  {_human_size(size):>10s}  {p.relative_to(pyside)}")
+        print(f"\n  total to free: {_human_size(total_freed)}")
+        print(f"  PySide6 current size: {_human_size(total_before)}")
+        print(
+            f"  PySide6 after trim:   "
+            f"~{_human_size(total_before - total_freed)}"
+        )
+        return 0
+
+    print(f"\n-- trimming {len(sized)} item(s) from PySide6 --\n")
+    removed_log: list[str] = []
+    for p, size in sized:
+        rel = p.relative_to(pyside)
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+        except OSError as e:
+            print(f"  SKIP (error): {rel} — {e}", file=sys.stderr)
+            continue
+        removed_log.append(f"| {rel} | {_human_size(size)} |")
+        print(f"  removed {_human_size(size):>10s}  {rel}")
+
+    total_after = _dir_size(pyside)
+    freed = total_before - total_after
+    print(
+        f"\nBefore: {_human_size(total_before)}  "
+        f"After: {_human_size(total_after)}  "
+        f"Freed: {_human_size(freed)}"
+    )
+
+    # Write trim log.
+    MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = MANIFEST_DIR / "trim_log.md"
+    now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_content = (
+        f"# Trim log\n\n"
+        f"- **Trimmed on:** {now}\n"
+        f"- **Platform:** {sys.platform}\n"
+        f"- **PySide6 size before:** {_human_size(total_before)}\n"
+        f"- **PySide6 size after:** {_human_size(total_after)}\n"
+        f"- **Space freed:** {_human_size(freed)}\n\n"
+        f"## Kept Qt modules\n\n"
+        + "".join(f"- `{m}`\n" for m in sorted(TRIM_KEEP_MODULES))
+        + "\n"
+        f"## Kept Qt plugin directories\n\n"
+        + "".join(f"- `{p}`\n" for p in sorted(TRIM_PLUGINS_KEEP))
+        + "\n"
+        f"## Removed items\n\n"
+        f"| Path | Size |\n|---|---|\n"
+        + "\n".join(removed_log) + "\n"
+    )
+    log_path.write_text(log_content, encoding="utf-8")
+    print(f"\nTrim log: {log_path}")
+    return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -221,6 +595,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--trim", action="store_true",
+        help=(
+            "After install (or on its own) remove Qt modules ScripTree "
+            "doesn't use — WebEngine, QML, Quick/3D, Multimedia, PDF, "
+            "Charts, translations, dev tools, etc. Typically saves "
+            "~350 MB. Writes a log to lib/_manifests/trim_log.md."
+        ),
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print what would happen without actually running pip.",
     )
@@ -228,7 +611,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.audit:
         return cmd_audit(args)
-    return cmd_install(args)
+
+    # Decide whether to install.
+    # - Default (no flags): install missing packages.
+    # - --upgrade: always reinstall.
+    # - --trim alone: only trim if there's already an install; otherwise
+    #   we need to install first.
+    has_install = PYPI_DIR.is_dir() and any(
+        p.name != ".gitkeep" for p in PYPI_DIR.iterdir()
+    )
+    do_install = args.upgrade or not has_install or not args.trim
+
+    if do_install:
+        rc = cmd_install(args)
+        if rc != 0:
+            return rc
+
+    if args.trim:
+        return cmd_trim(args)
+    return 0
 
 
 if __name__ == "__main__":
