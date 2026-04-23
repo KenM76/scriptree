@@ -14,4 +14,9 @@
 # --- Core UI framework ---
 # PySide6 — Qt bindings for Python. Our only required runtime dep.
 # Includes shiboken6 as a transitive requirement.
-PySide6==6.6.3.1
+PySide6==6.10.2
+
+# PySide6-QtAds — advanced docking system (IDE-grade dockable panels).
+# Imported as `PySide6QtAds`. Built on top of PySide6; version must be
+# compatible with the pinned PySide6 (QtAds 4.5.x pins PySide6 6.10.x).
+PySide6-QtAds==4.5.0.2
