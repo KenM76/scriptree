@@ -69,7 +69,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("ScripTree")
+
+    # Brand the app: custom icon for title bar / taskbar / Dock, and
+    # on Windows pin our own AppUserModelID so the taskbar doesn't
+    # group us under generic "Python". Call this before any windows
+    # are created. No-op if the icon resources aren't present.
+    from .core.branding import apply_branding
+    apply_branding(app)
+
     # Use the native Windows style where available. On Linux/macOS this
     # falls through to the platform default.
     for style in ("windowsvista", "windows11", "fusion"):
