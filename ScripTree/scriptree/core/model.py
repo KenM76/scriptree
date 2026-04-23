@@ -328,6 +328,12 @@ class TreeNode:
     The optional ``configuration`` field names the configuration to
     activate when this tool is opened in standalone mode.  When
     ``None`` the tool uses its default (active) configuration.
+
+    The optional ``display_name`` field overrides the label shown in
+    the tree view and the standalone tab bar.  When ``None`` the
+    tool's own ``ToolDef.name`` is used (leaves) or ``TreeNode.name``
+    is used (folders).  Useful when a tool's internal name is
+    verbose/technical and you want a friendlier label in the UI.
     """
 
     type: str  # "folder" or "leaf"
@@ -335,6 +341,7 @@ class TreeNode:
     path: str | None = None
     children: list[TreeNode] = field(default_factory=list)
     configuration: str | None = None
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.type not in ("folder", "leaf"):

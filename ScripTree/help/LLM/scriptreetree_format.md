@@ -1,4 +1,4 @@
-# `.scriptreetree` file format (schema v1)
+# `.scriptreetree` file format (schema v2)
 
 A tree-of-tools launcher. Leaves reference `.scriptree` files; interior
 nodes are named folders.
@@ -7,7 +7,7 @@ nodes are named folders.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "string, required",
   "description": "string, optional",
   "nodes": [/* list[Node] */],
@@ -19,14 +19,39 @@ Each `Node` is either a folder or a leaf:
 
 ```json
 { "type": "folder", "name": "string, required",
+  "display_name": "string, optional — override for the folder label",
   "children": [/* list[Node], may be empty */] }
 ```
 
 ```json
 { "type": "leaf", "path": "string, required",
-  "display_name": "string, optional — falls back to the tool's name",
+  "display_name": "string, optional — override for the tree label and standalone tab",
   "configuration": "string, optional — config name for standalone mode" }
 ```
+
+## `display_name` — precedence
+
+For **leaves**, the label shown in the tree view and the standalone
+tab bar is chosen in this order:
+
+1. `display_name` from the tree node (if non-empty) — pretty label
+   controlled by the tree author
+2. `ToolDef.name` from the referenced `.scriptree` file — the tool's
+   own name (often technical, e.g. `SwDxfExport dxf_export`)
+3. The referenced file's stem (fallback if the tool can't be loaded)
+
+For **folders**, `display_name` overrides the folder's `name` field
+in the tree view. If absent, `name` is used as-is.
+
+For **subtree leaves** (paths ending in `.scriptreetree`), the label
+in the IDE tree is:
+
+1. `display_name` if set
+2. The referenced tree's own `name`
+3. The filename stem
+
+Standalone mode skips subtree leaves entirely — flatten the referenced
+tree's leaves into the parent, or open each nested tree separately.
 
 ## Path resolution
 

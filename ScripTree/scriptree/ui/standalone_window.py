@@ -230,7 +230,12 @@ class StandaloneWindow(QMainWindow):
                 splitter.setStretchFactor(1, 2)
             tab_layout.addWidget(splitter)
 
-            tabs.addTab(tab, tool.name)
+            # Prefer the tree node's display_name override; fall back to
+            # the tool's own name. This lets a tree author give a tool
+            # a friendlier label in the tab bar without renaming the
+            # underlying .scriptree.
+            tab_label = node.display_name or tool.name
+            tabs.addTab(tab, tab_label)
             runners.append(runner)
             runner.visibilityChanged.connect(win._on_visibility_changed)
 

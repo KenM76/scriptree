@@ -355,12 +355,17 @@ def _node_to_dict(n: TreeNode) -> dict[str, Any]:
         d: dict[str, Any] = {"type": "leaf", "path": n.path}
         if n.configuration is not None:
             d["configuration"] = n.configuration
+        if n.display_name is not None:
+            d["display_name"] = n.display_name
         return d
-    return {
+    folder: dict[str, Any] = {
         "type": "folder",
         "name": n.name,
         "children": [_node_to_dict(c) for c in n.children],
     }
+    if n.display_name is not None:
+        folder["display_name"] = n.display_name
+    return folder
 
 
 def _node_from_dict(d: dict[str, Any]) -> TreeNode:
@@ -369,11 +374,13 @@ def _node_from_dict(d: dict[str, Any]) -> TreeNode:
             type="leaf",
             path=d["path"],
             configuration=d.get("configuration"),
+            display_name=d.get("display_name"),
         )
     return TreeNode(
         type="folder",
         name=d.get("name", ""),
         children=[_node_from_dict(c) for c in d.get("children", [])],
+        display_name=d.get("display_name"),
     )
 
 

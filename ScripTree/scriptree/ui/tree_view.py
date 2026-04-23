@@ -72,6 +72,14 @@ from ..core.model import ToolDef, TreeDef, TreeNode
 # A non-empty value here is the defining characteristic of a leaf;
 # folders have empty data at this role.
 _ROLE_PATH = Qt.ItemDataRole.UserRole
+#: Optional per-leaf display_name override from the .scriptreetree.
+#: If set, takes precedence over the tool's own name in the IDE tree
+#: label and the standalone tab label. Stored as a string or None.
+_ROLE_DISPLAY_NAME = Qt.ItemDataRole.UserRole + 2
+#: Optional per-leaf configuration name from the .scriptreetree.
+#: Preserved across save so users don't lose their tree-level config
+#: overrides when they reorder the tree in the IDE.
+_ROLE_CONFIGURATION = Qt.ItemDataRole.UserRole + 3
 
 # Qt role for .scriptreetree subtree references. When set, the item
 # is a subtree node: it looks like a folder but its children are
@@ -400,14 +408,24 @@ class TreeLauncherView(QWidget):
             full_path = self._resolve_path(node.path)
             abs_str = str(full_path)
             if abs_str.lower().endswith(".scriptreetree"):
-                item = self._new_subtree_item(abs_str)
+                item = self._new_subtree_item(
+                    abs_str, display_name=node.display_name
+                )
                 if parent is None:
                     self._tree_widget.addTopLevelItem(item)
                 else:
                     parent.addChild(item)
                 self._expand_subtree(item)
             else:
-                item = self._new_leaf_item(abs_str)
+                item = self._new_leaf_item(
+                    abs_str, display_name=node.display_name
+                )
+                # Preserve the tree-level configuration override (if any)
+                # so save-after-edit doesn't lose it.
+                if node.configuration:
+                    item.setData(
+                        0, _ROLE_CONFIGURATION, node.configuration
+                    )
                 if parent is None:
                     self._tree_widget.addTopLevelItem(item)
                 else:
@@ -426,17 +444,32 @@ class TreeLauncherView(QWidget):
         # them from leaves.
         return item
 
-    def _new_leaf_item(self, abs_path: str) -> QTreeWidgetItem:
-        stem = Path(abs_path).stem
-        item = QTreeWidgetItem([stem])
+    def _new_leaf_item(
+        self, abs_path: str, display_name: str | None = None
+    ) -> QTreeWidgetItem:
+        # Precedence for the visible label:
+        #   1. explicit display_name from the .scriptreetree node (pretty)
+        #   2. the tool's own name (if the file loads cheaply)
+        #   3. the filename stem (cheap fallback; always works)
+        label = display_name
+        if not label:
+            try:
+                tool = load_tool(abs_path)
+                label = tool.name or Path(abs_path).stem
+            except Exception:  # noqa: BLE001
+                label = Path(abs_path).stem
+        item = QTreeWidgetItem([label])
         item.setData(0, _ROLE_PATH, abs_path)
+        if display_name:
+            item.setData(0, _ROLE_DISPLAY_NAME, display_name)
         item.setToolTip(0, abs_path)
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
             | Qt.ItemFlag.ItemIsSelectable
             | Qt.ItemFlag.ItemIsDragEnabled
             # NOT ItemIsDropEnabled → can't drop onto a leaf
-            # NOT ItemIsEditable → leaf labels are derived from filename
+            # NOT ItemIsEditable → leaf labels come from node.display_name
+            #   or the tool's own name (edit via the .scriptree or tree JSON)
         )
         # If this path is currently running, re-apply the indicator
         # so tree reloads / drag-drop rebuilds don't clear it.
@@ -448,17 +481,30 @@ class TreeLauncherView(QWidget):
             self._apply_running_decoration(item, True)
         return item
 
-    def _new_subtree_item(self, abs_path: str) -> QTreeWidgetItem:
+    def _new_subtree_item(
+        self, abs_path: str, display_name: str | None = None
+    ) -> QTreeWidgetItem:
         """Create a QTreeWidgetItem for a .scriptreetree reference.
 
         Subtree items look like folders (expandable, with children
         loaded from the referenced file) but are **not** editable or
         drop-enabled — their structure comes from the referenced file.
         """
-        stem = Path(abs_path).stem
-        item = QTreeWidgetItem([f"\U0001F4C2 {stem}"])  # 📂
+        # Prefer the tree node's display_name override. Otherwise try
+        # the referenced tree's own name (e.g. "SolidWorks toolkit"),
+        # falling back to the filename stem.
+        label = display_name
+        if not label:
+            try:
+                sub = load_tree(abs_path)
+                label = sub.name or Path(abs_path).stem
+            except Exception:  # noqa: BLE001
+                label = Path(abs_path).stem
+        item = QTreeWidgetItem([f"\U0001F4C2 {label}"])  # 📂
         item.setData(0, _ROLE_PATH, abs_path)
         item.setData(0, _ROLE_SUBTREE, abs_path)
+        if display_name:
+            item.setData(0, _ROLE_DISPLAY_NAME, display_name)
         item.setToolTip(0, f"Subtree: {abs_path}")
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
@@ -889,7 +935,13 @@ class TreeLauncherView(QWidget):
                 f"Could not load the replacement file:\n{e}",
             )
             return
-        item.setText(0, tool.name or Path(resolved).stem)
+        # Respect an existing display_name override if one was set on
+        # this leaf in the tree JSON — the user replaced the file, but
+        # the pretty label the tree author gave it still applies.
+        existing_display = item.data(0, _ROLE_DISPLAY_NAME)
+        item.setText(
+            0, existing_display or tool.name or Path(resolved).stem
+        )
         self._mark_dirty()
         self._save_tree()  # quiet; only writes if possible
         self.toolSelected.emit(tool, resolved)
@@ -914,12 +966,22 @@ class TreeLauncherView(QWidget):
             abs_path = item.data(0, _ROLE_SUBTREE)
             if not abs_path:
                 return None
-            return TreeNode(type="leaf", path=self._maybe_relative(abs_path))
+            return TreeNode(
+                type="leaf",
+                path=self._maybe_relative(abs_path),
+                display_name=item.data(0, _ROLE_DISPLAY_NAME) or None,
+                configuration=item.data(0, _ROLE_CONFIGURATION) or None,
+            )
         if _is_leaf(item):
             abs_path = item.data(0, _ROLE_PATH)
             if not abs_path:
                 return None
-            return TreeNode(type="leaf", path=self._maybe_relative(abs_path))
+            return TreeNode(
+                type="leaf",
+                path=self._maybe_relative(abs_path),
+                display_name=item.data(0, _ROLE_DISPLAY_NAME) or None,
+                configuration=item.data(0, _ROLE_CONFIGURATION) or None,
+            )
         children: list[TreeNode] = []
         for i in range(item.childCount()):
             child = self._item_to_node(item.child(i))
