@@ -794,22 +794,21 @@ class ToolRunnerView(QWidget):
         # Extras box — space-separated argv tokens the user has added
         # beyond what the GUI form produces. Populated either by
         # reconciling edits to the command preview or typed directly.
+        # Help text is a tooltip rather than an inline label so the
+        # box can start at one-line height.
         self._extras_box = extras_box = QGroupBox("Extra arguments (space-separated)")
-        extras_layout = QVBoxLayout(extras_box)
-        extras_layout.setContentsMargins(6, 4, 6, 6)
-        extras_help = QLabel(
-            "<i>Tokens here are appended to the command as-is. "
+        extras_box.setToolTip(
+            "Tokens here are appended to the command as-is. "
             "Anything you type in the preview below that doesn't match "
-            "a form parameter lands here automatically.</i>"
+            "a form parameter lands here automatically."
         )
-        extras_help.setWordWrap(True)
-        extras_layout.addWidget(extras_help)
+        extras_layout = QVBoxLayout(extras_box)
+        extras_layout.setContentsMargins(4, 2, 4, 4)
+        extras_layout.setSpacing(0)
         self._extras_edit = QPlainTextEdit()
         # Start visually as a single line; user can drag the splitter
-        # handle above to grow it. Minimum covers one text line + a
-        # bit of vertical padding so the placeholder/content isn't
-        # clipped. No maximumHeight — splitter drag must be able to
-        # grow this freely.
+        # handle above to grow it. No maximumHeight — splitter drag
+        # must be able to grow this freely.
         mono = QFont()
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFamily("Consolas")
@@ -822,11 +821,14 @@ class ToolRunnerView(QWidget):
         splitter.addWidget(extras_box)
 
         # Command preview — editable QPlainTextEdit with "Full path"
-        # and "Word wrap" checkboxes.
+        # and "Word wrap" checkboxes. Tight margins so the whole box
+        # can collapse to ~one line initially.
         self._cmd_box = cmd_box = QGroupBox("Command line")
         cmd_layout = QVBoxLayout(cmd_box)
-        cmd_layout.setContentsMargins(6, 4, 6, 6)
+        cmd_layout.setContentsMargins(4, 2, 4, 4)
+        cmd_layout.setSpacing(0)
         cmd_opts = QHBoxLayout()
+        cmd_opts.setContentsMargins(0, 0, 0, 0)
 
         self._chk_full_path = QCheckBox("Full path")
         self._chk_full_path.setToolTip(
@@ -864,17 +866,16 @@ class ToolRunnerView(QWidget):
         splitter.setStretchFactor(1, 0)  # extras (compact)
         splitter.setStretchFactor(2, 0)  # command line (compact)
 
-        # Compute a "one text line + groupbox chrome" height for the
-        # extras and command-line boxes so they *start* occupying just
-        # a single visible line. Users can drag the splitter handles
-        # above each to grow them when they need more room.
+        # Compute compact starting heights for extras + command line so
+        # they occupy roughly one visible text line plus just enough
+        # chrome for the groupbox title (and, for cmd, the Full-path /
+        # Word-wrap checkbox row). Users drag the splitter handles to
+        # grow either box when they need multi-line editing.
         fm = QFontMetrics(mono)
         one_line = fm.lineSpacing()
-        # Groupbox title bar + extras-help label + 2×(layout margin+spacing)
-        # ≈ 80 px. Command-line groupbox has the options row instead of
-        # a help label but lands at roughly the same total.
-        compact_h = one_line + 80
-        splitter.setSizes([10_000, compact_h, compact_h])
+        extras_compact = one_line + 32      # just groupbox title + margins
+        cmd_compact = one_line + 56         # groupbox title + option row + margins
+        splitter.setSizes([10_000, extras_compact, cmd_compact])
 
         # Configurations bar: [Config ▾] [Save] [Save As] [Delete] [Edit...]
         # Wrapped in a QWidget so the MainWindow can show/hide it
