@@ -116,7 +116,12 @@ class MainWindow(QMainWindow):
         )
         self.setCentralWidget(self._dock_manager)
 
-        # --- Central dock: stack widget (editor / placeholder) ---
+        # --- Form dock (center) ---
+        # Holds a QStackedWidget that shows either the welcome
+        # placeholder or the current ToolRunnerView. Placed in the
+        # center area (not via setCentralWidget, which would make it
+        # immovable) so it's detachable like Tools and Output, but
+        # starts in the middle where users expect the form to appear.
         self._stack = QStackedWidget()
         self._placeholder = QLabel(
             "<h3>ScripTree</h3>"
@@ -126,11 +131,16 @@ class MainWindow(QMainWindow):
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._stack.addWidget(self._placeholder)
 
-        self._central_dock = ads.CDockWidget(self._dock_manager, "Editor")
-        self._central_dock.setObjectName("CentralDock")
-        self._central_dock.setWidget(self._stack)
-        self._central_dock.setFeatures(ads.CDockWidget.DockWidgetFeature(0))  # immovable
-        self._dock_manager.setCentralWidget(self._central_dock)
+        self._form_dock = ads.CDockWidget(self._dock_manager, "Form")
+        self._form_dock.setObjectName("FormDock")
+        self._form_dock.setWidget(self._stack)
+        self._form_dock.setFeatures(_DOCK_FEATURES)
+        # Adding to CenterDockWidgetArea with no target seeds the center
+        # area. Without setCentralWidget() the dock remains detachable.
+        self._form_dock.setWindowTitle("ScripTree")
+        self._dock_manager.addDockWidget(
+            ads.CenterDockWidgetArea, self._form_dock
+        )
 
         # --- Tools launcher dock (left) ---
         self._launcher = TreeLauncherView()
@@ -147,16 +157,6 @@ class MainWindow(QMainWindow):
         self._dock_manager.addDockWidget(
             ads.LeftDockWidgetArea, self._tools_dock
         )
-
-        # --- Form panel dock (right of central) ---
-        self._form_dock = ads.CDockWidget(self._dock_manager, "Form")
-        self._form_dock.setObjectName("FormDock")
-        self._form_dock.setWidget(QLabel(""))  # placeholder
-        self._form_dock.setFeatures(_DOCK_FEATURES)
-        self._dock_manager.addDockWidget(
-            ads.RightDockWidgetArea, self._form_dock
-        )
-        self._form_dock.toggleView(False)
 
         # --- Output panel dock (bottom, spanning full width) ---
         self._output_dock = ads.CDockWidget(self._dock_manager, "Output")
@@ -383,17 +383,24 @@ class MainWindow(QMainWindow):
     # --- dock management -----------------------------------------------------
 
     def _install_runner_panels(self, runner: ToolRunnerView) -> None:
-        """Move the runner's form and output panels into the dock widgets."""
+        """Hook up the runner's panels to the surrounding docks.
+
+        The form panel stays **inside** the runner (the runner is the
+        current widget in the form dock's stack), so the form just
+        naturally fills whatever area the form dock occupies — center
+        by default, floating if the user detached the dock.
+
+        The output panel is pulled out into the bottom output dock so
+        it can be detached/resized independently of the form.
+        """
         self._active_runner = runner
 
-        # Reparent form panel into dock.
-        form = runner.form_panel
-        form.setParent(None)
-        self._form_dock.setWidget(form)
+        # Form dock: retitle + make sure it's visible.
         self._form_dock.setWindowTitle(f"Form — {runner._tool.name}")
-        self._form_dock.toggleView(True)
+        if not self._form_dock.isVisible():
+            self._form_dock.toggleView(True)
 
-        # Reparent output panel into dock.
+        # Output dock: reparent the runner's output panel into it.
         output = runner.output_panel
         output.setParent(None)
         self._output_dock.setWidget(output)
@@ -401,20 +408,19 @@ class MainWindow(QMainWindow):
         self._output_dock.toggleView(True)
 
     def _uninstall_runner_panels(self) -> None:
-        """Return the active runner's panels to its internal layout."""
+        """Return the active runner's output panel to its internal layout
+        and reset dock titles."""
         runner = self._active_runner
         if runner is None:
             return
-        # Put them back in the runner's internal splitter.
-        form = runner.form_panel
         output = runner.output_panel
-        form.setParent(None)
         output.setParent(None)
-        runner._inner_splitter.insertWidget(0, form)
         runner._inner_splitter.addWidget(output)
         self._active_runner = None
-        self._form_dock.toggleView(False)
         self._output_dock.toggleView(False)
+        # Reset form dock title when no tool is active — the dock will
+        # be showing the placeholder welcome widget.
+        self._form_dock.setWindowTitle("ScripTree")
 
     # --- actions -------------------------------------------------------------
 
@@ -597,7 +603,6 @@ class MainWindow(QMainWindow):
     def _show_editor(self, tool: ToolDef, path: str | None) -> None:
         self._close_active_editor()
         self._uninstall_runner_panels()
-        self._form_dock.toggleView(False)
         self._output_dock.toggleView(False)
         editor = ToolEditorView(tool, file_path=path)
         editor.saved.connect(self._on_editor_saved)
