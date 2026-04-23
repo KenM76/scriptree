@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "name": "Build portable copy of ScripTree",
+  "description": "Copy this ScripTree install to another folder as a portable, end-user-ready single folder — stripping dev files (.git, __pycache__, tests, etc.) and smoke-testing the launcher. Handles ScripTreeApps/ with a keep/overwrite/backup choice so existing user tools aren't clobbered.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "make_portable.py",
+    "{dest}",
+    "{force?--force}",
+    "{zip?--zip}",
+    "{no_smoke?--no-smoke-test}",
+    ["--scriptreeapps", "{scriptreeapps}"]
+  ],
+  "params": [
+    {
+      "id": "dest",
+      "label": "Destination folder",
+      "description": "Where to write the portable copy. Leave blank to use the default (C:/Prod/ScripTree on Windows, ~/ScripTree-portable elsewhere).",
+      "type": "path",
+      "widget": "folder",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "force",
+      "label": "Force (overwrite existing destination)",
+      "description": "Equivalent to --force. Required if the destination folder already exists. Combined with a protected ScripTreeApps action, the existing user content is preserved or backed up per your choice below.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "scriptreeapps",
+      "label": "Existing ScripTreeApps/ handling",
+      "description": "What to do with an existing ScripTreeApps/ folder at the destination. 'keep' preserves the user's own tools (recommended for rebuild-in-place). 'overwrite' replaces with the source version (destructive). 'backup' renames the existing copy to ScripTreeApps.bak-<timestamp>/ then writes fresh.",
+      "type": "enum",
+      "widget": "dropdown",
+      "required": true,
+      "default": "keep",
+      "choices": ["keep", "overwrite", "backup"]
+    },
+    {
+      "id": "zip",
+      "label": "Also produce .zip alongside the folder",
+      "description": "Equivalent to --zip. Creates <dest>.zip (deflated) next to the folder. Handy for shipping a ready-to-extract download to an end user.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "no_smoke",
+      "label": "Skip smoke-test (don't launch the portable copy)",
+      "description": "Equivalent to --no-smoke-test. Skips the 6-second launch test. Use if you're building on a headless machine, or you've already confirmed the build works and just want to iterate faster.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    }
+  ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  }
+}

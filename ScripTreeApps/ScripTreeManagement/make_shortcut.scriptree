@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "Create platform-native shortcut",
+  "description": "Generate a desktop shortcut next to (or into) the ScripTree launcher: ScripTree.lnk on Windows (via WScript.Shell), ScripTree.desktop on Linux, ScripTree.command on macOS. The shortcut points at run_scriptree.bat/.sh and carries the app icon if one has been dropped into ScripTree/scriptree/resources/.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "make_shortcut.py",
+    "{dest}"
+  ],
+  "params": [
+    {
+      "id": "dest",
+      "label": "Destination folder",
+      "description": "Where to write the shortcut. Leave blank to drop it next to the ScripTree launcher in the project root (what most users want). Set to a specific folder (e.g. your Desktop) to place the shortcut there instead.",
+      "type": "path",
+      "widget": "folder",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  }
+}

@@ -29,11 +29,24 @@ Desktop.ini
 htmlcov/
 .coverage
 
+# Transient — smoke-test output captures (`run_scriptree.bat > out.txt 2>&1`)
+out.txt
+
 # ScripTree runtime
 scriptree.ini
 
-# User tools (local, not shared)
-ScripTreeApps/
+# User tools (local, not shared) — ignore everything under ScripTreeApps/
+# except the canonical management tools + audit script that ship with
+# ScripTree itself. (Note: must use ScripTreeApps/* + negations, not
+# ScripTreeApps/ + negations — git can't re-include files under an
+# ignored DIRECTORY, only under an ignored file pattern.)
+ScripTreeApps/*
+!ScripTreeApps/ScripTreeManagement/
+!ScripTreeApps/audit_vendored.py
+# Within ScripTreeManagement, track everything (the .scriptree files,
+# the .scriptreetree, any README). No build artifacts should live there.
+ScripTreeApps/ScripTreeManagement/__pycache__/
+ScripTreeApps/ScripTreeManagement/*.pyc
 
 # Vendored dependency binaries — populated by lib/update_lib.py,
 # platform-specific and large (PySide6 alone is ~300 MB). Not

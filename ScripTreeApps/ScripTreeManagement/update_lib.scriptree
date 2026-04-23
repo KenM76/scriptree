@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "name": "Update / refresh vendored dependencies",
+  "description": "Manage ScripTree's own vendored deps in lib/pypi/ and — with --all-apps — every ScripTreeApps/*/lib/ folder too. Toggle the checkboxes to choose the action. Leaving all checkboxes off installs anything missing and exits.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "lib/update_lib.py",
+    "{upgrade?--upgrade}",
+    "{trim?--trim}",
+    "{audit?--audit}",
+    "{all_apps?--all-apps}",
+    "{apps_only?--apps-only}",
+    "{dry_run?--dry-run}"
+  ],
+  "params": [
+    {
+      "id": "upgrade",
+      "label": "Upgrade (wipe lib/pypi/ then reinstall)",
+      "description": "Equivalent to --upgrade. Use this when you've bumped a pinned version in lib/requirements.txt or want to drop stale transitive deps.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "trim",
+      "label": "Trim (strip unused Qt modules)",
+      "description": "Equivalent to --trim. After install (or on its own), removes WebEngine, QML, Quick/3D, Multimedia, PDF, Charts, translations, dev tools — typically saves ~350 MB. Writes a log to lib/_manifests/trim_log.md.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "audit",
+      "label": "Audit CVEs (runs pip-audit)",
+      "description": "Equivalent to --audit. Ignores all other actions; just runs pip-audit against the pinned versions to flag known vulnerabilities. Installs pip-audit on demand if missing.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "all_apps",
+      "label": "Also refresh every ScripTreeApps/*/lib/",
+      "description": "Equivalent to --all-apps. After refreshing ScripTree's own lib/, walks ScripTreeApps/ and refreshes every per-tool lib/ it finds, using the interpreter specified by each tool's '# python: <cmd>' hint.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "apps_only",
+      "label": "Apps only (skip ScripTree's own lib/)",
+      "description": "Equivalent to --apps-only. Refresh per-tool lib/ folders without touching ScripTree's own lib/pypi/. Useful when you've just added or bumped a tool's deps.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "dry_run",
+      "label": "Dry run (preview without installing)",
+      "description": "Equivalent to --dry-run. Print the pip commands that WOULD run, without actually running them. Good for sanity-checking before a big refresh.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    }
+  ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  }
+}
