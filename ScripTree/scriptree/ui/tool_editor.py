@@ -147,6 +147,24 @@ class ToolEditorView(QWidget):
         env_wrapper.setLayout(env_row)
         top_form.addRow("Environment:", env_wrapper)
 
+        # Custom menus — tool.menus. Rendered as a QMenuBar above the
+        # form by ToolRunnerView when the tool is run.
+        menus_row = QHBoxLayout()
+        self._menus_status = QLabel(_menus_summary(self._tool))
+        self._menus_status.setStyleSheet("color: #666;")
+        menus_row.addWidget(self._menus_status, stretch=1)
+        menus_btn = QPushButton("Edit menus...")
+        menus_btn.setToolTip(
+            "Add, reorder, and configure the custom menu bar that "
+            "appears above the form when the tool runs. Each top-level "
+            "menu can hold actions, submenus, and separators."
+        )
+        menus_btn.clicked.connect(self._edit_tool_menus)
+        menus_row.addWidget(menus_btn)
+        menus_wrapper = QWidget()
+        menus_wrapper.setLayout(menus_row)
+        top_form.addRow("Custom menus:", menus_wrapper)
+
         outer.addWidget(top)
 
         # Middle: param list | property panel.
@@ -170,6 +188,10 @@ class ToolEditorView(QWidget):
              "Rename a section (pick which one)."),
             ("− §", self._remove_section,
              "Delete a section (its params fall back to 'no section')."),
+            ("↑", self._move_section_up,
+             "Move the selected section up."),
+            ("↓", self._move_section_down,
+             "Move the selected section down."),
         ):
             b = QPushButton(label)
             b.setFixedWidth(36)
@@ -492,6 +514,21 @@ class ToolEditorView(QWidget):
         self._tool.env = dlg.result_env()
         self._tool.path_prepend = dlg.result_paths()
         self._env_status.setText(_env_summary(self._tool))
+
+    def _edit_tool_menus(self) -> None:
+        """Open the custom-menus editor and write results back to the tool.
+
+        Same lifecycle as ``_edit_tool_env`` — edits sit on the
+        in-memory ``ToolDef.menus`` until the main Save button writes
+        the .scriptree file.
+        """
+        from .menu_editor import MenuEditorDialog
+
+        dlg = MenuEditorDialog(self._tool.menus, parent=self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        self._tool.menus = dlg.menus
+        self._menus_status.setText(_menus_summary(self._tool))
 
     # --- param list ------------------------------------------------------
 
@@ -883,6 +920,40 @@ class ToolEditorView(QWidget):
             )
         self._update_preview()
 
+    def _move_section_up(self) -> None:
+        self._move_section_by(-1)
+
+    def _move_section_down(self) -> None:
+        self._move_section_by(+1)
+
+    def _move_section_by(self, delta: int) -> None:
+        """Reorder the currently-selected section in ``tool.sections``.
+
+        The section list drives both the visible display order in the
+        runner and the collapsed/tab layout groupings, so swapping two
+        entries here is enough — no need to renumber params (their
+        membership is keyed by section name, not index).
+        """
+        if not self._tool.sections:
+            return
+        row = self._section_list.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "No section selected",
+                "Select a section in the list first, then use ↑ / ↓ to "
+                "reorder.",
+            )
+            return
+        new_row = row + delta
+        if not (0 <= new_row < len(self._tool.sections)):
+            return
+        secs = self._tool.sections
+        secs[row], secs[new_row] = secs[new_row], secs[row]
+        self._refresh_section_list()
+        self._refresh_param_list_keep_selection()
+        self._section_list.setCurrentRow(new_row)
+        self._update_preview()
+
     def _refresh_param_list_keep_selection(self) -> None:
         idx = self._current_param_index
         self._refresh_param_list()
@@ -1237,6 +1308,24 @@ def _env_summary(tool: ToolDef) -> str:
     if n_paths:
         parts.append(f"{n_paths} path{'s' if n_paths != 1 else ''}")
     return ", ".join(parts)
+
+
+def _menus_summary(tool: ToolDef) -> str:
+    """Short status for the ``Edit menus...`` inline label.
+
+    Reports unique top-level menu names and total item count so the
+    user can tell at a glance whether custom menus are defined.
+    """
+    if not tool.menus:
+        return "<i>none</i>"
+    # Preserve first-occurrence order of menu names.
+    names: list[str] = []
+    for m in tool.menus:
+        key = m.menu or "Tools"
+        if key not in names:
+            names.append(key)
+    n_items = len(tool.menus)
+    return f"{', '.join(names)} — {n_items} item{'s' if n_items != 1 else ''}"
 
 
 # --- choices text round-trip helpers ---------------------------------------

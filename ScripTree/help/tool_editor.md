@@ -61,13 +61,35 @@ Click a parameter to load it into the property panel on the right.
 
 ### Sections toolbar
 
-Above the parameter list is a small section toolbar: **+§ ✎§ −§**.
+Above the parameter list is a small section toolbar: **+§ ✎§ −§ ↑ ↓**.
 These buttons manage "sections" — named collapsible groups of parameters.
-See [sections.md](sections.md).
+The `↑` / `↓` buttons reorder the selected section in the list, changing
+where it appears in the runner. See [sections.md](sections.md).
 
 If the tool has no sections, the parameter list shows them flat. As soon
 as you add a section, the list shows each param's section suffix after
 the label.
+
+### Custom menus
+
+Below the environment row at the top of the editor is a **Edit menus...**
+button. It opens a dedicated editor for the custom menu bar the runner
+will render above the form when the tool is run:
+
+- **+ Menu** — add a top-level menu name (e.g. "Tools", "Reports").
+- **+ Action** — add an action item under the selected menu or submenu.
+  Actions carry a shell command, an optional keyboard shortcut, and a
+  tooltip.
+- **+ Submenu** — add a nested menu. Submenus can hold their own
+  actions, further submenus, and separators.
+- **+ Separator** — add a horizontal line between items.
+- **↑ / ↓** — reorder within the current parent.
+- **Remove** — delete the selected item.
+
+The tree on the left shows the full structure; the right panel edits
+the selected item's details. Changes are staged in memory — nothing is
+written to the `.scriptree` file until you click Save in the main
+editor.
 
 ## Property panel
 
