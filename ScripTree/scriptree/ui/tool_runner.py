@@ -33,7 +33,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QSize, QThread, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -120,9 +121,68 @@ class ReorderableParamForm(QListWidget):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.setUniformItemSizes(False)
+        # Never grow a horizontal scrollbar — individual row widgets
+        # shrink to the viewport width via resizeEvent() below. Vertical
+        # scrollbar is auto: it shows only when the parent layout can't
+        # give us enough height for every row.
+        self.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        # The list should ask its parent for exactly "sum of row
+        # heights + frame" worth of vertical space. When the parent
+        # can provide it (usual case — the form panel has plenty of
+        # room), no inner scrollbar is needed. When the parent is too
+        # short, the inner scrollbar kicks in naturally.
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
         # Qt's list-widget rowsMoved signal fires after the user drops a
         # row. We translate that to a clean orderChanged emission.
         self.model().rowsMoved.connect(self._on_rows_moved)
+
+    def sizeHint(self) -> QSize:
+        """Prefer exactly enough height for all rows + frame.
+
+        The default QListWidget.sizeHint is a generic 256x192 which
+        triggers a useless vertical scrollbar whenever the real row
+        count fits in the available space but doesn't match 192 px.
+        """
+        total_h = 2 * self.frameWidth()
+        for i in range(self.count()):
+            total_h += self.sizeHintForRow(i)
+        # Fall back to the default width hint; height is what matters.
+        default = super().sizeHint()
+        return QSize(default.width(), max(total_h, 1))
+
+    def minimumSizeHint(self) -> QSize:
+        # Allow the list to collapse to almost nothing so the parent
+        # layout can shrink freely when the window is resized small.
+        default = super().minimumSizeHint()
+        return QSize(default.width(), 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Keep every row widget sized to the current viewport width.
+
+        QListWidget doesn't do this for setItemWidget()-placed widgets
+        by default: the row widget keeps its original sizeHint width,
+        so when the viewport shrinks the row overflows and Qt shows a
+        horizontal scrollbar (which we've disabled anyway, producing
+        clipped text instead). Resetting item sizeHints on every
+        resize makes the rows shrink with the viewport.
+        """
+        super().resizeEvent(event)
+        vp_w = self.viewport().width()
+        for i in range(self.count()):
+            item = self.item(i)
+            w = self.itemWidget(item)
+            if w is None:
+                continue
+            # Let the row re-compute its preferred height for the new
+            # width (word-wrapped labels etc).
+            hfw = w.heightForWidth(vp_w) if w.hasHeightForWidth() else 0
+            h = max(hfw, w.sizeHint().height())
+            item.setSizeHint(QSize(vp_w, h))
 
     def add_param_row(
         self,
@@ -873,8 +933,8 @@ class ToolRunnerView(QWidget):
         # grow either box when they need multi-line editing.
         fm = QFontMetrics(mono)
         one_line = fm.lineSpacing()
-        extras_compact = one_line + 32      # just groupbox title + margins
-        cmd_compact = one_line + 56         # groupbox title + option row + margins
+        extras_compact = one_line + 16      # title + tight margins
+        cmd_compact = one_line + 28         # title + option row + tight margins
         splitter.setSizes([10_000, extras_compact, cmd_compact])
 
         # Configurations bar: [Config ▾] [Save] [Save As] [Delete] [Edit...]
