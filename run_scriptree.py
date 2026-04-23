@@ -170,7 +170,11 @@ def _install_packages(python_exe: str, packages: list[str]) -> bool:
 
 
 def _inject_vendored_libs():
-    """Prepend ``lib/pypi/`` to ``sys.path`` so vendored deps win.
+    """Prepend ``lib/pypi/`` to ``sys.path`` so vendored deps win, and
+    isolate the process from user site-packages that could pull in
+    incompatible binaries (e.g. a globally-installed PySide6 whose DLLs
+    mix with our vendored ones, or numpy 1.x/2.x mismatches from
+    unrelated global packages).
 
     When ``SCRIPTREE_USE_SYSTEM_DEPS=1`` is set, this is a no-op and
     the system Python environment provides everything.
@@ -179,12 +183,61 @@ def _inject_vendored_libs():
         return
     here = Path(__file__).resolve().parent
     pypi = here / "lib" / "pypi"
-    if pypi.is_dir():
-        # Only inject if there's something in there besides .gitkeep,
-        # so an empty lib/pypi/ doesn't mask the dep-missing check.
-        entries = [p for p in pypi.iterdir() if p.name != ".gitkeep"]
-        if entries:
-            sys.path.insert(0, str(pypi))
+    if not pypi.is_dir():
+        return
+    # Only inject if there's something in there besides .gitkeep,
+    # so an empty lib/pypi/ doesn't mask the dep-missing check.
+    entries = [p for p in pypi.iterdir() if p.name != ".gitkeep"]
+    if not entries:
+        return
+
+    pypi_str = str(pypi)
+
+    # 1. Strip user site-packages from sys.path. Leaving them in means
+    #    `import somepackage` can pick up a globally-installed copy that
+    #    was compiled against a different numpy/Qt/etc, causing the
+    #    classic "module compiled using NumPy 1.x cannot be run in
+    #    NumPy 2.x" crash at import time.
+    try:
+        import site
+        bad = set()
+        usersite = getattr(site, "getusersitepackages", lambda: None)()
+        if usersite:
+            bad.add(os.path.normcase(os.path.abspath(usersite)))
+        for p in getattr(site, "getsitepackages", lambda: [])():
+            bad.add(os.path.normcase(os.path.abspath(p)))
+        sys.path[:] = [
+            p for p in sys.path
+            if os.path.normcase(os.path.abspath(p or ".")) not in bad
+        ]
+    except Exception:
+        pass
+
+    # 2. Prepend the vendored folder so our copies win.
+    sys.path.insert(0, pypi_str)
+
+    # 3. Prevent any child Python processes from re-enabling user site.
+    os.environ["PYTHONNOUSERSITE"] = "1"
+
+    # 4. Point Qt at the vendored plugins explicitly so it doesn't try
+    #    to auto-discover a system PySide6's plugins folder and mix DLLs.
+    qt_plugin_dir = pypi / "PySide6" / "plugins"
+    if qt_plugin_dir.is_dir():
+        os.environ["QT_PLUGIN_PATH"] = str(qt_plugin_dir)
+        platforms_dir = qt_plugin_dir / "platforms"
+        if platforms_dir.is_dir():
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platforms_dir)
+
+    # 5. On Windows, add the PySide6 folder as a DLL search path so
+    #    Qt6Core.dll etc. resolve to the vendored copies, not whatever
+    #    is on PATH.
+    if sys.platform == "win32":
+        pyside_dir = pypi / "PySide6"
+        if pyside_dir.is_dir() and hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(pyside_dir))
+            except (OSError, FileNotFoundError):
+                pass
 
 
 def _check_dependencies():
