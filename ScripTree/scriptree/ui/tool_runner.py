@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QTextCursor
+from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -743,11 +743,16 @@ class ToolRunnerView(QWidget):
             self._build_custom_menus(menu_bar, tool.menus)
             layout.setMenuBar(menu_bar)
 
-        # Header.
+        # Header. Word-wrap both the name and description so long text
+        # doesn't force the whole form into a horizontal scroll bar
+        # when the window is narrower than the text.
         header = QLabel(f"<h2>{tool.name}</h2>")
+        header.setWordWrap(True)
         layout.addWidget(header)
         if tool.description:
-            layout.addWidget(QLabel(tool.description))
+            desc = QLabel(tool.description)
+            desc.setWordWrap(True)
+            layout.addWidget(desc)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         layout.addWidget(splitter, stretch=1)
@@ -800,7 +805,11 @@ class ToolRunnerView(QWidget):
         extras_help.setWordWrap(True)
         extras_layout.addWidget(extras_help)
         self._extras_edit = QPlainTextEdit()
-        self._extras_edit.setMaximumHeight(60)
+        # Start visually as a single line; user can drag the splitter
+        # handle above to grow it. Minimum covers one text line + a
+        # bit of vertical padding so the placeholder/content isn't
+        # clipped. No maximumHeight — splitter drag must be able to
+        # grow this freely.
         mono = QFont()
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFamily("Consolas")
@@ -855,6 +864,18 @@ class ToolRunnerView(QWidget):
         splitter.setStretchFactor(1, 0)  # extras (compact)
         splitter.setStretchFactor(2, 0)  # command line (compact)
 
+        # Compute a "one text line + groupbox chrome" height for the
+        # extras and command-line boxes so they *start* occupying just
+        # a single visible line. Users can drag the splitter handles
+        # above each to grow them when they need more room.
+        fm = QFontMetrics(mono)
+        one_line = fm.lineSpacing()
+        # Groupbox title bar + extras-help label + 2×(layout margin+spacing)
+        # ≈ 80 px. Command-line groupbox has the options row instead of
+        # a help label but lands at roughly the same total.
+        compact_h = one_line + 80
+        splitter.setSizes([10_000, compact_h, compact_h])
+
         # Configurations bar: [Config ▾] [Save] [Save As] [Delete] [Edit...]
         # Wrapped in a QWidget so the MainWindow can show/hide it
         # based on whether the form dock is floating.
@@ -868,7 +889,11 @@ class ToolRunnerView(QWidget):
         self._active_selection: tuple[str, str] = ("shared", "default")
         self._cfg_loading = False
         self._cfg_widget = QWidget()
-        cfg_layout = QHBoxLayout(self._cfg_widget)
+        # FlowLayout so the config toolbar wraps onto a second row
+        # when the window is too narrow, instead of growing a
+        # horizontal scroll bar.
+        from .flow_layout import FlowLayout
+        cfg_layout = FlowLayout(self._cfg_widget, hspacing=4, vspacing=4)
         cfg_layout.setContentsMargins(0, 0, 0, 0)
         cfg_layout.addWidget(QLabel("Configuration:"))
 
@@ -887,7 +912,9 @@ class ToolRunnerView(QWidget):
         self._cfg_combo = QComboBox()
         self._cfg_combo.setMinimumWidth(180)
         self._cfg_combo.currentIndexChanged.connect(self._on_cfg_combo_changed)
-        cfg_layout.addWidget(self._cfg_combo, stretch=1)
+        # FlowLayout doesn't support per-item stretch — the combo just
+        # sits at its preferred width and the row wraps when crowded.
+        cfg_layout.addWidget(self._cfg_combo)
 
         self._btn_cfg_save = QPushButton("Save")
         self._btn_cfg_save.setToolTip(
@@ -945,7 +972,9 @@ class ToolRunnerView(QWidget):
         layout.addWidget(self._cfg_widget)
 
         # Action row: [Run] [Stop] [Copy argv] [Undo] [Redo] [Reset] [Clear]
-        action_row = QHBoxLayout()
+        # Uses FlowLayout so the buttons wrap to a second row when the
+        # window is narrow, instead of causing a horizontal scroll bar.
+        action_row = FlowLayout(hspacing=4, vspacing=4)
 
         self._btn_run = QPushButton("Run")
         self._btn_run.setDefault(True)
@@ -987,7 +1016,8 @@ class ToolRunnerView(QWidget):
         self._btn_clear_output.clicked.connect(self._clear_output)
         action_row.addWidget(self._btn_clear_output)
 
-        action_row.addStretch(1)
+        # (FlowLayout has no addStretch — buttons cluster to the left
+        # naturally and the row wraps when full.)
 
         # User/credential indicator — shows which user the tool will
         # run as when prompt_credentials is active and credentials are

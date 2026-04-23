@@ -116,12 +116,48 @@ class MainWindow(QMainWindow):
         )
         self.setCentralWidget(self._dock_manager)
 
-        # --- Form dock (center) ---
+        # Default layout:
+        #
+        #   ┌──────────┬──────────────────────────────┐
+        #   │  Tools   │                              │
+        #   │          │                              │
+        #   ├──────────┤            Form             │
+        #   │          │                              │
+        #   │  Output  │                              │
+        #   └──────────┴──────────────────────────────┘
+        #
+        # Tools and Output stack vertically on the left, each sized to
+        # its content. Form takes the entire right side (full window
+        # height). All three docks are detachable — this is just the
+        # starting arrangement.
+        #
+        # Build order matters: Tools is added first (seeds a left dock
+        # area). Form is added to CenterDockWidgetArea next (takes the
+        # remaining right space). Output is added with the Tools dock
+        # area as target so it nests under Tools, not as a full-width
+        # bottom strip spanning under Form.
+
+        # --- Tools launcher dock (left, top) ---
+        self._launcher = TreeLauncherView()
+        self._launcher.toolSelected.connect(self._on_tool_selected)
+        self._launcher.treeModified.connect(self._on_tree_modified)
+
+        self._tools_dock = ads.CDockWidget(self._dock_manager, "Tools")
+        self._tools_dock.setObjectName("ToolsDock")
+        self._tools_dock.setWidget(self._launcher)
+        self._tools_dock.setFeatures(_DOCK_FEATURES)
+        self._tools_dock.setMinimumSizeHintMode(
+            ads.CDockWidget.eMinimumSizeHintMode.MinimumSizeHintFromContent
+        )
+        tools_area = self._dock_manager.addDockWidget(
+            ads.LeftDockWidgetArea, self._tools_dock
+        )
+
+        # --- Form dock (center, full height) ---
         # Holds a QStackedWidget that shows either the welcome
         # placeholder or the current ToolRunnerView. Placed in the
         # center area (not via setCentralWidget, which would make it
-        # immovable) so it's detachable like Tools and Output, but
-        # starts in the middle where users expect the form to appear.
+        # immovable) so it's detachable like Tools and Output.
         self._stack = QStackedWidget()
         self._placeholder = QLabel(
             "<h3>ScripTree</h3>"
@@ -135,36 +171,20 @@ class MainWindow(QMainWindow):
         self._form_dock.setObjectName("FormDock")
         self._form_dock.setWidget(self._stack)
         self._form_dock.setFeatures(_DOCK_FEATURES)
-        # Adding to CenterDockWidgetArea with no target seeds the center
-        # area. Without setCentralWidget() the dock remains detachable.
         self._form_dock.setWindowTitle("ScripTree")
         self._dock_manager.addDockWidget(
             ads.CenterDockWidgetArea, self._form_dock
         )
 
-        # --- Tools launcher dock (left) ---
-        self._launcher = TreeLauncherView()
-        self._launcher.toolSelected.connect(self._on_tool_selected)
-        self._launcher.treeModified.connect(self._on_tree_modified)
-
-        self._tools_dock = ads.CDockWidget(self._dock_manager, "Tools")
-        self._tools_dock.setObjectName("ToolsDock")
-        self._tools_dock.setWidget(self._launcher)
-        self._tools_dock.setFeatures(_DOCK_FEATURES)
-        self._tools_dock.setMinimumSizeHintMode(
-            ads.CDockWidget.eMinimumSizeHintMode.MinimumSizeHintFromContent
-        )
-        self._dock_manager.addDockWidget(
-            ads.LeftDockWidgetArea, self._tools_dock
-        )
-
-        # --- Output panel dock (bottom, spanning full width) ---
+        # --- Output panel dock (under Tools, same left column) ---
         self._output_dock = ads.CDockWidget(self._dock_manager, "Output")
         self._output_dock.setObjectName("OutputDock")
         self._output_dock.setWidget(QLabel(""))  # placeholder
         self._output_dock.setFeatures(_DOCK_FEATURES)
+        # Third arg targets the Tools dock area so Output nests BELOW
+        # it in the same left column, not as a full-width bottom strip.
         self._dock_manager.addDockWidget(
-            ads.BottomDockWidgetArea, self._output_dock
+            ads.BottomDockWidgetArea, self._output_dock, tools_area
         )
         self._output_dock.toggleView(False)
 
