@@ -70,6 +70,39 @@ python lib/update_lib.py --audit
 
 Every installed package gets a provenance note in `lib/_manifests/` showing its version, source, and install timestamp. `--trim` also writes `lib/_manifests/trim_log.md` listing exactly which files were removed and how much space was freed.
 
+### Per-tool vendored dependencies
+
+Tools under `ScripTreeApps/` that need their **own** Python packages (e.g. a DXF-rendering tool that needs `matplotlib` + `ezdxf`, which aren't GUI deps and may even target a different Python interpreter) follow the same pattern, scoped to the tool folder:
+
+```
+ScripTreeApps/<tool>/lib/
+├── requirements.txt   # "# python: py -3.12" header picks the interpreter
+├── _manifests/
+└── pypi/              # injected onto sys.path by the tool's own script
+```
+
+Refresh every tool's `lib/` at once:
+
+```bash
+python lib/update_lib.py --all-apps          # ScripTree's own + every tool's
+python lib/update_lib.py --apps-only         # just the tools
+python ScripTreeApps/audit_vendored.py       # writes VENDORED_DEPS.md audit
+```
+
+The `ScripTreeApps/ScripTreeManagement/ScripTreeManagement.scriptreetree` wraps all four management scripts (`update_lib.py`, `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`) as clickable GUI tools inside ScripTree itself. See [`ScripTree/help/vendored_dependencies.md`](ScripTree/help/vendored_dependencies.md) for the full explanation.
+
+## Building a portable distribution
+
+```bash
+# Copies this project into a clean, end-user-ready folder, strips dev
+# files (.git, __pycache__, tests, etc.), runs a smoke-test, optionally
+# zips the result. Handles existing ScripTreeApps/ with keep/overwrite/backup.
+python make_portable.py --force --scriptreeapps=keep
+
+# Generate a platform-native desktop shortcut (.lnk / .desktop / .command):
+python make_shortcut.py
+```
+
 ## Documentation
 
 - **[Quickstart](ScripTree/help/quickstart.md)** — get running in 60 seconds

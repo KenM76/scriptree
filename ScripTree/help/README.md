@@ -34,6 +34,11 @@ Read these in order for the full picture:
    environment, PATH, permissions path.
 10. **[Security](security.md)** — permissions system, injection prevention,
     credential handling, read-only enforcement.
+11. **[Vendored dependencies](vendored_dependencies.md)** — how ScripTree's
+    own `lib/pypi/` works, the matching per-tool `lib/` pattern for apps
+    that need their own deps, the four management scripts (`update_lib.py`,
+    `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`), and the
+    `ScripTreeManagement.scriptreetree` that wraps them in a GUI.
 
 ## For LLMs (and humans using AI to generate tools)
 
