@@ -607,10 +607,31 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true",
         help="Print what would happen without actually running pip.",
     )
+    parser.add_argument(
+        "--all-apps", action="store_true",
+        help=(
+            "After refreshing ScripTree's own lib/pypi/, also walk "
+            "ScripTreeApps/ and refresh every per-tool lib/ folder "
+            "found there. Each tool's lib/requirements.txt may start "
+            "with a '# python: <cmd>' line specifying which interpreter "
+            "to use (e.g. '# python: py -3.12'); falls back to the "
+            "current Python otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--apps-only", action="store_true",
+        help=(
+            "Like --all-apps but skip ScripTree's own lib/. Useful "
+            "when you only want to refresh per-tool deps."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.audit:
         return cmd_audit(args)
+
+    if args.apps_only:
+        return cmd_apps(args)
 
     # Decide whether to install.
     # - Default (no flags): install missing packages.
@@ -628,7 +649,125 @@ def main(argv: list[str] | None = None) -> int:
             return rc
 
     if args.trim:
-        return cmd_trim(args)
+        rc = cmd_trim(args)
+        if rc != 0:
+            return rc
+
+    if args.all_apps:
+        return cmd_apps(args)
+
+    return 0
+
+
+# ── Per-tool app deps ──────────────────────────────────────────────
+
+def _find_app_libs() -> list[Path]:
+    """Return every ``ScripTreeApps/**/lib/requirements.txt`` path.
+
+    Walks the ``ScripTreeApps/`` folder at the project root. Skips any
+    ``lib/`` that doesn't have a ``requirements.txt`` — those are just
+    stubs.
+    """
+    project_root = HERE.parent
+    apps_root = project_root / "ScripTreeApps"
+    results: list[Path] = []
+    if not apps_root.is_dir():
+        return results
+    for req in apps_root.rglob("lib/requirements.txt"):
+        # Skip nested matches inside an app's own lib/pypi/<package>/
+        # — those are vendored packages shipping their own extras_require
+        # files, not per-tool requirement manifests.
+        if "pypi" in req.parts:
+            continue
+        results.append(req)
+    return sorted(results)
+
+
+def _parse_python_cmd(requirements: Path) -> list[str]:
+    """Return the interpreter command for this tool as a list of argv.
+
+    Honors a ``# python: <command>`` line anywhere in the first 30
+    lines of the requirements file, e.g. ``# python: py -3.12`` ->
+    ``["py", "-3.12"]``. Falls back to ``[sys.executable]`` if no hint
+    is found.
+    """
+    try:
+        lines = requirements.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()[:30]
+    except OSError:
+        return [sys.executable]
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("#"):
+            line = line.lstrip("#").strip()
+            if line.lower().startswith("python:"):
+                cmd = line.split(":", 1)[1].strip()
+                if cmd:
+                    return cmd.split()
+    return [sys.executable]
+
+
+def cmd_apps(args) -> int:
+    """Refresh every per-tool ``lib/`` folder under ``ScripTreeApps/``.
+
+    For each one, reads the ``# python: ...`` hint and runs
+    ``<that-python> -m pip install --target <tool>/lib/pypi
+    --upgrade -r <tool>/lib/requirements.txt``.
+    """
+    libs = _find_app_libs()
+    if not libs:
+        print("No ScripTreeApps/*/lib/requirements.txt files found.")
+        return 0
+
+    print(f"Found {len(libs)} tool lib/ folder(s):")
+    for req in libs:
+        print(f"  - {req.parent.parent.name}  ({req})")
+
+    failures: list[tuple[Path, int]] = []
+    for req in libs:
+        tool_lib = req.parent
+        tool_pypi = tool_lib / "pypi"
+        py = _parse_python_cmd(req)
+        print(
+            f"\n=== {req.parent.parent.name} "
+            f"(interpreter: {' '.join(py)}) ==="
+        )
+
+        if getattr(args, "dry_run", False):
+            print(f"   would: {' '.join(py)} -m pip install --target "
+                  f"{tool_pypi} --upgrade -r {req}")
+            continue
+
+        tool_pypi.mkdir(parents=True, exist_ok=True)
+        cmd = (
+            py
+            + ["-m", "pip", "install", "--target", str(tool_pypi),
+               "--upgrade", "-r", str(req)]
+        )
+        rc = _run(cmd)
+        if rc != 0:
+            failures.append((req, rc))
+            print(
+                f"   ! pip failed for {req.parent.parent.name} "
+                f"(exit {rc}). Common causes:",
+                file=sys.stderr,
+            )
+            print(
+                "     - the declared Python interpreter isn't installed\n"
+                "     - no wheel available for that Python/OS\n"
+                "     - network blocked",
+                file=sys.stderr,
+            )
+
+    if failures:
+        print(
+            f"\n{len(failures)} of {len(libs)} tool lib/ folder(s) "
+            f"failed to refresh.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"\nAll {len(libs)} tool lib/ folder(s) refreshed.")
     return 0
 
 
