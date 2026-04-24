@@ -1242,12 +1242,14 @@ class ToolRunnerView(QWidget):
             elif is_tab:
                 # Start a new tab widget if we're not already in one.
                 if current_tab_widget is None:
-                    current_tab_widget = QTabWidget()
+                    from .wrapping_tab_bar import make_wrapping_tab_widget
+                    current_tab_widget = make_wrapping_tab_widget()
                     self._section_tab_widgets.append(current_tab_widget)
-                    # Right-click on the tab bar (or anywhere on the
-                    # tab widget itself) → "Word wrap descriptions"
-                    # batch-toggle for every CheckboxWidget nested
-                    # inside this tab widget's pages.
+                    # Right-click on the tab bar → context menu with
+                    # "Wrap tabs" (for multi-row tab layout) and
+                    # "Word wrap descriptions" (batch-toggle for every
+                    # CheckboxWidget nested inside this tab widget's
+                    # pages).
                     self._install_tab_context_menu(current_tab_widget)
                 scroll = QScrollArea()
                 scroll.setWidgetResizable(True)
@@ -1277,18 +1279,21 @@ class ToolRunnerView(QWidget):
         _flush_tab_widget()
 
     def _install_tab_context_menu(self, tab_widget: QTabWidget) -> None:
-        """Wire a right-click "Word wrap descriptions" batch-toggle
-        onto ``tab_widget``'s tab bar.
+        """Wire a right-click context menu onto ``tab_widget``'s tab bar.
 
-        The toggle walks every ``CheckboxWidget`` descendant of this
-        tab widget (across all pages, not just the currently visible
-        one — QTabWidget keeps inactive pages alive so they pick up
-        the new state the next time they're shown) and calls
-        ``set_word_wrap`` on each. Default state is reported from the
-        first checkbox found, so the menu's check mark reflects the
-        current majority setting.
+        Two actions:
+
+        - **Wrap tabs onto multiple rows** — toggles the
+          ``WrappingTabBar``'s multi-row mode. When on (default), tabs
+          flow onto additional rows instead of the classic Qt behavior
+          of single-row-plus-scroll-arrows.
+        - **Word wrap descriptions** — batch-toggle for every
+          ``CheckboxWidget`` descendant of the tab widget (across all
+          pages, not just the currently visible one). The check mark
+          reflects the current state, sampled from the first checkbox.
         """
         from .widgets.param_widgets import CheckboxWidget
+        from .wrapping_tab_bar import WrappingTabBar
 
         tab_bar = tab_widget.tabBar()
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1297,22 +1302,31 @@ class ToolRunnerView(QWidget):
             from PySide6.QtGui import QAction
             from PySide6.QtWidgets import QMenu
 
-            # Sample the current wrap state from the first checkbox we
-            # find so the menu accurately reflects reality.
             boxes = tab_widget.findChildren(CheckboxWidget)
-            current = boxes[0]._desc_label.wordWrap() if boxes else True
+            current_wrap_desc = (
+                boxes[0]._desc_label.wordWrap() if boxes else True
+            )
 
             menu = QMenu(tab_bar)
-            act = QAction("Word wrap descriptions", menu)
-            act.setCheckable(True)
-            act.setChecked(current)
 
-            def _toggle(on: bool) -> None:
+            if isinstance(tab_bar, WrappingTabBar):
+                wrap_tabs_act = QAction("Wrap tabs onto multiple rows", menu)
+                wrap_tabs_act.setCheckable(True)
+                wrap_tabs_act.setChecked(tab_bar.wrap_enabled())
+                wrap_tabs_act.toggled.connect(tab_bar.set_wrap)
+                menu.addAction(wrap_tabs_act)
+                menu.addSeparator()
+
+            desc_act = QAction("Word wrap descriptions", menu)
+            desc_act.setCheckable(True)
+            desc_act.setChecked(current_wrap_desc)
+
+            def _toggle_desc(on: bool) -> None:
                 for box in boxes:
                     box.set_word_wrap(on)
 
-            act.toggled.connect(_toggle)
-            menu.addAction(act)
+            desc_act.toggled.connect(_toggle_desc)
+            menu.addAction(desc_act)
             menu.exec(tab_bar.mapToGlobal(pos))
 
         tab_bar.customContextMenuRequested.connect(_show_menu)
