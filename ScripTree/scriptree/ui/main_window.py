@@ -93,10 +93,13 @@ class MainWindow(QMainWindow):
         self._unsaved_runner: ToolRunnerView | None = None
         self._active_runner: ToolRunnerView | None = None
 
-        # Recent files.
+        # Recent files — tracked separately for tools and trees so the
+        # user can see at a glance what kind each recent entry is, and
+        # so the File menu can offer distinct submenus. Legacy
+        # "recent_files" values are migrated on first load.
         from ..core.app_settings import get_settings
         self._settings = get_settings()
-        self._recent_files: list[str] = self._load_recent_files()
+        self._recent_tools, self._recent_trees = self._load_recent_files()
 
         # --- QAds dock manager (replaces QMainWindow dock handling) ---
         ads.CDockManager.setConfigFlags(
@@ -228,6 +231,15 @@ class MainWindow(QMainWindow):
         act_open_tree.triggered.connect(self._open_tree)
         m_file.addAction(act_open_tree)
 
+        # Combined filter — opens the same dialog but defaults to
+        # the "files and trees" filter so the user sees both types.
+        # All three filters are available in the filter dropdown of
+        # every Open dialog regardless of which menu item was used.
+        act_open_any = QAction("Open &any...", self)
+        act_open_any.setShortcut("Ctrl+Shift+O")
+        act_open_any.triggered.connect(self._open_any_file)
+        m_file.addAction(act_open_any)
+
         act_new_tree = QAction("New scriptree &tree", self)
         act_new_tree.triggered.connect(self._new_tree)
         m_file.addAction(act_new_tree)
@@ -300,45 +312,82 @@ class MainWindow(QMainWindow):
 
     # --- recent files --------------------------------------------------------
 
-    def _load_recent_files(self) -> list[str]:
-        raw = self._settings.value("recent_files", "[]")
-        try:
-            items = json.loads(raw) if isinstance(raw, str) else raw
-        except (json.JSONDecodeError, TypeError):
-            items = []
-        return [str(p) for p in items if p][:_MAX_RECENT]
+    @staticmethod
+    def _is_tree_path(path: str) -> bool:
+        return path.lower().endswith(".scriptreetree")
+
+    def _load_recent_files(self) -> tuple[list[str], list[str]]:
+        """Load the two recent-files lists from QSettings.
+
+        Returns ``(recent_tools, recent_trees)``. Migrates from the
+        legacy single ``recent_files`` key on first run: each entry is
+        routed to the tools or trees list by extension, preserving
+        order. The legacy key is then cleared.
+        """
+        def _load(key: str) -> list[str]:
+            raw = self._settings.value(key, "[]")
+            try:
+                items = json.loads(raw) if isinstance(raw, str) else raw
+            except (json.JSONDecodeError, TypeError):
+                items = []
+            return [str(p) for p in items if p][:_MAX_RECENT]
+
+        tools = _load("recent_tools")
+        trees = _load("recent_trees")
+        if not tools and not trees:
+            # Migrate legacy flat list, if any.
+            legacy = _load("recent_files")
+            for path in legacy:
+                if self._is_tree_path(path):
+                    trees.append(path)
+                else:
+                    tools.append(path)
+            if legacy:
+                self._settings.remove("recent_files")
+        return tools[:_MAX_RECENT], trees[:_MAX_RECENT]
 
     def _save_recent_files(self) -> None:
         self._settings.setValue(
-            "recent_files", json.dumps(self._recent_files)
+            "recent_tools", json.dumps(self._recent_tools)
+        )
+        self._settings.setValue(
+            "recent_trees", json.dumps(self._recent_trees)
         )
 
     def _add_recent_file(self, path: str) -> None:
         if not path:
             return
         resolved = str(Path(path).resolve())
-        # Remove if already present, then prepend.
-        self._recent_files = [
-            p for p in self._recent_files if p != resolved
-        ]
-        self._recent_files.insert(0, resolved)
-        self._recent_files = self._recent_files[:_MAX_RECENT]
+        is_tree = self._is_tree_path(resolved)
+        target = self._recent_trees if is_tree else self._recent_tools
+        # Remove if already present, then prepend; cap length.
+        target[:] = [p for p in target if p != resolved]
+        target.insert(0, resolved)
+        del target[_MAX_RECENT:]
         self._save_recent_files()
         self._rebuild_recent_menu()
 
     def _rebuild_recent_menu(self) -> None:
         self._recent_menu.clear()
-        if not self._recent_files:
-            act = self._recent_menu.addAction("(none)")
-            act.setEnabled(False)
-            return
-        for path in self._recent_files:
-            display = Path(path).name
-            act = self._recent_menu.addAction(f"{display}  —  {path}")
-            act.setData(path)
-            act.triggered.connect(
-                lambda checked, p=path: self._open_recent(p)
-            )
+
+        def _populate(sub: QMenu, paths: list[str]) -> None:
+            if not paths:
+                act = sub.addAction("(none)")
+                act.setEnabled(False)
+                return
+            for p in paths:
+                act = sub.addAction(f"{Path(p).name}  —  {p}")
+                act.setData(p)
+                act.triggered.connect(
+                    lambda checked=False, q=p: self._open_recent(q)
+                )
+
+        tools_menu = self._recent_menu.addMenu("Recent .scriptree")
+        _populate(tools_menu, self._recent_tools)
+
+        trees_menu = self._recent_menu.addMenu("Recent .scriptreetree")
+        _populate(trees_menu, self._recent_trees)
+
         self._recent_menu.addSeparator()
         act_clear = self._recent_menu.addAction("Clear recent files")
         act_clear.triggered.connect(self._clear_recent_files)
@@ -373,9 +422,12 @@ class MainWindow(QMainWindow):
             )
             accepted = dlg.exec() == QDialog.DialogCode.Accepted
             replacement = dlg.selected_replacement() if accepted else None
-            # Remove the dead entry either way.
-            self._recent_files = [
-                f for f in self._recent_files if f != path
+            # Remove the dead entry from whichever list it's in.
+            self._recent_tools[:] = [
+                f for f in self._recent_tools if f != path
+            ]
+            self._recent_trees[:] = [
+                f for f in self._recent_trees if f != path
             ]
             self._save_recent_files()
             self._rebuild_recent_menu()
@@ -399,7 +451,8 @@ class MainWindow(QMainWindow):
         self._add_recent_file(path)
 
     def _clear_recent_files(self) -> None:
-        self._recent_files.clear()
+        self._recent_tools.clear()
+        self._recent_trees.clear()
         self._save_recent_files()
         self._rebuild_recent_menu()
 
@@ -477,12 +530,43 @@ class MainWindow(QMainWindow):
         tool = ToolDef(name="", executable="")
         self._show_editor(tool, None)
 
-    def _open_tool(self) -> None:
+    #: Shared filter string for File -> Open dialogs. All three filters
+    #: are always available in the dropdown; the ``default`` argument to
+    #: ``_open_any`` just picks which one the dialog opens on.
+    _OPEN_FILTERS = (
+        "ScripTree files (*.scriptree)"
+        ";;ScripTree trees (*.scriptreetree)"
+        ";;ScripTree files and trees (*.scriptree *.scriptreetree)"
+        ";;All files (*)"
+    )
+    _FILTER_TOOL = "ScripTree files (*.scriptree)"
+    _FILTER_TREE = "ScripTree trees (*.scriptreetree)"
+    _FILTER_BOTH = "ScripTree files and trees (*.scriptree *.scriptreetree)"
+
+    def _open_any(self, title: str, default_filter: str) -> None:
+        """Shared File -> Open dialog.
+
+        Always offers three filters (.scriptree / .scriptreetree /
+        both) + All files. The chosen file's extension determines
+        which handler runs — so picking a .scriptreetree from the
+        "Open .scriptree..." menu still works, and vice versa.
+        """
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open .scriptree", "",
-            "ScripTree files (*.scriptree);;All files (*)",
+            self, title, "", self._OPEN_FILTERS,
+            default_filter,
         )
         if not path:
+            return
+        self._load_file_into_ui(path)
+
+    def _load_file_into_ui(self, path: str) -> None:
+        """Route an opened path to the appropriate handler and record
+        it in the correct recent-files list."""
+        if self._is_tree_path(path):
+            if not self._confirm_discard_tree():
+                return
+            self._launcher.load(path)
+            self._add_recent_file(path)
             return
         try:
             tool = load_tool(path)
@@ -492,17 +576,14 @@ class MainWindow(QMainWindow):
         self._show_runner(tool, path)
         self._add_recent_file(path)
 
+    def _open_tool(self) -> None:
+        self._open_any("Open .scriptree", self._FILTER_TOOL)
+
     def _open_tree(self) -> None:
-        if not self._confirm_discard_tree():
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open .scriptreetree", "",
-            "ScripTree trees (*.scriptreetree);;All files (*)",
-        )
-        if not path:
-            return
-        self._launcher.load(path)
-        self._add_recent_file(path)
+        self._open_any("Open .scriptreetree", self._FILTER_TREE)
+
+    def _open_any_file(self) -> None:
+        self._open_any("Open .scriptree or .scriptreetree", self._FILTER_BOTH)
 
     def _new_tree(self) -> None:
         if not self._confirm_discard_tree():
@@ -582,9 +663,11 @@ class MainWindow(QMainWindow):
     # --- launcher signal -----------------------------------------------------
 
     def _on_tool_selected(self, tool: ToolDef, path: str) -> None:
+        # Don't touch the Recent-files lists here — clicking a leaf in
+        # the Tools tree isn't an "open" in the user-facing sense.
+        # Recent is built only from deliberate File -> Open and the
+        # Recent menu itself (both go through _add_recent_file).
         self._show_runner(tool, path)
-        if path:
-            self._add_recent_file(path)
 
     # --- stack management ----------------------------------------------------
 
