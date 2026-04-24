@@ -142,10 +142,12 @@ class StandaloneWindow(QMainWindow):
         tree_dir = Path(tree_path).resolve().parent
 
         win = cls(title=f"ScripTree — {tree_def.name}", parent=parent)
-        tabs = QTabWidget()
-        # Default: scroll buttons for tab overflow.
+        # Default: wrap tabs onto multiple rows when they don't fit
+        # (see WrappingTabBar). Users can flip to classic scroll
+        # arrows or expand-to-fit via the right-click context menu.
+        from .wrapping_tab_bar import make_wrapping_tab_widget
+        tabs = make_wrapping_tab_widget()
         tabs.setElideMode(Qt.TextElideMode.ElideNone)
-        tabs.setUsesScrollButtons(True)
         tabs.tabBar().setExpanding(False)
 
         # Right-click menu on tab bar to change overflow mode.
@@ -327,37 +329,73 @@ def _build_menu_actions(
 def _show_tab_mode_menu(
     tabs: QTabWidget, pos: Any, win: QWidget
 ) -> None:
-    """Show a context menu for switching tab overflow mode."""
+    """Show a context menu for switching tab overflow mode.
+
+    Three mutually-exclusive options:
+
+    - **Wrap onto multiple rows** — tabs flow onto extra rows when
+      they don't fit (via :class:`WrappingTabBar`). Default.
+    - **Scroll arrows** — classic Qt behavior, single row with
+      left/right scroll buttons for overflow.
+    - **Expand window** — single row, no scroll buttons; widening
+      the window is the only way to see hidden tabs.
+    """
     from PySide6.QtGui import QAction, QActionGroup
     from PySide6.QtWidgets import QMenu
 
-    menu = QMenu(win)
+    from .wrapping_tab_bar import WrappingTabBar
 
+    bar = tabs.tabBar()
+    is_wrapping_bar = isinstance(bar, WrappingTabBar)
+
+    menu = QMenu(win)
     group = QActionGroup(menu)
     group.setExclusive(True)
 
+    if is_wrapping_bar:
+        act_rows = QAction("Wrap onto multiple rows", menu)
+        act_rows.setCheckable(True)
+        act_rows.setChecked(bar.wrap_enabled())
+        group.addAction(act_rows)
+        menu.addAction(act_rows)
+    else:
+        act_rows = None
+
     act_scroll = QAction("Scroll arrows", menu)
     act_scroll.setCheckable(True)
-    act_scroll.setChecked(tabs.usesScrollButtons())
+    act_scroll.setChecked(
+        (not is_wrapping_bar or not bar.wrap_enabled())
+        and tabs.usesScrollButtons()
+    )
     group.addAction(act_scroll)
     menu.addAction(act_scroll)
 
-    act_wrap = QAction("Expand window", menu)
-    act_wrap.setCheckable(True)
-    act_wrap.setChecked(
-        not tabs.usesScrollButtons()
-        and tabs.tabBar().documentMode()
+    act_expand = QAction("Expand window", menu)
+    act_expand.setCheckable(True)
+    act_expand.setChecked(
+        (not is_wrapping_bar or not bar.wrap_enabled())
+        and not tabs.usesScrollButtons()
+        and bar.documentMode()
     )
-    group.addAction(act_wrap)
-    menu.addAction(act_wrap)
+    group.addAction(act_expand)
+    menu.addAction(act_expand)
 
-    chosen = menu.exec(tabs.tabBar().mapToGlobal(pos))
-    if chosen is act_scroll:
-        tabs.setUsesScrollButtons(True)
-        tabs.tabBar().setDocumentMode(False)
-    elif chosen is act_wrap:
+    chosen = menu.exec(bar.mapToGlobal(pos))
+    if chosen is act_rows:
+        if is_wrapping_bar:
+            bar.set_wrap(True)
         tabs.setUsesScrollButtons(False)
-        tabs.tabBar().setDocumentMode(True)
+        bar.setDocumentMode(False)
+    elif chosen is act_scroll:
+        if is_wrapping_bar:
+            bar.set_wrap(False)
+        tabs.setUsesScrollButtons(True)
+        bar.setDocumentMode(False)
+    elif chosen is act_expand:
+        if is_wrapping_bar:
+            bar.set_wrap(False)
+        tabs.setUsesScrollButtons(False)
+        bar.setDocumentMode(True)
 
 
 def _collect_leaves(nodes: list[TreeNode]) -> list[TreeNode]:
