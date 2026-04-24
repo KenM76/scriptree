@@ -20,13 +20,16 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -123,14 +126,86 @@ class NumberWidget(ParamWidget):
 
 
 class CheckboxWidget(ParamWidget):
+    """Checkbox with a word-wrapped description to its right.
+
+    QCheckBox's built-in text label doesn't wrap — long descriptions
+    get clipped off the right edge of the row. This widget splits the
+    checkbox and its text into two widgets: a bare ``QCheckBox`` (no
+    text) plus a ``QLabel`` with ``setWordWrap(True)`` that flows onto
+    additional lines as needed.
+
+    Right-click anywhere on the widget to toggle wrapping off (or back
+    on) — wrap is on by default.
+    """
+
     def __init__(self, param: ParamDef) -> None:
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._box = QCheckBox(param.description or param.label)
+        layout.setSpacing(4)
+        self._box = QCheckBox()
         self._box.setChecked(bool(param.default))
         self._box.toggled.connect(self.valueChanged.emit)
-        layout.addWidget(self._box)
+        layout.addWidget(self._box, alignment=Qt.AlignmentFlag.AlignTop)
+
+        self._desc_label = QLabel(param.description or param.label)
+        self._desc_label.setWordWrap(True)
+        # Clicking the label toggles the checkbox — matches native
+        # QCheckBox behavior where the whole "checkbox + text" area
+        # is clickable.
+        self._desc_label.mousePressEvent = self._on_label_mouse_press
+        self._desc_label.setSizePolicy(
+            self._desc_label.sizePolicy().horizontalPolicy(),
+            self._desc_label.sizePolicy().verticalPolicy(),
+        )
+        layout.addWidget(self._desc_label, stretch=1)
+
+        # Right-click anywhere on this widget → "Word wrap" toggle.
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        self._desc_label.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self._desc_label.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(
+                self._desc_label.mapTo(self, pos)
+            )
+        )
+
+    def _on_label_mouse_press(self, ev) -> None:
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self._box.toggle()
+        # Defer to default for right-click (context menu).
+        QLabel.mousePressEvent(self._desc_label, ev)
+
+    def _show_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        wrap_act = QAction("Word wrap", menu)
+        wrap_act.setCheckable(True)
+        wrap_act.setChecked(self._desc_label.wordWrap())
+        wrap_act.toggled.connect(self.set_word_wrap)
+        menu.addAction(wrap_act)
+        menu.exec(self.mapToGlobal(pos))
+
+    def set_word_wrap(self, on: bool) -> None:
+        """Toggle word-wrap on the description label.
+
+        Public API so a batch-toggle from the tab-bar right-click menu
+        can flip every checkbox in the tab at once. Also walks up to
+        the enclosing ``ReorderableParamForm`` (a QListWidget) and
+        asks it to re-measure every row — without that the
+        QListWidgetItem's cached sizeHint stays at the old height and
+        the newly-wrapped text is clipped.
+        """
+        self._desc_label.setWordWrap(on)
+        self._desc_label.updateGeometry()
+        self.updateGeometry()
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "relayout_rows"):
+                parent.relayout_rows()
+                break
+            parent = parent.parent()
 
     def get_value(self) -> bool:
         return self._box.isChecked()

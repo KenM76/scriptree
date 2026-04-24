@@ -172,6 +172,17 @@ class ReorderableParamForm(QListWidget):
         resize makes the rows shrink with the viewport.
         """
         super().resizeEvent(event)
+        self.relayout_rows()
+
+    def relayout_rows(self) -> None:
+        """Re-measure every row at the current viewport width.
+
+        Public so widgets inside the rows (e.g. ``CheckboxWidget``
+        when its user toggles word wrap via the right-click menu) can
+        ask the list to recompute row heights. Without this, the
+        QListWidgetItem's cached sizeHint stays at the old height and
+        newly-wrapped text gets clipped.
+        """
         vp_w = self.viewport().width()
         for i in range(self.count()):
             item = self.item(i)
@@ -1233,6 +1244,11 @@ class ToolRunnerView(QWidget):
                 if current_tab_widget is None:
                     current_tab_widget = QTabWidget()
                     self._section_tab_widgets.append(current_tab_widget)
+                    # Right-click on the tab bar (or anywhere on the
+                    # tab widget itself) → "Word wrap descriptions"
+                    # batch-toggle for every CheckboxWidget nested
+                    # inside this tab widget's pages.
+                    self._install_tab_context_menu(current_tab_widget)
                 scroll = QScrollArea()
                 scroll.setWidgetResizable(True)
                 scroll.setWidget(form)
@@ -1259,6 +1275,47 @@ class ToolRunnerView(QWidget):
 
         # Flush any trailing tab widget.
         _flush_tab_widget()
+
+    def _install_tab_context_menu(self, tab_widget: QTabWidget) -> None:
+        """Wire a right-click "Word wrap descriptions" batch-toggle
+        onto ``tab_widget``'s tab bar.
+
+        The toggle walks every ``CheckboxWidget`` descendant of this
+        tab widget (across all pages, not just the currently visible
+        one — QTabWidget keeps inactive pages alive so they pick up
+        the new state the next time they're shown) and calls
+        ``set_word_wrap`` on each. Default state is reported from the
+        first checkbox found, so the menu's check mark reflects the
+        current majority setting.
+        """
+        from .widgets.param_widgets import CheckboxWidget
+
+        tab_bar = tab_widget.tabBar()
+        tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+        def _show_menu(pos):
+            from PySide6.QtGui import QAction
+            from PySide6.QtWidgets import QMenu
+
+            # Sample the current wrap state from the first checkbox we
+            # find so the menu accurately reflects reality.
+            boxes = tab_widget.findChildren(CheckboxWidget)
+            current = boxes[0]._desc_label.wordWrap() if boxes else True
+
+            menu = QMenu(tab_bar)
+            act = QAction("Word wrap descriptions", menu)
+            act.setCheckable(True)
+            act.setChecked(current)
+
+            def _toggle(on: bool) -> None:
+                for box in boxes:
+                    box.set_word_wrap(on)
+
+            act.toggled.connect(_toggle)
+            menu.addAction(act)
+            menu.exec(tab_bar.mapToGlobal(pos))
+
+        tab_bar.customContextMenuRequested.connect(_show_menu)
 
     def _on_section_toggled(
         self, section_name: str, expanded: bool, form: QWidget
