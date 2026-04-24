@@ -252,9 +252,19 @@ class MainWindow(QMainWindow):
 
         m_file.addSeparator()
 
-        # Recent files submenu.
-        self._recent_menu = QMenu("&Recent files", self)
-        m_file.addMenu(self._recent_menu)
+        # Recent files live directly on the File menu as two separate
+        # nested submenus (not under a "Recent files" parent).
+        # _rebuild_recent_menu populates them and installs a separator
+        # + "Clear recent files" item after them.
+        self._m_file = m_file
+        self._recent_tools_menu = QMenu("Recent .scriptree", self)
+        self._recent_trees_menu = QMenu("Recent .scriptreetree", self)
+        m_file.addMenu(self._recent_tools_menu)
+        m_file.addMenu(self._recent_trees_menu)
+        self._recent_sep_before_exit = m_file.addSeparator()
+        self._act_clear_recent = QAction("Clear recent files", self)
+        self._act_clear_recent.triggered.connect(self._clear_recent_files)
+        m_file.addAction(self._act_clear_recent)
         self._rebuild_recent_menu()
 
         m_file.addSeparator()
@@ -368,9 +378,13 @@ class MainWindow(QMainWindow):
         self._rebuild_recent_menu()
 
     def _rebuild_recent_menu(self) -> None:
-        self._recent_menu.clear()
+        """Refill the two direct-on-File Recent submenus.
 
+        ``Clear recent files`` is a top-level File action and is
+        enabled only when at least one recent entry exists.
+        """
         def _populate(sub: QMenu, paths: list[str]) -> None:
+            sub.clear()
             if not paths:
                 act = sub.addAction("(none)")
                 act.setEnabled(False)
@@ -382,15 +396,11 @@ class MainWindow(QMainWindow):
                     lambda checked=False, q=p: self._open_recent(q)
                 )
 
-        tools_menu = self._recent_menu.addMenu("Recent .scriptree")
-        _populate(tools_menu, self._recent_tools)
-
-        trees_menu = self._recent_menu.addMenu("Recent .scriptreetree")
-        _populate(trees_menu, self._recent_trees)
-
-        self._recent_menu.addSeparator()
-        act_clear = self._recent_menu.addAction("Clear recent files")
-        act_clear.triggered.connect(self._clear_recent_files)
+        _populate(self._recent_tools_menu, self._recent_tools)
+        _populate(self._recent_trees_menu, self._recent_trees)
+        self._act_clear_recent.setEnabled(
+            bool(self._recent_tools) or bool(self._recent_trees)
+        )
 
     def open_file(self, path: str) -> None:
         """Programmatically open a file (used by CLI and auto-open)."""
