@@ -95,6 +95,15 @@ class ParamDef:
     # widget returns to ``default``). Useful for passwords, tokens,
     # and other sensitive or scratch values.
     no_persist: bool = False
+    # When True, the string-passthrough auto-split rule does NOT
+    # apply to this parameter — its value always emits as a single
+    # argv token, even when whitespace is present and the placeholder
+    # fills the whole template token. Only meaningful for
+    # ``ParamType.STRING`` params; ignored otherwise. Use this for a
+    # string field that genuinely holds one logical value with spaces
+    # (a sentence, a quoted name, etc.) and you don't want it broken
+    # apart at emit time.
+    no_split: bool = False
 
     def label_for_choice(self, value: str) -> str:
         """Return the descriptive label for a choice value, or the value itself.

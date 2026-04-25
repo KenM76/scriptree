@@ -304,6 +304,20 @@ class TestStringPassthroughAutoSplit:
             "/usr/bin/echo", "--flag value with spaces",
         ]
 
+    def test_no_split_flag_disables_auto_split(self) -> None:
+        # Per-param opt-out: even when every other auto-split condition
+        # holds, no_split=True forces single-token semantics.
+        tool = _tool(
+            ["{flags}"],
+            [ParamDef(
+                id="flags", type=ParamType.STRING, no_split=True,
+            )],
+        )
+        cmd = resolve(tool, {"flags": "--include foo --include bar"})
+        assert cmd.argv == [
+            "/usr/bin/echo", "--include foo --include bar",
+        ]
+
     def test_unclosed_quote_falls_back_to_single_token(self) -> None:
         # If shlex can't parse the value (unclosed quote), don't crash
         # — emit the raw string as one argv token. The live preview

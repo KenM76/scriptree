@@ -76,6 +76,28 @@ class TestToolRoundTrip:
         assert restored.source.mode == "argparse"
         assert restored.source.help_text_cached == "usage: foo"
 
+    def test_no_split_round_trip(self) -> None:
+        """The per-param no_split flag survives serialization."""
+        from scriptree.core.model import ParamDef, ParamType, ToolDef
+
+        tool = ToolDef(
+            name="t",
+            executable="t.exe",
+            params=[
+                ParamDef(id="a", type=ParamType.STRING, no_split=False),
+                ParamDef(id="b", type=ParamType.STRING, no_split=True),
+            ],
+        )
+        d = tool_to_dict(tool)
+        # Default-False is omitted from the on-disk form (matches the
+        # convention used for other boolean flags like required /
+        # no_persist) — only True writes a key.
+        assert "no_split" not in d["params"][0]
+        assert d["params"][1]["no_split"] is True
+        restored = tool_from_dict(d)
+        assert restored.params[0].no_split is False
+        assert restored.params[1].no_split is True
+
 
 class TestTreeRoundTrip:
     def _sample_tree(self) -> TreeDef:

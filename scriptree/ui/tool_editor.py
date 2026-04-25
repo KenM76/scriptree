@@ -282,6 +282,21 @@ class ToolEditorView(QWidget):
         self._prop_no_persist.toggled.connect(
             self._on_prop_no_persist_changed
         )
+        self._prop_no_split = QCheckBox()
+        self._prop_no_split.setToolTip(
+            "Opt out of the auto-split rule for this parameter. By "
+            "default, when a string param's placeholder is the entire "
+            "template token (e.g. argument_template=[\"{flags}\"]) "
+            "and the value contains whitespace, ScripTree splits the "
+            "value into multiple argv tokens — perfect for typing "
+            "repeatable flags. Check this box to disable that for "
+            "this param: the value will always emit as a single argv "
+            "token, even with embedded spaces. Only meaningful for "
+            "string-typed params; ignored otherwise."
+        )
+        self._prop_no_split.toggled.connect(
+            self._on_prop_no_split_changed
+        )
         self._prop_default = QLineEdit()
         self._prop_default.textChanged.connect(self._on_prop_default_changed)
         self._prop_choices = QLineEdit()
@@ -316,6 +331,7 @@ class ToolEditorView(QWidget):
         self._prop_layout.addRow("Widget:", self._prop_widget)
         self._prop_layout.addRow("Required:", self._prop_required)
         self._prop_layout.addRow("Do not save value:", self._prop_no_persist)
+        self._prop_layout.addRow("Do not auto-split:", self._prop_no_split)
         self._prop_layout.addRow("Default:", self._prop_default)
         self._prop_layout.addRow("Choices:", self._prop_choices)
         self._prop_layout.addRow("File filter:", self._prop_filter)
@@ -611,6 +627,7 @@ class ToolEditorView(QWidget):
             self._prop_type.setCurrentIndex(0)
             self._prop_required.setChecked(False)
             self._prop_no_persist.setChecked(False)
+            self._prop_no_split.setChecked(False)
             self._prop_default.setText("")
             self._prop_choices.setText("")
             self._prop_filter.setText("")
@@ -635,6 +652,7 @@ class ToolEditorView(QWidget):
                 self._prop_widget.setCurrentIndex(widget_idx)
             self._prop_required.setChecked(param.required)
             self._prop_no_persist.setChecked(param.no_persist)
+            self._prop_no_split.setChecked(param.no_split)
             self._prop_default.setText(
                 "" if param.default is None else str(param.default)
             )
@@ -737,6 +755,14 @@ class ToolEditorView(QWidget):
         param = self._current_param()
         if param:
             param.no_persist = bool(checked)
+            self._update_preview()
+
+    def _on_prop_no_split_changed(self, checked: bool) -> None:
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param:
+            param.no_split = bool(checked)
             self._update_preview()
 
     def _on_prop_default_changed(self, text: str) -> None:

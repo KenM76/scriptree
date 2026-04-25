@@ -107,6 +107,18 @@ The right pane edits whichever parameter is currently selected:
   `checkbox`, `dropdown`, `file_open`, `file_save`, `folder`,
   `enum_radio`.
 - **Required** — if checked, Run fails until this field has a value.
+- **Do not save value** — the value is never persisted into the
+  configuration sidecar (useful for passwords, tokens, scratch values).
+  The user's most recent entry is kept in the form during the session
+  but is lost when the tool is reloaded.
+- **Do not auto-split** — opt out of the string-passthrough auto-split
+  rule. By default, when a string param's `{id}` placeholder is the
+  entire template token and its value contains whitespace, ScripTree
+  splits the value into multiple argv tokens. Check this box to keep
+  the value atomic (single argv token) even with embedded spaces —
+  use it for a string field that genuinely holds one logical value
+  with whitespace, like a sentence or a path. Only meaningful for
+  string-typed params; ignored otherwise.
 - **Default** — the value the widget is initialized with.
 - **Choices** — for enum / multiselect, a comma-separated list. Each entry
   is either a bare value or `value=label`:

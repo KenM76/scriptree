@@ -198,6 +198,8 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["section"] = p.section
     if p.no_persist:
         d["no_persist"] = True
+    if p.no_split:
+        d["no_split"] = True
     return d
 
 
@@ -250,6 +252,7 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         file_filter=d.get("file_filter", ""),
         section=d.get("section", ""),
         no_persist=bool(d.get("no_persist", False)),
+        no_split=bool(d.get("no_split", False)),
     )
 
 

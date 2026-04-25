@@ -339,7 +339,14 @@ def _is_string_passthrough(
     param = param_map.get(name)
     if param is None:
         return False
-    return param.type is ParamType.STRING
+    if param.type is not ParamType.STRING:
+        return False
+    # Per-param opt-out (added in v0.1.5): when no_split=True the
+    # author has explicitly chosen single-token semantics, even
+    # though every other auto-split condition holds.
+    if getattr(param, "no_split", False):
+        return False
+    return True
 
 
 def _argv_split(value: str) -> list[str]:
