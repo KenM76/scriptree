@@ -326,7 +326,7 @@ deployed (secure default).
 
 ## Settings security
 
-ScripTree stores all settings in an INI file (`ScripTree/scriptree.ini`)
+ScripTree stores all settings in an INI file (`scriptree.ini`)
 inside the application folder. **No registry access is used.** This
 means:
 

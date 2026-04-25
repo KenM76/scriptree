@@ -338,10 +338,42 @@ _check_python_version()
 _inject_vendored_libs()
 _check_dependencies()
 
-# Add the ScripTree subdirectory (which contains the ``scriptree`` package)
-# to the Python path so imports work without installing.
+# The ``scriptree`` package now lives directly at the repo root, so
+# adding the launcher's own directory to ``sys.path`` is enough for
+# imports to resolve. The discovery walk below is defensive — it
+# survives layouts where the source zip wrapped everything in an
+# extra ``<repo>-<branch>/`` folder, or where a Windows zip
+# extractor normalized the inner package's casing to ``ScripTree``
+# instead of ``scriptree``.
+def _find_package_dir(start: Path) -> Path:
+    """Return the directory that should go on sys.path so
+    ``import scriptree.main`` resolves.
+
+    Identifies the package by the presence of a ``main.py`` inside
+    any folder named ``scriptree`` (case-insensitive). Searches
+    ``start`` itself and one level of subdirectories.
+    """
+    needle = "scriptree"
+    candidates: list[Path] = [start]
+    if start.is_dir():
+        candidates.extend(p for p in start.iterdir() if p.is_dir())
+    for parent in candidates:
+        if not parent.is_dir():
+            continue
+        for entry in parent.iterdir():
+            if (
+                entry.is_dir()
+                and entry.name.lower() == needle
+                and (entry / "main.py").is_file()
+            ):
+                return parent
+    # Last-resort fallback to the launcher's own folder.
+    return start
+
+
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE / "ScripTree"))
+_PKG_DIR = _find_package_dir(_HERE)
+sys.path.insert(0, str(_PKG_DIR))
 
 from scriptree.main import main  # noqa: E402
 

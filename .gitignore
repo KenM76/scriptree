@@ -35,6 +35,13 @@ out.txt
 # ScripTree runtime
 scriptree.ini
 
+# Dev-only folders that previously lived under ScripTree/. After the
+# repo flatten in v0.1.2 they sit at the root; keep them gitignored
+# so dev artifacts don't sneak into the source tree.
+docs/
+scripts/
+user_configs/
+
 # User tools (local, not shared) — ignore everything under ScripTreeApps/
 # except the canonical management tools + audit script that ship with
 # ScripTree itself. (Note: must use ScripTreeApps/* + negations, not

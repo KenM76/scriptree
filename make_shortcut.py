@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ICON_DIR = HERE / "ScripTree" / "scriptree" / "resources"
+ICON_DIR = HERE / "scriptree" / "resources"
 
 
 def _pick_icon() -> Path | None:

@@ -89,7 +89,7 @@ python lib/update_lib.py --apps-only         # just the tools
 python ScripTreeApps/audit_vendored.py       # writes VENDORED_DEPS.md audit
 ```
 
-The `ScripTreeApps/ScripTreeManagement/ScripTreeManagement.scriptreetree` wraps all four management scripts (`update_lib.py`, `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`) as clickable GUI tools inside ScripTree itself. See [`ScripTree/help/vendored_dependencies.md`](ScripTree/help/vendored_dependencies.md) for the full explanation.
+The `ScripTreeApps/ScripTreeManagement/ScripTreeManagement.scriptreetree` wraps all four management scripts (`update_lib.py`, `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`) as clickable GUI tools inside ScripTree itself. See [`help/vendored_dependencies.md`](help/vendored_dependencies.md) for the full explanation.
 
 ## Building a portable distribution
 
@@ -105,10 +105,10 @@ python make_shortcut.py
 
 ## Documentation
 
-- **[Quickstart](ScripTree/help/quickstart.md)** — get running in 60 seconds
-- **[Features](ScripTree/help/features.md)** — top 10 and top 20 feature lists
-- **[Security Guide](ScripTree/help/security.md)** — permissions, sanitization, deployment
-- **[Full Help Index](ScripTree/help/README.md)** — all documentation
+- **[Quickstart](help/quickstart.md)** — get running in 60 seconds
+- **[Features](help/features.md)** — top 10 and top 20 feature lists
+- **[Security Guide](help/security.md)** — permissions, sanitization, deployment
+- **[Full Help Index](help/README.md)** — all documentation
 
 ## For IT Administrators
 
@@ -119,7 +119,7 @@ ScripTree is designed for corporate deployment:
 3. Grant write on specific files per AD group
 4. Set `.scriptree` files read-only — users can run but not edit
 
-No per-user config, no registry, no cloud, no agents. See the [Security Guide](ScripTree/help/security.md).
+No per-user config, no registry, no cloud, no agents. See the [Security Guide](help/security.md).
 
 ## Contributors
 
