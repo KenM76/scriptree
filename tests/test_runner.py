@@ -188,6 +188,134 @@ class TestTokenGroups:
             resolve(tool, {"system": ""})
 
 
+class TestStringPassthroughAutoSplit:
+    """When a template token is exactly ``"{id}"`` and the referenced
+    param is ``ParamType.STRING``, the substituted value is treated as
+    argv text — multi-token strings expand into multiple argv elements.
+
+    This is the "repeatable-flag" pattern: the user types something
+    like ``--include foo --include bar`` into a single text field and
+    expects four argv tokens, not one big concatenated string.
+
+    Other contexts (embedded placeholders, token groups, conditional
+    flags, non-string param types) keep their existing single-token
+    semantics.
+    """
+
+    def test_multi_token_string_splits(self) -> None:
+        tool = _tool(
+            ["{flags}"],
+            [ParamDef(id="flags", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"flags": "--include foo --include bar"})
+        assert cmd.argv == [
+            "/usr/bin/echo",
+            "--include", "foo", "--include", "bar",
+        ]
+
+    def test_quoted_phrase_preserved_as_single_token(self) -> None:
+        # shlex / CommandLineToArgvW respect quotes — a quoted phrase
+        # stays as one argv token even though it contains whitespace.
+        tool = _tool(
+            ["{flags}"],
+            [ParamDef(id="flags", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"flags": '--name "John Doe" --age 30'})
+        assert cmd.argv == [
+            "/usr/bin/echo",
+            "--name", "John Doe", "--age", "30",
+        ]
+
+    def test_single_word_no_split(self) -> None:
+        tool = _tool(
+            ["{x}"],
+            [ParamDef(id="x", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"x": "hello"})
+        assert cmd.argv == ["/usr/bin/echo", "hello"]
+
+    def test_empty_string_drops_token(self) -> None:
+        tool = _tool(
+            ["{x}", "--end"],
+            [ParamDef(id="x", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"x": ""})
+        assert cmd.argv == ["/usr/bin/echo", "--end"]
+
+    def test_path_param_with_spaces_no_split(self) -> None:
+        # Path params keep single-token semantics — paths with spaces
+        # are atomic, even when the placeholder fills the whole token.
+        tool = _tool(
+            ["{p}"],
+            [ParamDef(
+                id="p", type=ParamType.PATH, widget=Widget.FILE_OPEN,
+            )],
+        )
+        cmd = resolve(tool, {"p": r"C:\Program Files\Foo"})
+        assert cmd.argv == ["/usr/bin/echo", r"C:\Program Files\Foo"]
+
+    def test_embedded_placeholder_no_split(self) -> None:
+        # Embedded placeholders (``--out={x}``) keep current behavior:
+        # the value is concatenated into the token, no splitting.
+        tool = _tool(
+            ["--out={x}"],
+            [ParamDef(id="x", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"x": "a b c"})
+        assert cmd.argv == ["/usr/bin/echo", "--out=a b c"]
+
+    def test_token_group_no_split(self) -> None:
+        # Inside a token group, a multi-token string occupies one slot
+        # of the group (group emits all-or-nothing). The whole value
+        # stays as one argv token alongside the group's literal tokens.
+        tool = _tool(
+            [["--include", "{x}"]],
+            [ParamDef(id="x", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"x": "a b c"})
+        assert cmd.argv == ["/usr/bin/echo", "--include", "a b c"]
+
+    def test_bool_param_no_split(self) -> None:
+        # Bool params emit "true"/"false" — never split.
+        tool = _tool(
+            ["{b}"],
+            [ParamDef(
+                id="b", type=ParamType.BOOL, widget=Widget.CHECKBOX,
+            )],
+        )
+        cmd = resolve(tool, {"b": True})
+        assert cmd.argv == ["/usr/bin/echo", "true"]
+
+    def test_conditional_flag_no_split(self) -> None:
+        # Conditional placeholders (``{id?--flag}``) take the bool's
+        # truthiness and emit a literal flag — splitting doesn't apply
+        # because the emitted text is the literal flag, not the value.
+        tool = _tool(
+            ["{enabled?--flag value with spaces}"],
+            [ParamDef(
+                id="enabled", type=ParamType.BOOL, widget=Widget.CHECKBOX,
+            )],
+        )
+        cmd = resolve(tool, {"enabled": True})
+        # Conditional flag emits the entire ``--flag value with spaces``
+        # text as one argv token. (No auto-split — conditional path
+        # is exempt by design.)
+        assert cmd.argv == [
+            "/usr/bin/echo", "--flag value with spaces",
+        ]
+
+    def test_unclosed_quote_falls_back_to_single_token(self) -> None:
+        # If shlex can't parse the value (unclosed quote), don't crash
+        # — emit the raw string as one argv token. The live preview
+        # would already flag the issue separately.
+        tool = _tool(
+            ["{x}"],
+            [ParamDef(id="x", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"x": '--name "unclosed'})
+        assert cmd.argv == ["/usr/bin/echo", '--name "unclosed']
+
+
 class TestResolveCwd:
     def test_explicit_working_dir(self) -> None:
         tool = _tool([], [])

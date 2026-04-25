@@ -188,7 +188,18 @@ def resolve(
             emitted = _resolve_token(entry, param_map, values)
             if emitted is None:
                 continue
-            argv.append(emitted)
+            # Auto-split: when a template token is exactly "{id}" and
+            # the referenced param is a STRING, treat its value as
+            # argv text. This makes the "repeatable-flag" pattern
+            # (user types "--include foo --include bar" into a single
+            # field) work as users intuitively expect — emit four argv
+            # tokens, not one big concatenated string. Quoted phrases
+            # are preserved as single tokens (shlex respects them).
+            # See help/LLM/argument_template.md for the full rule.
+            if _is_string_passthrough(entry, param_map):
+                argv.extend(_argv_split(emitted))
+            else:
+                argv.append(emitted)
 
     # working_directory: resolve against the .scriptree dir if relative.
     cwd_raw = tool.working_directory
@@ -301,6 +312,67 @@ def _is_truthy(val: Any) -> bool:
     if isinstance(val, str):
         return val.strip().lower() in ("true", "1", "yes", "on")
     return bool(val)
+
+
+def _is_string_passthrough(
+    entry: str, param_map: dict[str, ParamDef]
+) -> bool:
+    """Return True iff the template entry is exactly a single placeholder
+    `{id}` referring to a STRING param.
+
+    When this holds, the substituted value is interpreted as raw argv
+    text — multi-token strings split into multiple argv elements.
+    Embedded placeholders (``--out={path}``), conditional flags
+    (``{id?--flag}``), and non-string param types do NOT match and
+    keep the existing single-token semantics.
+    """
+    m = _PLACEHOLDER_RE.fullmatch(entry)
+    if m is None or m.group(2):
+        return False  # not a standalone placeholder, or it's conditional
+    name = m.group(1)
+    param = param_map.get(name)
+    if param is None:
+        return False
+    return param.type is ParamType.STRING
+
+
+def _argv_split(value: str) -> list[str]:
+    """Split a string into argv tokens the same way the live-cmd
+    reconcile path does.
+
+    On Windows, prefer ``CommandLineToArgvW`` (via
+    ``core.sanitize.split_command``) so backslashes in paths survive
+    correctly. On POSIX, ``shlex.split(value, posix=True)`` is the
+    standard tool. Either way, shlex/Win32 quote rules are honored
+    so a value like ``--name "John Doe"`` becomes two tokens, not
+    three.
+
+    If the value contains no whitespace, the result is just
+    ``[value]`` — no point invoking the splitter.
+    """
+    if not value or not any(ch.isspace() for ch in value):
+        return [value] if value else []
+    # Validate quote balance up front — same trick the live-cmd
+    # reconcile path uses (runner.reconcile, lines 776-782). shlex in
+    # non-POSIX mode raises ValueError on unclosed quotes; we treat
+    # that as "user is mid-typing, leave the value alone" so a
+    # half-typed string in the preview doesn't blow up the runner or
+    # silently mis-tokenize the rest of the value.
+    try:
+        list(shlex.shlex(value, posix=False, punctuation_chars=""))
+    except ValueError:
+        return [value]
+    import sys
+    if sys.platform == "win32":
+        try:
+            from .sanitize import split_command
+            return split_command(value)
+        except Exception:  # pragma: no cover — fall back to shlex
+            pass
+    try:
+        return shlex.split(value, posix=True)
+    except ValueError:
+        return [value]
 
 
 # --- subprocess execution -------------------------------------------------

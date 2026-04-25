@@ -54,8 +54,21 @@ disagree, the code wins — open an issue and fix the docs.
   **For flag + value pairs use a nested list** — writing
   `"--out {out}"` as a single string produces one argv token with
   a literal space, which almost every CLI rejects. Correct:
-  `["--out", "{out}"]`. See [argument_template.md](argument_template.md)
-  for the full grammar and common mistakes.
+  `["--out", "{out}"]`.
+
+  **Repeatable-flag pattern.** A bare `"{id}"` token whose param is a
+  `string` (any `line_edit`/`text` widget) gets *string-passthrough*
+  treatment — its value is shlex-tokenized into multiple argv elements.
+  This is how a user types `--include foo --include bar` into one
+  field and gets four argv tokens. The split honors quote rules so
+  `--name "John Doe"` produces three tokens, not four. Auto-split
+  fires only when the placeholder is the entire template token; it
+  does **not** apply to embedded placeholders (`"--out={x}"`), token
+  groups (`["--include", "{x}"]`), conditional flags
+  (`"{id?--flag}"`), or non-string param types.
+
+  See [argument_template.md](argument_template.md) for the full
+  grammar, the auto-split details, and common mistakes.
 - `params` — order matters; it's the form layout order within each
   section.
 - `sections` — may be omitted. If present, defines section ordering and

@@ -9,7 +9,9 @@ describes the grammar it implements.
 `argument_template` is a `list[Entry]` where each `Entry` is either:
 
 - **A string** — one literal or placeholder token, emitted as a single
-  argv element (never split on whitespace).
+  argv element. The exception is the *string-passthrough* rule
+  (see below): a bare `"{id}"` referring to a `ParamType.STRING`
+  param has its value tokenized like argv text.
 - **A list of strings** — a **token group**. The group emits together
   or is dropped together. Use a group whenever a flag and its value
   must appear or disappear as a unit.
@@ -72,6 +74,55 @@ names and fixed flags.
 Substituted with the string form of `values[param_id]`. If the value
 is empty (`""`, `None`, or missing), the token is **dropped entirely**
 — and if it's inside a group, the whole group drops.
+
+#### String-passthrough auto-split
+
+When **all** of the following hold, the substituted value is treated
+as raw argv text and split into multiple argv elements:
+
+1. The template entry is **exactly** `"{id}"` (the placeholder fills
+   the whole token — not embedded in a longer string like
+   `"--out={x}"` and not a conditional `{id?--flag}` form).
+2. The entry is a plain string, **not inside a token group** (lists
+   `["--include", "{id}"]` keep their single-token semantics).
+3. The referenced param's `type` is `ParamType.STRING`.
+4. The value contains whitespace.
+
+Splitting follows shlex / `CommandLineToArgvW` rules — quoted phrases
+are preserved as single tokens. So a `string` param holding
+`'--include foo --include bar'` placed at `["{flags}"]` produces:
+
+```python
+argv = ["mytool", "--include", "foo", "--include", "bar"]
+```
+
+…and `'--name "John Doe"'` produces:
+
+```python
+argv = ["mytool", "--name", "John Doe"]
+```
+
+This is the supported pattern for **repeatable flags** — the user types
+multiple flag occurrences into one text field. Use a `string` param
+(any `line_edit` / `text` widget) and place its placeholder as a bare
+`"{id}"` token.
+
+**What is NOT auto-split** (each keeps existing single-token semantics):
+
+- `path` / `bool` / `int` / `float` / `enum` params — only `STRING`.
+- Embedded placeholders: `"--out={x}"` stays one token even if `x`
+  contains spaces. (Quote the value if it has spaces, or use a token
+  group.)
+- Token groups: `["--include", "{x}"]` emits `["--include", "<x>"]`
+  with `<x>` as one argv token regardless of whitespace. (Use a bare
+  `"{x}"` instead of the group if you want auto-split.)
+- Conditional flags: `"{enabled?--flag value}"` emits the literal
+  `"--flag value"` as one argv token when `enabled` is truthy.
+
+If shlex can't parse the value (unclosed quote etc.), the runner
+falls back to emitting the raw string as a single argv token rather
+than raising — so a half-typed value in the live preview doesn't
+blow up the runner.
 
 ### 3. Conditional flag (bool)
 
