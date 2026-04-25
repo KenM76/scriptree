@@ -369,6 +369,17 @@ class TreeDef:
     nodes: list[TreeNode] = field(default_factory=list)
     # Custom menus for the tree — rendered in standalone mode's menu bar.
     menus: list[MenuItemDef] = field(default_factory=list)
+    # Standalone-mode tab arrangement:
+    #   "flat"  — flatten the tree to leaves; one tab per tool
+    #             (default; preserves pre-v0.1.9 behavior).
+    #   "tabs"  — folders become outer tabs, tools inside each folder
+    #             become inner tabs (nested QTabWidget). Top-level
+    #             leaves render alongside folder tabs as outer tabs;
+    #             nested folders recurse.
+    # Users can also flip this at runtime via the standalone window's
+    # tab-bar right-click menu — that's an in-session override and
+    # doesn't persist back to disk.
+    folder_layout: str = "flat"
     schema_version: int = SCHEMA_VERSION
 
 

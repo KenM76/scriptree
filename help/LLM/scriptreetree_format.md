@@ -11,7 +11,8 @@ nodes are named folders.
   "name": "string, required",
   "description": "string, optional",
   "nodes": [/* list[Node] */],
-  "menus": [/* list[MenuItemDef], optional — see scriptree_format.md */]
+  "menus": [/* list[MenuItemDef], optional — see scriptree_format.md */],
+  "folder_layout": "flat | tabs (optional, default 'flat')"
 }
 ```
 
@@ -78,8 +79,28 @@ shows the leaf with a red icon and a tooltip explaining the error.
 ## Standalone mode
 
 Use **View → Open in standalone window** (Ctrl+Shift+S) to pop a tree
-out of the IDE. Each leaf tool becomes a tab. Per-tool configurations
-are applied from the tree-level config sidecar
+out of the IDE. The runtime layout depends on `folder_layout`:
+
+- **`"flat"` (default)** — every leaf tool in the tree (depth-first)
+  becomes one tab in a single QTabWidget. Folders are flattened away.
+  Same behavior as pre-v0.1.9.
+- **`"tabs"`** — each top-level folder becomes an outer tab containing
+  a nested QTabWidget with one inner tab per tool. Top-level leaves
+  (tools that aren't inside any folder) sit alongside folder tabs at
+  the outer level. Nested folders recurse — folder inside folder
+  becomes a nested QTabWidget inside the outer folder's tab.
+
+Folder tabs are prefixed with 📁 to distinguish them from leaf tabs
+when both share the outer level. Both inner and outer tab bars use
+the wrapping tab implementation, so they flow onto multiple rows
+when the window is narrow.
+
+The user can also flip `folder_layout` at runtime via the standalone
+window's tab-bar right-click menu (**Folder layout → Flat** /
+**Folders as tabs (nested)**). The runtime toggle is in-session only;
+it doesn't write back to disk.
+
+Per-tool configurations are applied from the tree-level config sidecar
 (`<name>.scriptreetree.treeconfigs.json`), or from
 `leaf.configuration`, or from tool defaults if neither is set.
 
@@ -87,6 +108,12 @@ If a referenced configuration no longer exists in a tool's sidecar,
 ScripTree creates a reserved `safetree` config (all UI hidden, popup
 dialogs enabled). The name `safetree` is reserved and cannot be used
 by users.
+
+> **When generating a `.scriptreetree`** for a tree with 8+ tools or
+> meaningful folder structure, set `"folder_layout": "tabs"`. The
+> nested layout makes a 20-tool tree dramatically easier to navigate
+> than 20 sibling tabs in a single QTabWidget. For small trees
+> (≤7 tools) flat is usually clearer.
 
 ## Tree configuration sidecar
 

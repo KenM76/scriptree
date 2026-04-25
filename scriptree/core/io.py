@@ -266,6 +266,10 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
     }
     if tree.menus:
         d["menus"] = [_menu_item_to_dict(m) for m in tree.menus]
+    # Only emit folder_layout when it's the non-default ("tabs") so
+    # existing flat-mode trees stay byte-identical on save.
+    if tree.folder_layout and tree.folder_layout != "flat":
+        d["folder_layout"] = tree.folder_layout
     return d
 
 
@@ -275,6 +279,7 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         name=data["name"],
         nodes=[_node_from_dict(n) for n in data.get("nodes", [])],
         menus=_load_menus(data.get("menus")),
+        folder_layout=data.get("folder_layout", "flat"),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

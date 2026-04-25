@@ -152,3 +152,34 @@ class TestTreeRoundTrip:
         restored = tree_from_dict(d)
         assert restored.nodes[0].configuration == "standalone"
         assert restored.nodes[1].configuration is None
+
+    def test_folder_layout_default_omitted(self) -> None:
+        """folder_layout=='flat' (the default) is omitted from the
+        on-disk form so existing trees stay byte-identical on save."""
+        tree = self._sample_tree()
+        # Default value:
+        assert tree.folder_layout == "flat"
+        d = tree_to_dict(tree)
+        assert "folder_layout" not in d
+
+    def test_folder_layout_tabs_round_trips(self) -> None:
+        """folder_layout=='tabs' survives serialize/deserialize."""
+        tree = self._sample_tree()
+        tree.folder_layout = "tabs"
+        d = tree_to_dict(tree)
+        assert d["folder_layout"] == "tabs"
+        restored = tree_from_dict(d)
+        assert restored.folder_layout == "tabs"
+
+    def test_unknown_folder_layout_falls_back_to_flat(self) -> None:
+        """Loader is permissive — unknown values pass through, the
+        runtime branch falls back to 'flat' rendering. Keeps old
+        clients happy when newer ones write a not-yet-standardized
+        value."""
+        tree = tree_from_dict({
+            "schema_version": 2,
+            "name": "t",
+            "nodes": [],
+            "folder_layout": "horizontal_carousel",
+        })
+        assert tree.folder_layout == "horizontal_carousel"
