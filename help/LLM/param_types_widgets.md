@@ -112,6 +112,41 @@ whitespace around commas and `=`.
 > loader accepts that format for compatibility, but the canonical form
 > is two flat lists.
 
+#### `enum_radio` — radio buttons with optional "none"
+
+When the choice count is small (3–5) and visibility matters,
+`enum_radio` shows the options as a vertical stack of mutually-
+exclusive radio buttons instead of a dropdown. Same `choices` /
+`choice_labels` format; only the rendering differs.
+
+A **(none)** option that emits nothing is just an empty-string
+choice with a friendly label:
+
+```json
+{
+  "id": "verbosity",
+  "type": "enum",
+  "widget": "enum_radio",
+  "default": "",
+  "choices": ["", "-v", "-vv", "-vvv"],
+  "choice_labels": ["(none)", "Quiet", "Verbose", "Debug"]
+}
+```
+
+Selecting `(none)` makes `{verbosity}` substitute as `""`, which
+**drops the whole token** (or its enclosing token group). So the
+template `["{verbosity}", "file.txt"]` produces:
+
+| Selection | argv |
+|---|---|
+| `(none)` | `["tool", "file.txt"]` |
+| `Quiet`  | `["tool", "-v", "file.txt"]` |
+| `Debug`  | `["tool", "-vvv", "file.txt"]` |
+
+This is the same drop-on-empty rule that applies to every other
+substitution — no new mechanism. It just composes nicely with
+radio buttons.
+
 ### `text` with masking
 
 If the param's description or label matches (case-insensitive) any of

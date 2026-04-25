@@ -22,6 +22,7 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -32,7 +33,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -258,6 +261,77 @@ class DropdownWidget(ParamWidget):
             self._combo.setCurrentIndex(idx)
 
 
+class RadioWidget(ParamWidget):
+    """A vertical stack of mutually-exclusive radio buttons for an
+    ``enum`` param.
+
+    Same value semantics as ``DropdownWidget``: each button's user
+    data carries the raw ``ParamDef.choices`` value, the visible
+    label comes from ``param.label_for_choice(value)``, and
+    ``get_value()`` returns the raw value (never the label).
+
+    A choice with an empty value (``""``) acts as a "none" option —
+    selecting it makes the placeholder substitute as ``""`` which
+    drops the whole template token (or its enclosing token group).
+    The label is whatever the tool author put in
+    ``choice_labels``; ``"(none)"`` is a sensible convention.
+    """
+
+    def __init__(self, param: ParamDef) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # QButtonGroup gives mutual exclusion + a single signal for
+        # "the selection changed" regardless of which button moved.
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: list[QRadioButton] = []
+
+        for value in param.choices:
+            btn = QRadioButton(param.label_for_choice(value))
+            btn.setProperty("value", value)
+            self._group.addButton(btn)
+            layout.addWidget(btn)
+            self._buttons.append(btn)
+
+        # Pick the default. If the supplied default isn't one of the
+        # choices, leave nothing selected (matches Qt's QComboBox
+        # behavior when default is missing).
+        if param.default in param.choices:
+            for btn in self._buttons:
+                if btn.property("value") == param.default:
+                    btn.setChecked(True)
+                    break
+
+        self._group.buttonClicked.connect(
+            lambda _btn: self.valueChanged.emit(self.get_value())
+        )
+
+    def get_value(self) -> str:
+        checked = self._group.checkedButton()
+        if checked is None:
+            return ""
+        v = checked.property("value")
+        return "" if v is None else str(v)
+
+    def set_value(self, value: Any) -> None:
+        if value is None:
+            # Clear selection — uncheck everything. Need to flip
+            # exclusive off first, since QButtonGroup with
+            # setExclusive=True doesn't allow zero checked.
+            self._group.setExclusive(False)
+            for btn in self._buttons:
+                btn.setChecked(False)
+            self._group.setExclusive(True)
+            return
+        for btn in self._buttons:
+            if btn.property("value") == value or str(btn.property("value")) == str(value):
+                btn.setChecked(True)
+                return
+
+
 # --- file / folder pickers -------------------------------------------------
 
 class _PathPickerBase(ParamWidget):
@@ -334,7 +408,7 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.NUMBER: NumberWidget,
         WidgetKind.CHECKBOX: CheckboxWidget,
         WidgetKind.DROPDOWN: DropdownWidget,
-        WidgetKind.ENUM_RADIO: DropdownWidget,  # v1: render radio as dropdown
+        WidgetKind.ENUM_RADIO: RadioWidget,
         WidgetKind.FILE_OPEN: FileOpenWidget,
         WidgetKind.FILE_SAVE: FileSaveWidget,
         WidgetKind.FOLDER: FolderWidget,
