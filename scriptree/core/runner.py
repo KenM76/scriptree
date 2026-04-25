@@ -114,6 +114,12 @@ def resolve_tool_path(
     """
     if not path:
         return path
+    # Expand environment variables first — supports both %WIN% and
+    # $UNIX style. This lets tools reference SCRIPTREE_HOME,
+    # SCRIPTREE_LIB, SCRIPTREE_LIB_PYTHON, etc. in their executable /
+    # working_directory / path_prepend fields without hard-coding the
+    # ScripTree install location.
+    path = os.path.expandvars(path)
     p = Path(path)
     if p.is_absolute():
         return path

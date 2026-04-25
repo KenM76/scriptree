@@ -1,5 +1,57 @@
 # Environment variables and PATH
 
+## Built-in `SCRIPTREE_*` variables
+
+When ScripTree starts, it publishes these variables on its own
+environment. They're inherited by every tool subprocess and are
+also available as `%VAR%` / `$VAR` references inside tool
+`.scriptree` fields (see "Path expansion" below):
+
+| Variable | Value | Always set? |
+|---|---|---|
+| `SCRIPTREE_HOME` | The launcher directory (the folder holding `run_scriptree.py`) | Yes |
+| `SCRIPTREE_LIB` | `<HOME>/lib` | Only if `lib/` exists |
+| `SCRIPTREE_LIB_PYPI` | `<HOME>/lib/pypi` (vendored Python packages) | Only if `lib/pypi/` exists |
+| `SCRIPTREE_LIB_PYTHON` | `<HOME>/lib/python` (portable Python install) | Only if `lib/python/` exists |
+| `SCRIPTREE_APPS` | `<HOME>/ScripTreeApps` | Only if `ScripTreeApps/` exists |
+
+Recommended use in a tool that ships its own Python helper:
+
+```json
+{
+  "executable": "%SCRIPTREE_LIB_PYTHON%/python.exe",
+  "argument_template": ["./my_helper.py", "{input}"],
+  "env": {
+    "PYTHONPATH": "%SCRIPTREE_LIB_PYPI%"
+  }
+}
+```
+
+Move ScripTree to a different folder and the same `.scriptree` file
+keeps working — no path edits required. (See
+[vendored_dependencies.md](vendored_dependencies.md) for the per-tool
+`lib/` pattern that complements this.)
+
+### Path expansion
+
+`%VAR%` (Windows-style) and `$VAR` (Unix-style) references are expanded
+in:
+
+- `executable`
+- `working_directory`
+- `path_prepend` entries (tool-level, config-level, and global)
+
+Both syntaxes work on every OS — the expansion is done by Python's
+`os.path.expandvars`, which understands both forms regardless of host.
+Unknown variables are left as the literal `%VAR%` text so the failure
+is visible at run time instead of silently disappearing.
+
+Argv tokens themselves are NOT auto-expanded — if you need an env var
+in a positional argument, set it via `tool.env` and let the child
+process expand it (or hard-code it into the template).
+
+## User-defined env
+
 ScripTree lets you set environment variables and PATH prepends on three
 levels:
 

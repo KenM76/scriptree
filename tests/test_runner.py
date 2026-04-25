@@ -316,6 +316,45 @@ class TestStringPassthroughAutoSplit:
         assert cmd.argv == ["/usr/bin/echo", '--name "unclosed']
 
 
+class TestEnvVarExpansion:
+    """``resolve_tool_path`` expands ``%VAR%`` / ``$VAR`` references in
+    paths so tools can reference SCRIPTREE_HOME etc. without hard-coding
+    absolute paths.
+    """
+
+    def test_executable_expands_env_var(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # Create a fake "python" inside the env-var location so the
+        # exists-check in resolve_tool_path returns the resolved path.
+        target = tmp_path / "fake-python.exe"
+        target.write_text("fake")
+        monkeypatch.setenv("FAKE_LIB", str(tmp_path))
+        tool = ToolDef(
+            name="t",
+            executable="%FAKE_LIB%/fake-python.exe",
+            argument_template=[],
+        )
+        cmd = resolve(tool, {})
+        # When env var expands to an existing absolute path, it's
+        # returned as-is (after expansion).
+        assert cmd.argv[0].endswith("fake-python.exe")
+        # The %FAKE_LIB% form must have been expanded.
+        assert "%FAKE_LIB%" not in cmd.argv[0]
+
+    def test_unknown_env_var_left_intact(self) -> None:
+        # When the env var doesn't resolve, expandvars leaves the
+        # %NAME% literal in place — Popen will then fail to find it,
+        # which is the correct behavior (don't silently drop).
+        tool = ToolDef(
+            name="t",
+            executable="%DEFINITELY_NOT_SET_XYZ%/foo",
+            argument_template=[],
+        )
+        cmd = resolve(tool, {})
+        assert "%DEFINITELY_NOT_SET_XYZ%" in cmd.argv[0]
+
+
 class TestResolveCwd:
     def test_explicit_working_dir(self) -> None:
         tool = _tool([], [])

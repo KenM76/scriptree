@@ -375,6 +375,42 @@ _HERE = Path(__file__).resolve().parent
 _PKG_DIR = _find_package_dir(_HERE)
 sys.path.insert(0, str(_PKG_DIR))
 
+
+def _publish_scriptree_env() -> None:
+    """Set SCRIPTREE_HOME and friends on ``os.environ`` so every
+    subprocess launched by ScripTree (and every tool's .scriptree
+    file) can reference the install root by name.
+
+    Tools can use ``%SCRIPTREE_LIB_PYTHON%/python.exe`` etc. as
+    their ``executable`` / ``working_directory`` / ``path_prepend``
+    values, and they Just Work no matter where ScripTree was
+    deployed (``C:\\Prod\\ScripTree``, an OneDrive sync folder, a
+    USB stick, etc.).
+
+    Variables published:
+        SCRIPTREE_HOME       — the launcher's directory
+        SCRIPTREE_LIB        — <HOME>/lib
+        SCRIPTREE_LIB_PYPI   — <LIB>/pypi (only if it exists)
+        SCRIPTREE_LIB_PYTHON — <LIB>/python (only if it exists)
+        SCRIPTREE_APPS       — <HOME>/ScripTreeApps (only if it exists)
+    """
+    os.environ["SCRIPTREE_HOME"] = str(_HERE)
+    lib = _HERE / "lib"
+    if lib.is_dir():
+        os.environ["SCRIPTREE_LIB"] = str(lib)
+        pypi = lib / "pypi"
+        if pypi.is_dir():
+            os.environ["SCRIPTREE_LIB_PYPI"] = str(pypi)
+        py = lib / "python"
+        if py.is_dir():
+            os.environ["SCRIPTREE_LIB_PYTHON"] = str(py)
+    apps = _HERE / "ScripTreeApps"
+    if apps.is_dir():
+        os.environ["SCRIPTREE_APPS"] = str(apps)
+
+
+_publish_scriptree_env()
+
 from scriptree.main import main  # noqa: E402
 
 if __name__ == "__main__":
