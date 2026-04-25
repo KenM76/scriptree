@@ -7,6 +7,47 @@ more schema, more invariants.
 
 If you are a human reader, start at [`../README.md`](../README.md) instead.
 
+## Form design defaults — read before generating any `.scriptree`
+
+When you generate a `.scriptree` file, **default to a sectioned or
+tabbed form** instead of a flat parameter list. A long, ungrouped list
+of fields is the most common failure mode of AI-generated tools:
+the runner shows it as one flat scroll, which is hard to read and
+makes it harder for users to find related options.
+
+**Apply this rule unless the tool genuinely has very few parameters:**
+
+| Param count | Default layout |
+|---|---|
+| 1 – 4 params      | Flat (no sections needed) |
+| 5 – 10 params     | One or two **collapsible sections** grouping related fields (e.g. `Input`, `Output`, `Advanced`) |
+| 10+ params        | **Tabbed** layout — `Input` / `Pipeline stages` / `Advanced` / `Debug` is a good starting set; consecutive `tab`-mode sections render as a single QTabWidget at runtime |
+
+Concrete heuristics:
+
+- **Required input/output** → `Input` section (always visible).
+- **Behavioral toggles, sort orders, format options** → `Pipeline stages` or `Options` section.
+- **Power-user knobs (timeouts, debug flags, paths to overrides)** →
+  `Advanced` section, **collapsed by default** (`"collapsed": true`).
+- Use **tab mode** (`"layout": "tab"`) when the tool has clearly
+  separable phases or contexts — e.g. command-line vs. environment vs.
+  diagnostics. Use **collapse mode** (`"layout": "collapse"`, the
+  default) when the groups are roughly equally important and the user
+  may want several open at once.
+
+Section order matters: it's the visible order in the runner. Put the
+section the user touches first at the top.
+
+Schema for sections lives in [`scriptree_format.md`](scriptree_format.md)
+under "`SectionDef` shape" and "Per-section `layout` field". Each
+`ParamDef` then carries a `"section": "<name>"` referring to one of
+the declared sections.
+
+> **Don't** declare sections and then leave most params with empty
+> `section: ""` — that mixes sectioned and unsectioned params and the
+> runner renders the orphans in a synthetic "Other" bucket at the end,
+> which usually isn't what you want.
+
 ## Orientation
 
 - [`architecture.md`](architecture.md) — package layout, the `core` vs

@@ -158,6 +158,13 @@ value as its own label.
 
 Sections with duplicate names are rejected by the loader.
 
+> **Default to using sections.** When generating a `.scriptree` for a
+> tool with more than ~4 parameters, group them into 2–4 named
+> sections. For 10+ params, prefer tab-mode sections. See the
+> [LLM README's "Form design defaults"](README.md) for the heuristic
+> table and rationale — flat ungrouped forms are the most common
+> failure mode of AI-generated tools.
+
 ### Per-section `layout` field
 
 Each section independently controls how it renders in the runner form.
