@@ -39,6 +39,11 @@ Read these in order for the full picture:
     that need their own deps, the four management scripts (`update_lib.py`,
     `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`), and the
     `ScripTreeManagement.scriptreetree` that wraps them in a GUI.
+12. **[Portable Python install](portable_python.md)** — when ScripTree
+    can't find Python 3 on PATH it can drop a self-contained Python
+    into `lib/python/` (Windows / macOS, automated; Linux, manual via
+    package manager or python-build-standalone). Tools then reference
+    it via `%SCRIPTREE_LIB_PYTHON%`.
 
 ## For LLMs (and humans using AI to generate tools)
 
