@@ -338,41 +338,125 @@ _check_python_version()
 _inject_vendored_libs()
 _check_dependencies()
 
-# The ``scriptree`` package now lives directly at the repo root, so
-# adding the launcher's own directory to ``sys.path`` is enough for
-# imports to resolve. The discovery walk below is defensive — it
-# survives layouts where the source zip wrapped everything in an
-# extra ``<repo>-<branch>/`` folder, or where a Windows zip
-# extractor normalized the inner package's casing to ``ScripTree``
-# instead of ``scriptree``.
-def _find_package_dir(start: Path) -> Path:
-    """Return the directory that should go on sys.path so
+# The ``scriptree`` package normally lives directly at the repo
+# root, so adding the launcher's own directory to ``sys.path`` is
+# enough for imports to resolve. The discovery walk below is
+# defensive — it survives:
+#   - Source-zip extractions where GitHub wrapped everything in an
+#     extra ``<repo>-<branch>/`` folder.
+#   - Windows zip tools that double-nest the layout (extracting
+#     into a folder of the same name produces ScripTree/ScripTree/...).
+#   - Case-folding by extractors that normalize the inner package's
+#     casing to ``ScripTree`` instead of ``scriptree``.
+def _find_package_dir(start: Path, max_depth: int = 4) -> Path | None:
+    """Locate the directory to add to ``sys.path`` so
     ``import scriptree.main`` resolves.
 
-    Identifies the package by the presence of a ``main.py`` inside
-    any folder named ``scriptree`` (case-insensitive). Searches
-    ``start`` itself and one level of subdirectories.
+    The package is identified by the presence of a ``main.py`` inside
+    a folder named ``scriptree`` (case-insensitive). Returns the
+    PARENT directory of that ``scriptree/`` folder — that's what goes
+    on ``sys.path``.
+
+    Searches ``start`` itself plus up to ``max_depth`` levels of
+    descendants. Returns ``None`` if no candidate is found, leaving
+    the launcher to print a diagnostic instead of failing inside the
+    Python import machinery.
     """
     needle = "scriptree"
-    candidates: list[Path] = [start]
-    if start.is_dir():
-        candidates.extend(p for p in start.iterdir() if p.is_dir())
-    for parent in candidates:
-        if not parent.is_dir():
-            continue
-        for entry in parent.iterdir():
+
+    def _walk(parent: Path, depth: int):
+        # Skip lib/, .git/, __pycache__/, etc. to avoid scanning vendored
+        # site-packages or version-control internals (would otherwise
+        # match `lib/pypi/scriptree/...` if anyone ever vendored us).
+        if parent.name.lower() in {
+            "lib", ".git", "__pycache__", ".pytest_cache",
+            ".mypy_cache", ".ruff_cache", ".tox", "node_modules",
+            "site-packages", "venv", ".venv", "env",
+        }:
+            return None
+        try:
+            children = list(parent.iterdir())
+        except (PermissionError, OSError):
+            return None
+        # First, check direct children — does parent contain a
+        # `scriptree` folder with main.py?
+        for entry in children:
             if (
                 entry.is_dir()
                 and entry.name.lower() == needle
                 and (entry / "main.py").is_file()
             ):
                 return parent
-    # Last-resort fallback to the launcher's own folder.
-    return start
+        # Otherwise descend.
+        if depth <= 0:
+            return None
+        for entry in children:
+            if not entry.is_dir():
+                continue
+            hit = _walk(entry, depth - 1)
+            if hit is not None:
+                return hit
+        return None
+
+    if not start.is_dir():
+        return None
+    return _walk(start, max_depth)
+
+
+def _abort_with_layout_error(start: Path) -> None:
+    """Print a diagnostic explaining what we tried and exit.
+
+    Hit when ``_find_package_dir`` returns ``None`` — usually a
+    misplaced or partial extraction of the portable zip. The
+    message lists the launcher's location and the first few
+    direct children it saw, so a remote user can paste it back
+    and get an actionable answer.
+    """
+    msg_lines = [
+        "ScripTree could not find its `scriptree` package on disk.",
+        "",
+        f"  Launcher location: {start}",
+    ]
+    if start.is_dir():
+        msg_lines.append("  Direct children of that folder:")
+        try:
+            kids = sorted(p.name for p in start.iterdir())[:20]
+            for k in kids:
+                msg_lines.append(f"    {k}")
+            if len(kids) == 20:
+                msg_lines.append("    ... (more truncated)")
+        except OSError as e:
+            msg_lines.append(f"    (could not list directory: {e})")
+    msg_lines.extend([
+        "",
+        "Most common cause: the portable zip was extracted into a folder",
+        "that already had a `ScripTree` subfolder, producing a nested",
+        "layout the launcher can't navigate. The launcher expects a",
+        "layout like:",
+        "",
+        "    <run_scriptree.py>",
+        "    scriptree/",
+        "        main.py",
+        "        ...",
+        "",
+        "If you see ScripTree/ScripTree/scriptree/ instead, move the",
+        "inner ScripTree/* contents up one level so they sit next to",
+        "run_scriptree.py.",
+        "",
+        "If you got the zip from a GitHub source archive (not a release",
+        "asset), it may extract as `<repo>-<branch>/...` — re-run from",
+        "INSIDE that folder, not above it.",
+    ])
+    full = "\n".join(msg_lines)
+    print(full, file=sys.stderr)
+    _msgbox(full, "ScripTree \u2014 layout error")
+    sys.exit(1)
 
 
 _HERE = Path(__file__).resolve().parent
 _PKG_DIR = _find_package_dir(_HERE)
+if _PKG_DIR is None:
+    _abort_with_layout_error(_HERE)
 sys.path.insert(0, str(_PKG_DIR))
 
 

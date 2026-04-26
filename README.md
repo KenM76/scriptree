@@ -2,6 +2,25 @@
 
 A universal GUI generator for command-line tools. Define a tool once — by pointing ScripTree at an executable or building a form from scratch — and run it through a clean GUI with labeled fields, dropdowns, file pickers, and checkboxes.
 
+## Installing the portable zip
+
+Download `ScripTree-vX.Y.Z-windows-x64.zip` from the [Releases page](https://github.com/KenM76/scriptree/releases) and extract it. The launcher expects this layout:
+
+```
+<some-folder>/
+├── run_scriptree.bat       ← double-click this
+├── run_scriptree.py
+├── scriptree/              ← Python package
+│   ├── main.py
+│   └── ...
+├── lib/
+└── ...
+```
+
+**Common extraction mistake:** if you right-click the zip and pick "Extract here" while already standing inside a folder named `ScripTree`, Windows produces `ScripTree/ScripTree/...` (the inner one is the zip's own folder). The launcher walks up to four levels deep looking for the package, so this usually still works — but if it doesn't, just move the inner `ScripTree/*` contents up one level so they sit next to `run_scriptree.bat`.
+
+If the launcher still can't find the package, it prints a diagnostic listing exactly which folder it looked in and what it saw — paste that into an issue and it's a one-round fix.
+
 ## Quick Start
 
 ```bash
