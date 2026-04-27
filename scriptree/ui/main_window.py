@@ -194,6 +194,23 @@ class MainWindow(QMainWindow):
         )
         self._output_dock.toggleView(False)
 
+        # --- Run controls dock (under Form, holds extras + cmd line) ---
+        # The active runner's "bottom panel" (Extra arguments + Command
+        # line collapsibles) lives here. Detachable like Output —
+        # users who want a clean form view can collapse the extras /
+        # cmd group boxes inside, or float the whole dock to a second
+        # monitor. Hidden until a tool is loaded.
+        self._run_controls_dock = ads.CDockWidget(
+            self._dock_manager, "Run controls"
+        )
+        self._run_controls_dock.setObjectName("RunControlsDock")
+        self._run_controls_dock.setWidget(QLabel(""))  # placeholder
+        self._run_controls_dock.setFeatures(_DOCK_FEATURES)
+        self._dock_manager.addDockWidget(
+            ads.BottomDockWidgetArea, self._run_controls_dock, form_area
+        )
+        self._run_controls_dock.toggleView(False)
+
         self._build_menu()
 
         # Restore saved layout if the user opted in.
@@ -288,6 +305,7 @@ class MainWindow(QMainWindow):
         m_view = self.menuBar().addMenu("&View")
         m_view.addAction(self._tools_dock.toggleViewAction())
         m_view.addAction(self._form_dock.toggleViewAction())
+        m_view.addAction(self._run_controls_dock.toggleViewAction())
         m_view.addAction(self._output_dock.toggleViewAction())
         m_view.addSeparator()
         act_standalone = QAction("Open current &tool standalone", self)
@@ -493,17 +511,36 @@ class MainWindow(QMainWindow):
         self._output_dock.setWindowTitle(f"Output — {runner._tool.name}")
         self._output_dock.toggleView(True)
 
+        # Run controls dock: reparent the bottom panel (extras + cmd
+        # line) into it. The runner's internal splitter still hosts the
+        # form on top; the dock now owns the bottom pane and can be
+        # floated, tabbed, or hidden independently.
+        bottom = runner.bottom_panel
+        bottom.setParent(None)
+        self._run_controls_dock.setWidget(bottom)
+        self._run_controls_dock.setWindowTitle(
+            f"Run controls — {runner._tool.name}"
+        )
+        self._run_controls_dock.toggleView(True)
+
     def _uninstall_runner_panels(self) -> None:
-        """Return the active runner's output panel to its internal layout
-        and reset dock titles."""
+        """Return the active runner's output + bottom panels to their
+        internal splitter and reset dock titles."""
         runner = self._active_runner
         if runner is None:
             return
         output = runner.output_panel
         output.setParent(None)
         runner._inner_splitter.addWidget(output)
+        # Reattach the bottom (extras + cmd) panel to the runner's
+        # internal splitter so a re-installed runner finds it where
+        # _build_form_panel originally placed it.
+        bottom = runner.bottom_panel
+        bottom.setParent(None)
+        runner._bottom_splitter.addWidget(bottom)
         self._active_runner = None
         self._output_dock.toggleView(False)
+        self._run_controls_dock.toggleView(False)
         # Reset form dock title when no tool is active — the dock will
         # be showing the placeholder welcome widget.
         self._form_dock.setWindowTitle("ScripTree")
@@ -720,6 +757,7 @@ class MainWindow(QMainWindow):
         self._close_active_editor()
         self._uninstall_runner_panels()
         self._output_dock.toggleView(False)
+        self._run_controls_dock.toggleView(False)
         editor = ToolEditorView(tool, file_path=path)
         editor.saved.connect(self._on_editor_saved)
         editor.cancelled.connect(self._on_editor_cancelled)

@@ -827,6 +827,17 @@ class ToolRunnerView(QWidget):
         """The output panel."""
         return self._output_container
 
+    @property
+    def bottom_panel(self) -> QWidget:
+        """The bottom-of-form panel (extras + command line).
+
+        Exposed so the main window can reparent it into its own dock
+        widget — mirrors how ``output_panel`` is handled. When the dock
+        is detached, ``_uninstall_runner_panels`` reattaches the panel
+        to the runner's internal splitter.
+        """
+        return self._bottom_pane
+
     def _build_output_panel(self) -> QWidget:
         """Build the output pane as a standalone widget."""
         output_box = QGroupBox("Output")
@@ -853,17 +864,48 @@ class ToolRunnerView(QWidget):
             self._build_custom_menus(menu_bar, tool.menus)
             layout.setMenuBar(menu_bar)
 
-        # Header. Word-wrap both the name and description so long text
-        # doesn't force the whole form into a horizontal scroll bar
-        # when the window is narrower than the text.
-        header = QLabel(f"<h2>{tool.name}</h2>")
-        header.setWordWrap(True)
-        layout.addWidget(header)
+        # Header — collapsible group box wrapping the tool name + the
+        # description blurb. Some tools have multi-paragraph descriptions
+        # that take a third of the form's vertical space; users who've
+        # read them once want them out of the way. The check state
+        # toggles the contents widget and shrinks the box to title
+        # height. Session-only state — no persistence to .scriptree.
+        self._header_box = QGroupBox()
+        self._header_box.setCheckable(True)
+        self._header_box.setChecked(True)
+        self._header_box.setTitle(f"  {tool.name}")
+        self._header_box.setToolTip(
+            "Click the checkbox to collapse the header / description."
+        )
+        header_inner = QWidget()
+        header_layout = QVBoxLayout(header_inner)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+        # The h2-styled name still appears INSIDE the box so collapsed
+        # mode preserves Qt's default group-box title style without
+        # losing the "big bold name" the open state used to show. The
+        # title attribute above already shows the name.
         if tool.description:
             desc = QLabel(tool.description)
             desc.setWordWrap(True)
-            layout.addWidget(desc)
+            header_layout.addWidget(desc)
+        else:
+            header_layout.addWidget(QLabel(
+                f"<i>No description provided.</i>"
+            ))
+        outer_header_layout = QVBoxLayout(self._header_box)
+        outer_header_layout.setContentsMargins(6, 4, 6, 6)
+        outer_header_layout.addWidget(header_inner)
+        self._header_box.toggled.connect(
+            lambda checked: header_inner.setVisible(checked)
+        )
+        layout.addWidget(self._header_box)
 
+        # Top half (form) and bottom half (extras + command line) sit
+        # in their own vertical splitter so the user gets a clear
+        # drag handle between "what to fill in" (form) and "what gets
+        # run" (extras + command line). The form gets the lion's
+        # share of vertical space; the bottom half opens compact and
+        # grows as the user expands collapsible sub-sections.
         splitter = QSplitter(Qt.Orientation.Vertical)
         layout.addWidget(splitter, stretch=1)
 
@@ -901,12 +943,36 @@ class ToolRunnerView(QWidget):
         form_scroll.setWidget(form_group)
         splitter.addWidget(form_scroll)
 
+        # ============================================================
+        # Bottom pane — extras + command line in their own container
+        # so the splitter has exactly one drag handle between the form
+        # (above) and the run-time controls (below). Each section
+        # inside is a collapsible group box; the user can hide either
+        # without affecting the splitter ratio.
+        # ============================================================
+        # Stored as an instance attribute so MainWindow can pull it
+        # into its own dock widget (similar to output_panel) when the
+        # runner is installed. The runner keeps a reference to the
+        # surrounding splitter and its index so the bottom pane can be
+        # reattached when the runner is uninstalled.
+        self._bottom_pane = bottom_pane = QWidget()
+        bottom_layout = QVBoxLayout(bottom_pane)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(4)
+        # Stash the splitter so the panel can be returned to it when
+        # the runner is uninstalled.
+        self._bottom_splitter = splitter
+
         # Extras box — space-separated argv tokens the user has added
         # beyond what the GUI form produces. Populated either by
         # reconciling edits to the command preview or typed directly.
-        # Help text is a tooltip rather than an inline label so the
-        # box can start at one-line height.
-        self._extras_box = extras_box = QGroupBox("Extra arguments (space-separated)")
+        # Collapsible: the title bar acts as a checkbox; collapsing
+        # hides the inner editor and shrinks the box to title height.
+        self._extras_box = extras_box = QGroupBox(
+            "Extra arguments (space-separated)"
+        )
+        extras_box.setCheckable(True)
+        extras_box.setChecked(True)
         extras_box.setToolTip(
             "Tokens here are appended to the command as-is. "
             "Anything you type in the preview below that doesn't match "
@@ -928,12 +994,16 @@ class ToolRunnerView(QWidget):
         )
         self._extras_edit.textChanged.connect(self._on_extras_edited)
         extras_layout.addWidget(self._extras_edit)
-        splitter.addWidget(extras_box)
+        extras_box.toggled.connect(
+            lambda checked: self._extras_edit.setVisible(checked)
+        )
+        bottom_layout.addWidget(extras_box)
 
         # Command preview — editable QPlainTextEdit with "Full path"
-        # and "Word wrap" checkboxes. Tight margins so the whole box
-        # can collapse to ~one line initially.
+        # and "Word wrap" checkboxes. Also collapsible.
         self._cmd_box = cmd_box = QGroupBox("Command line")
+        cmd_box.setCheckable(True)
+        cmd_box.setChecked(True)
         cmd_layout = QVBoxLayout(cmd_box)
         cmd_layout.setContentsMargins(4, 2, 4, 4)
         cmd_layout.setSpacing(0)
@@ -957,7 +1027,12 @@ class ToolRunnerView(QWidget):
         cmd_opts.addWidget(self._chk_word_wrap)
 
         cmd_opts.addStretch(1)
-        cmd_layout.addLayout(cmd_opts)
+        # Wrap the option row in a QWidget so we can hide the whole
+        # row when the box collapses (otherwise the option checkboxes
+        # stay visible underneath the title).
+        self._cmd_opts_wrapper = cmd_opts_wrapper = QWidget()
+        cmd_opts_wrapper.setLayout(cmd_opts)
+        cmd_layout.addWidget(cmd_opts_wrapper)
 
         self._live_cmd = QPlainTextEdit()
         self._live_cmd.setPlaceholderText(
@@ -970,22 +1045,26 @@ class ToolRunnerView(QWidget):
         self._live_cmd.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._live_cmd.textChanged.connect(self._on_live_cmd_text_changed)
         cmd_layout.addWidget(self._live_cmd)
-        splitter.addWidget(cmd_box)
+        cmd_box.toggled.connect(
+            lambda checked, opts=cmd_opts_wrapper, edit=self._live_cmd:
+                (opts.setVisible(checked), edit.setVisible(checked))
+        )
+        bottom_layout.addWidget(cmd_box)
 
+        splitter.addWidget(bottom_pane)
         splitter.setStretchFactor(0, 3)  # form
-        splitter.setStretchFactor(1, 0)  # extras (compact)
-        splitter.setStretchFactor(2, 0)  # command line (compact)
+        splitter.setStretchFactor(1, 1)  # extras + command line pane
 
-        # Compute compact starting heights for extras + command line so
-        # they occupy roughly one visible text line plus just enough
-        # chrome for the groupbox title (and, for cmd, the Full-path /
-        # Word-wrap checkbox row). Users drag the splitter handles to
-        # grow either box when they need multi-line editing.
+        # Compute a compact starting height for the bottom pane so
+        # extras + command line each occupy roughly one visible text
+        # line plus group-box chrome. Users drag the splitter handle
+        # to grow either box when they need multi-line editing.
         fm = QFontMetrics(mono)
         one_line = fm.lineSpacing()
-        extras_compact = one_line + 16      # title + tight margins
-        cmd_compact = one_line + 28         # title + option row + tight margins
-        splitter.setSizes([10_000, extras_compact, cmd_compact])
+        extras_compact = one_line + 24     # title + tight margins
+        cmd_compact = one_line + 36        # title + option row + tight margins
+        bottom_compact = extras_compact + cmd_compact + 8
+        splitter.setSizes([10_000, bottom_compact])
 
         # Configurations bar: [Config ▾] [Save] [Save As] [Delete] [Edit...]
         # Wrapped in a QWidget so the MainWindow can show/hide it

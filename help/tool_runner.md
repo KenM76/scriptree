@@ -2,16 +2,40 @@
 
 The tool runner is the view you spend most of your time in. It shows:
 
-1. A **form** built from the tool's parameters (text boxes, file pickers,
+1. A **header** — the tool's name and description blurb. Collapsible
+   (v0.1.12).
+2. A **form** built from the tool's parameters (text boxes, file pickers,
    dropdowns, checkboxes, etc.).
-2. An **extras box** where you can type raw argv tokens that aren't part of
-   the template.
-3. An **output pane** that streams stdout and stderr from the child process.
-4. A **configurations bar** for saving, loading, and switching between
+3. An **extras box** where you can type raw argv tokens that aren't part of
+   the template. Collapsible.
+4. A **command preview** showing the exact command that will run.
+   Collapsible.
+5. An **output pane** that streams stdout and stderr from the child process.
+6. A **configurations bar** for saving, loading, and switching between
    named sets of form values.
-5. A **command preview** showing the exact command that will run.
-6. An **action row** with Run, Stop, Copy argv, Undo, Redo, Reset, Clear
+7. An **action row** with Run, Stop, Copy argv, Undo, Redo, Reset, Clear
    output buttons, and a user indicator (when running as a different user).
+
+## Layout (v0.1.12)
+
+The form panel is split into two regions by a draggable splitter
+handle:
+
+- **Top region** — the (collapsible) header followed by the form
+  parameters. This is "what the user fills in".
+- **Bottom region** — the **Extra arguments** box and the **Command
+  line** preview. This is "what actually gets run". Both boxes are
+  individually collapsible so you can hide whichever isn't relevant
+  (e.g. close the cmd preview when you only ever drive the form).
+
+The bottom region is exposed as its own dock widget — **Run controls**
+in the *View* menu — so you can float it, tab it next to Output, or
+hide it entirely. The Output pane is its own dock too. With both
+floated you can keep just the form on screen while running.
+
+Drag the splitter handle to re-balance the form vs. extras+cmd. Click
+the title-bar checkbox of any collapsible group box to fold it down to
+just the title.
 
 ## The form
 
