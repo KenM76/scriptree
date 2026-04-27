@@ -171,6 +171,21 @@ class TestTreeRoundTrip:
         restored = tree_from_dict(d)
         assert restored.folder_layout == "tabs"
 
+    def test_tree_path_prepend_round_trips(self) -> None:
+        """TreeDef.path_prepend serializes when non-empty, omits when
+        empty, and round-trips."""
+        tree = self._sample_tree()
+        # Default value is empty:
+        assert tree.path_prepend == []
+        d = tree_to_dict(tree)
+        assert "path_prepend" not in d  # omitted when empty
+
+        tree.path_prepend = ["C:/Tools/gh", "./local_bin"]
+        d = tree_to_dict(tree)
+        assert d["path_prepend"] == ["C:/Tools/gh", "./local_bin"]
+        restored = tree_from_dict(d)
+        assert restored.path_prepend == ["C:/Tools/gh", "./local_bin"]
+
     def test_unknown_folder_layout_falls_back_to_flat(self) -> None:
         """Loader is permissive — unknown values pass through, the
         runtime branch falls back to 'flat' rendering. Keeps old

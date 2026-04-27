@@ -369,6 +369,14 @@ class TreeDef:
     nodes: list[TreeNode] = field(default_factory=list)
     # Custom menus for the tree — rendered in standalone mode's menu bar.
     menus: list[MenuItemDef] = field(default_factory=list)
+    # Tree-level PATH prepend — directories prepended to PATH for every
+    # tool launched via this tree. Layered between the global (Settings)
+    # PATH prepend and the tool-level (.scriptree) PATH prepend, so
+    # tree-wide overrides win over global but lose to per-tool. Surfaced
+    # via the missing-executable recovery dialog's "add to .scriptreetree
+    # path_prepend" scope (with optional bulk-apply across all loaded
+    # trees in the IDE sidebar).
+    path_prepend: list[str] = field(default_factory=list)
     # Standalone-mode tab arrangement:
     #   "flat"  — flatten the tree to leaves; one tab per tool
     #             (default; preserves pre-v0.1.9 behavior).

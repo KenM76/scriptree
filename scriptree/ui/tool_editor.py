@@ -64,7 +64,7 @@ from ..core.model import (
 )
 from .env_editor import EnvEditorDialog
 from ..core.runner import RunnerError, resolve
-from .widgets.param_widgets import build_widget_for
+from .widgets.param_widgets import _DroppableLineEdit, build_widget_for
 
 
 class ToolEditorView(QWidget):
@@ -108,7 +108,10 @@ class ToolEditorView(QWidget):
         # Top: exe / name / description.
         top = QGroupBox("Tool")
         top_form = QFormLayout(top)
-        self._exe_edit = QLineEdit(self._tool.executable)
+        # Drop-aware so the user can drag a binary onto it from
+        # Explorer instead of clicking Browse — same convenience as
+        # the param widgets in the runner form.
+        self._exe_edit = _DroppableLineEdit(self._tool.executable)
         self._exe_edit.textChanged.connect(self._on_exe_changed)
         exe_row = QHBoxLayout()
         exe_row.addWidget(self._exe_edit, stretch=1)

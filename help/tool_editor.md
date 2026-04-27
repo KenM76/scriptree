@@ -42,7 +42,9 @@ reach it via:
 ## Top strip — Tool
 
 - **Executable** — full path to the binary/script. Click Browse to pick
-  it with a native file dialog.
+  it with a native file dialog, or drag a file onto the field from
+  Explorer (v0.1.11) — drag-drop works on every text and path widget
+  in the editor and runner.
 - **Name** — what the tool is called in the launcher and the runner title.
 - **Description** — shown below the name in the runner.
 - **Environment** — opens a popup to set tool-level environment variables

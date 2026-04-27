@@ -59,7 +59,11 @@ class TestMissingFileRecoveryDialog:
             dlg.deleteLater()
             qapp.processEvents()
 
-    def test_path_field_is_readonly(self, qapp):
+    def test_path_field_is_editable(self, qapp):
+        """As of v0.1.11 the path field is editable + drop-aware so
+        users can type/paste/drop a replacement path without going
+        through the Browse dialog. The original path is still shown
+        as the field's initial value."""
         dlg = MissingFileRecoveryDialog(
             None,
             title="Test",
@@ -68,8 +72,119 @@ class TestMissingFileRecoveryDialog:
             allow_replace=True,
         )
         try:
-            assert dlg._path_edit.isReadOnly()
+            assert not dlg._path_edit.isReadOnly()
             assert dlg._path_edit.text() == r"C:\some\path.scriptree"
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            qapp.processEvents()
+
+    def test_typing_real_path_arms_replacement(self, qapp, tmp_path):
+        """Typing the absolute path of a real file into the field
+        should arm the replacement (selected_replacement returns it)
+        without the user having to click Browse."""
+        real = tmp_path / "found.exe"
+        real.touch()
+
+        dlg = MissingFileRecoveryDialog(
+            None,
+            title="Test",
+            message="Missing",
+            missing_path=r"C:\old\missing.exe",
+            allow_replace=True,
+        )
+        try:
+            dlg._path_edit.setText(str(real))
+            qapp.processEvents()
+            assert dlg.selected_replacement() == str(real)
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            qapp.processEvents()
+
+    def test_typing_garbage_does_not_arm(self, qapp):
+        """Typing a path that doesn't point at a real file should not
+        arm the replacement — Apply stays disabled."""
+        dlg = MissingFileRecoveryDialog(
+            None,
+            title="Test",
+            message="Missing",
+            missing_path=r"C:\old\missing.exe",
+            allow_replace=True,
+        )
+        try:
+            dlg._path_edit.setText(r"C:\definitely\not\real.exe")
+            qapp.processEvents()
+            assert dlg.selected_replacement() is None
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            qapp.processEvents()
+
+    def test_typing_in_scope_mode_reveals_picker(self, qapp, tmp_path):
+        """In scope-picker mode, entering a real path should reveal
+        the scope panel (it starts hidden until a path is picked)."""
+        from scriptree.ui.recovery_dialog import PathScopeOptions
+
+        real = tmp_path / "found.exe"
+        real.touch()
+
+        dlg = MissingFileRecoveryDialog(
+            None,
+            title="Test",
+            message="Missing",
+            missing_path=r"C:\old\missing.exe",
+            allow_replace=True,
+            path_scope_options=PathScopeOptions(),
+        )
+        try:
+            assert dlg._scope_frame is not None
+            assert dlg._scope_frame.isVisible() is False
+            dlg.show()
+            qapp.processEvents()
+
+            dlg._path_edit.setText(str(real))
+            qapp.processEvents()
+
+            assert dlg._scope_frame.isVisible() is True
+            assert dlg._btn_ok is not None
+            assert dlg._btn_ok.isEnabled() is True
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            qapp.processEvents()
+
+    def test_path_field_accepts_file_url_drop(self, qapp, tmp_path):
+        """Dragging a file from Explorer fires our drop handler which
+        replaces the field text. We don't go through real Qt event
+        dispatch (synthetic QDropEvent loses concrete QMimeData type
+        in PySide6); instead exercise the same helper the drop event
+        calls."""
+        from scriptree.ui.widgets.param_widgets import (
+            _apply_line_edit_drop,
+        )
+        from PySide6.QtCore import QMimeData, QUrl
+
+        real = tmp_path / "dragged.exe"
+        real.touch()
+
+        dlg = MissingFileRecoveryDialog(
+            None,
+            title="Test",
+            message="Missing",
+            missing_path=r"C:\old\missing.exe",
+            allow_replace=True,
+        )
+        try:
+            md = QMimeData()
+            md.setUrls([QUrl.fromLocalFile(str(real))])
+            consumed = _apply_line_edit_drop(dlg._path_edit, md)
+            qapp.processEvents()
+            assert consumed is True
+            assert dlg._path_edit.text().replace("\\", "/") == \
+                str(real).replace("\\", "/")
+            # textChanged -> _on_path_edit_changed -> _replacement_path
+            assert dlg.selected_replacement() == dlg._path_edit.text()
         finally:
             dlg.close()
             dlg.deleteLater()

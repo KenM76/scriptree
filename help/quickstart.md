@@ -69,11 +69,13 @@ cached help text field.
 ## Build a tool from scratch (90 seconds)
 
 1. **File → New blank tool**
-2. Set **Executable** to the program path (e.g. `robocopy.exe`)
+2. Set **Executable** to the program path (e.g. `robocopy.exe`) — type
+   it, click Browse, or drag the binary onto the field from Explorer
 3. Add parameters: click **+**, set ID, label, type, widget
 4. Write the **Argument template** using `{param_id}` placeholders
 5. **Save as...** → `MyTool.scriptree`
-6. Click **Run** to test
+6. Click **Run** to test — file/folder paths in form fields can also
+   be set by dropping a file from Explorer onto the field
 
 ## Configurations
 

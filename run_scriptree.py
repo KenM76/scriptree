@@ -492,6 +492,25 @@ def _publish_scriptree_env() -> None:
     if apps.is_dir():
         os.environ["SCRIPTREE_APPS"] = str(apps)
 
+    # Tell well-behaved CLIs to skip ANSI color output. ScripTree's
+    # output pane is a plain QPlainTextEdit — it shows escape codes
+    # as literal text (e.g. "@[31m") instead of rendering them as
+    # color, which makes tool output hard to read. Most modern CLIs
+    # (dust, bat, fd, ripgrep, eza, hyperfine, gh, ls --color=auto,
+    # python --color=...) honor at least one of these:
+    #
+    #   NO_COLOR    — https://no-color.org/ (de facto standard)
+    #   TERM=dumb   — POSIX-y opt-out; some tools key off this
+    #   CLICOLOR=0  — BSD ls / fish convention
+    #   FORCE_COLOR=0 — Node.js / chalk convention
+    #
+    # We only set them if not already present, so a user's explicit
+    # FORCE_COLOR=1 (or NO_COLOR= override) still wins.
+    os.environ.setdefault("NO_COLOR", "1")
+    os.environ.setdefault("TERM", "dumb")
+    os.environ.setdefault("CLICOLOR", "0")
+    os.environ.setdefault("FORCE_COLOR", "0")
+
 
 _publish_scriptree_env()
 

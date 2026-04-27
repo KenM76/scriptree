@@ -25,6 +25,14 @@ editor; here in the runner the widget is just what it is:
   defined them (see [tool_editor.md](tool_editor.md))
 - `file_open`, `file_save`, `folder` — native Windows file pickers
 
+**Drag-and-drop (v0.1.11):** every text-based widget accepts file/folder
+drops from Explorer. Drop a file on a `text` or `file_*` / `folder`
+field — its path replaces the field's value. Drop one or more files on
+a `textarea` field — the paths are inserted at the cursor, one per line
+(handy for the auto-split repeatable-flag pattern: drop three files to
+get `--include path1 --include path2 --include path3` after splitting).
+Native text drag still works as a fallback for non-file payloads.
+
 **Reordering:** you can drag any form row up or down using the ≡ handle on
 the left of the row. The new order is saved back to the `.scriptree` file
 immediately. Inside a section, reordering only shuffles that section's rows.
@@ -110,6 +118,29 @@ finishes the exit code and duration are appended in grey.
 When running as a different user, a **user indicator** appears on the
 right side of the action row showing the active username and domain
 (e.g. "Run as: CONTOSO\admin").
+
+### When the executable can't be found
+
+If the resolved `argv[0]` doesn't exist on disk (or, for a bare name,
+isn't on PATH), ScripTree intercepts the launch and shows a recovery
+dialog instead of letting the spawn fail with a cryptic OSError. You
+can either browse / type / drop a replacement file path, or pick a
+search-path scope (session-only, this tool's `path_prepend`, the
+parent tree's `path_prepend`, user PATH, system PATH) and let the
+search-path lookup find it next time. See
+[environment.md](environment.md#adding-to-path-from-the-missing-executable-recovery-dialog)
+for the per-scope behavior table — non-session scopes also rewrite
+`tool.executable` to the basename so PATH lookup is actually consulted
+on subsequent runs.
+
+### Output formatting and ANSI colors
+
+ScripTree publishes `NO_COLOR=1`, `TERM=dumb`, `CLICOLOR=0`, and
+`FORCE_COLOR=0` to the child process environment so well-behaved
+CLIs emit plain text. Any ANSI escape sequences that slip through
+anyway (some tools force colors regardless) are stripped from the
+output pane via a regex before display, so you never see literal
+`@[31m...@[0m` glyphs in your tree output.
 
 ## Standalone mode
 

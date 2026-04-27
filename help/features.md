@@ -42,7 +42,7 @@
 
 7. **AI-generated tool files** — point any LLM at the `help/LLM/` folder and it can generate valid `.scriptree` files from a plain-English description. Complete schemas and invariants included.
 
-8. **Drag-and-drop parameter reordering** — rearrange form fields by dragging. Collapsible sections and tabbed layouts. Changes persist to the file.
+8. **Drag-and-drop everywhere** — rearrange form fields by dragging the row handle, drop files from Explorer onto any text or path widget to fill in the path, drop multiple files onto a textarea to insert one path per line. Collapsible sections and tabbed layouts.
 
 9. **Global environment and PATH settings** — application-wide env vars and PATH entries with override checkboxes that control merge priority over tool-level settings.
 
@@ -52,7 +52,7 @@
 
 11. **No shell execution, ever** — `shell=False` on every `Popen` call. Argument lists, not command strings. Custom menus split safely. Parser output post-sanitized.
 
-12. **File-based permission system with secure defaults** — 22 capability files control every action. Missing file = denied. Recursive search by filename, most-restrictive-wins on duplicates.
+12. **File-based permission system with secure defaults** — 34 capability files control every action. Missing file = denied. Recursive search by filename, most-restrictive-wins on duplicates.
 
 13. **Input sanitization on every run** — null bytes, control chars, shell metacharacters, path traversal, UNC paths checked before execution. Warning dialog with proceed/cancel.
 

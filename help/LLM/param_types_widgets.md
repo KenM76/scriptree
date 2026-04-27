@@ -29,6 +29,24 @@ and coercion rules.
 | `file_save`  | line edit + Browse (`QFileDialog.getSaveFileName`) | output files to write |
 | `folder`     | line edit + Browse (`QFileDialog.getExistingDirectory`) | directories |
 
+### Drag-and-drop (v0.1.11)
+
+`text`, `textarea`, `file_open`, `file_save`, and `folder` widgets all
+accept file/folder drops from Explorer. The implementation is two thin
+Qt subclasses in `scriptree/ui/widgets/param_widgets.py`:
+
+- `_DroppableLineEdit(QLineEdit)` — replaces the field's text with the
+  first dropped local-file URL. Used by `text`, `file_open`,
+  `file_save`, and `folder`.
+- `_DroppablePlainTextEdit(QPlainTextEdit)` — inserts dropped paths at
+  the cursor, one per line. Used by `textarea`.
+
+Subclasses are required because Qt binds drag/drop slots on the C++
+vtable at construction time — monkey-patching `dropEvent` on a stock
+`QLineEdit` instance silently does nothing. Native text drops (e.g.
+selecting text from another field) keep working via the parent
+implementation's fallback.
+
 ## Legal combinations
 
 | type          | legal widgets                           |

@@ -12,9 +12,29 @@ nodes are named folders.
   "description": "string, optional",
   "nodes": [/* list[Node] */],
   "menus": [/* list[MenuItemDef], optional — see scriptree_format.md */],
-  "folder_layout": "flat | tabs (optional, default 'flat')"
+  "folder_layout": "flat | tabs (optional, default 'flat')",
+  "path_prepend": [/* list[string], optional, v0.1.11+ */]
 }
 ```
+
+### `path_prepend` (v0.1.11)
+
+Optional list of directories prepended to the child process's `PATH`
+for **every tool launched via this tree**. Tree-level entries are
+applied *after* the tool's own `path_prepend` (so config-level wins,
+then tool-level, then tree-level, then ambient PATH — see
+[../environment.md](../environment.md)).
+
+Typical use: a tree of CLIs that all need a vendored binary directory
+on PATH (e.g. `./vendor/bin`). Setting it once on the tree avoids
+copy-pasting the same `path_prepend` into every leaf tool's
+`.scriptree`. The missing-executable recovery dialog can populate
+this field automatically when the user picks the *.scriptreetree
+path_prepend* scope.
+
+Empty / missing fields serialize to nothing — the field is omitted
+from the JSON when the list is empty so legacy trees stay
+byte-identical.
 
 Each `Node` is either a folder or a leaf:
 

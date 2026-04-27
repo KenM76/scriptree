@@ -42,6 +42,101 @@ from PySide6.QtWidgets import (
 from ...core.model import ParamDef, ParamType, Widget as WidgetKind
 
 
+# --- drop-aware text edits -------------------------------------------------
+#
+# Qt only honors ``dragEnterEvent`` / ``dropEvent`` overrides on real
+# subclasses — the C++ vtable is bound at construction, so monkey-patching
+# the methods on a stock ``QLineEdit`` instance silently does nothing.
+# These two thin subclasses accept dropped files/folders and write the
+# local path(s) into the widget. Native text drops (e.g. dragging a
+# selection from another text field) still work via the parent
+# implementation's fallback.
+
+def _local_paths_from_mime(mime) -> list[str]:
+    """Return local filesystem paths from a QMimeData, or []."""
+    # PySide6 sometimes hands back a base QObject wrapper for const
+    # ``QMimeData*`` pointers (notably for events built in Python rather
+    # than dispatched by Qt itself). Access the URL API defensively so
+    # the production path is robust and the unit tests can exercise the
+    # logic without tripping on the binding artifact.
+    has_urls = getattr(mime, "hasUrls", None)
+    urls_fn = getattr(mime, "urls", None)
+    if has_urls is None or urls_fn is None:
+        return []
+    if not has_urls():
+        return []
+    return [u.toLocalFile() for u in urls_fn() if u.isLocalFile()]
+
+
+def _apply_line_edit_drop(line_edit: QLineEdit, mime) -> bool:
+    """If ``mime`` carries local files, write the first into ``line_edit``.
+
+    Returns True iff the drop was consumed.
+    """
+    paths = _local_paths_from_mime(mime)
+    if not paths:
+        return False
+    line_edit.setText(paths[0])
+    return True
+
+
+def _apply_plain_text_drop(text_edit: QPlainTextEdit, mime) -> bool:
+    """If ``mime`` carries local files, insert them at the cursor (one
+    per line) into ``text_edit``. Returns True iff consumed."""
+    paths = _local_paths_from_mime(mime)
+    if not paths:
+        return False
+    text_edit.insertPlainText("\n".join(paths))
+    return True
+
+
+class _DroppableLineEdit(QLineEdit):
+    """QLineEdit that accepts file/folder drops. Replaces the field
+    with the first dropped path."""
+
+    def dragEnterEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _local_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _local_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _apply_line_edit_drop(self, event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
+
+class _DroppablePlainTextEdit(QPlainTextEdit):
+    """QPlainTextEdit that accepts file/folder drops. Inserts dropped
+    paths at the cursor (one per line) so multi-file drops compose
+    naturally with the auto-split repeatable-flag pattern."""
+
+    def dragEnterEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _local_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _local_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # pragma: no cover - Qt event
+        if _apply_plain_text_drop(self, event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
+
 # --- base class ------------------------------------------------------------
 
 class ParamWidget(QWidget):
@@ -63,7 +158,7 @@ class TextWidget(ParamWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._edit = QLineEdit(str(param.default or ""))
+        self._edit = _DroppableLineEdit(str(param.default or ""))
         self._edit.setPlaceholderText(param.description[:80])
         self._edit.textChanged.connect(self.valueChanged.emit)
         layout.addWidget(self._edit)
@@ -80,7 +175,7 @@ class TextAreaWidget(ParamWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._edit = QPlainTextEdit(str(param.default or ""))
+        self._edit = _DroppablePlainTextEdit(str(param.default or ""))
         self._edit.setPlaceholderText(param.description[:80])
         self._edit.setMaximumHeight(80)
         # Monospace font for regexes / patterns.
@@ -343,7 +438,7 @@ class _PathPickerBase(ParamWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self._edit = QLineEdit(str(param.default or ""))
+        self._edit = _DroppableLineEdit(str(param.default or ""))
         self._edit.setPlaceholderText(param.description[:80])
         self._edit.textChanged.connect(self.valueChanged.emit)
         self._btn = QPushButton(button_label)

@@ -270,6 +270,10 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
     # existing flat-mode trees stay byte-identical on save.
     if tree.folder_layout and tree.folder_layout != "flat":
         d["folder_layout"] = tree.folder_layout
+    # Only emit path_prepend when non-empty — preserves byte-identical
+    # JSON for trees that don't use it.
+    if tree.path_prepend:
+        d["path_prepend"] = list(tree.path_prepend)
     return d
 
 
@@ -280,6 +284,7 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         nodes=[_node_from_dict(n) for n in data.get("nodes", [])],
         menus=_load_menus(data.get("menus")),
         folder_layout=data.get("folder_layout", "flat"),
+        path_prepend=list(data.get("path_prepend", [])),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

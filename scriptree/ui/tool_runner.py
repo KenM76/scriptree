@@ -28,6 +28,7 @@ reconcile pass.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -93,6 +94,44 @@ from ..core.runner import (
     spawn_streaming_as_user,
 )
 from .widgets.param_widgets import ParamWidget, build_widget_for
+
+
+# Pre-compiled ANSI / VT escape stripper.
+#
+# Even though run_scriptree.py sets NO_COLOR=1 / TERM=dumb / CLICOLOR=0
+# / FORCE_COLOR=0 in os.environ so well-behaved CLIs skip color, some
+# tools either ignore those env vars or are explicitly invoked with
+# ``--color=always``. Without stripping, ScripTree's QPlainTextEdit
+# renders the escape codes as literal text (the ESC byte 0x1B becomes
+# "@" in most monospace fonts, producing output like "@[31m993K@[0m").
+#
+# The pattern matches:
+#   - CSI (Control Sequence Introducer):   ESC [ ... <terminator>
+#   - OSC (Operating System Command):      ESC ] ... BEL or ESC \
+#   - Single-character ESC sequences:      ESC <char>
+#
+# This catches the common SGR (color) sequences plus cursor-movement
+# and clear-screen codes some tools emit. Lone ESC bytes (without a
+# valid suffix) are also stripped to keep them from rendering as "@".
+_ANSI_RE = re.compile(
+    r"\x1B(?:"
+    r"\[[0-?]*[ -/]*[@-~]"          # CSI
+    r"|\][^\x07\x1B]*(?:\x07|\x1B\\)"  # OSC, terminated by BEL or ST
+    r"|[@-Z\\-_]"                    # 7-bit single-char (Fp/Fe/nF)
+    r")"
+)
+
+
+def _strip_ansi(s: str) -> str:
+    """Remove ANSI / VT escape sequences from ``s``.
+
+    Returns the input unchanged when there are no escapes — the
+    ``"\\x1B" not in s`` short-circuit makes the common case (clean
+    text from tools that honored NO_COLOR) free.
+    """
+    if "\x1b" not in s:
+        return s
+    return _ANSI_RE.sub("", s)
 
 
 # --- reorderable form container -------------------------------------------
@@ -1710,13 +1749,19 @@ class ToolRunnerView(QWidget):
         # the OS does.
         exe_path = cmd.argv[0] if cmd.argv else ""
         if exe_path and self._executable_seems_missing(exe_path):
+            # Reset before each call so a previous recovery's override
+            # doesn't bleed into this run.
+            self._recovery_argv0_override = None
             if not self._offer_missing_executable_recovery(exe_path):
                 return
-            # Replacement was applied to self._tool.executable. Reflect
-            # it in the already-built command so the run uses the new
-            # path without re-running the full resolver.
+            # Recovery may have set tool.executable directly (REPLACE
+            # scope) or pinned a one-shot override (PATH-add scopes).
+            # Prefer the override when present — for PATH-add scopes
+            # tool.executable is now a bare name, but argv[0] for THIS
+            # run should be the absolute path the user just picked.
             if cmd.argv:
-                cmd.argv[0] = self._tool.executable
+                override = getattr(self, "_recovery_argv0_override", None)
+                cmd.argv[0] = override or self._tool.executable
 
         # --- credential prompt (run-as-different-user) ---
         credentials: tuple[str, str, str] | None = None
@@ -1814,13 +1859,27 @@ class ToolRunnerView(QWidget):
     def _offer_missing_executable_recovery(self, exe_path: str) -> bool:
         """Show recovery dialog for a missing tool executable.
 
-        Returns True if the user picked a replacement and the run can
-        proceed with the new path. Returns False if the user dismissed
-        (abort the run).
+        Returns True if the user picked a recovery action that allows
+        the run to proceed (file replacement, or a PATH-add scope that
+        makes the executable resolvable). Returns False if the user
+        dismissed.
+
+        The dialog is opened in "scope-picker" mode — instead of just
+        offering a path replacement, the user can choose to keep the
+        bare executable name and add the parent folder to a search
+        path at one of several scopes. See
+        ``ui/recovery_dialog.py`` for the full UX.
         """
-        from .recovery_dialog import MissingFileRecoveryDialog
+        from .recovery_dialog import (
+            MissingFileRecoveryDialog,
+            PathScopeOptions,
+            SCOPE_REPLACE_FILE, SCOPE_SESSION,
+            SCOPE_SCRIPTREE, SCOPE_SCRIPTREETREE,
+            SCOPE_USER_PATH, SCOPE_SYSTEM_PATH,
+        )
         from ..core.permissions import get_app_permissions
         from ..core.io import save_tool
+        from ..core import path_env
 
         perms = get_app_permissions()
         can_replace = (
@@ -1829,38 +1888,282 @@ class ToolRunnerView(QWidget):
             and not self._read_only
         )
 
+        # Gather context for the scope picker. The main window owns
+        # the launcher tree (sidebar) and the optionally-loaded
+        # .scriptreetree path; we pull those via _gather_path_scope_context.
+        ctx = self._gather_path_scope_context()
+        scope_opts = PathScopeOptions(
+            scriptree_path=self._file_path,
+            scriptreetree_path=ctx["tree_path"],
+            all_scriptrees=ctx["all_scriptrees"],
+            all_scriptreetrees=ctx["all_scriptreetrees"],
+            permissions=perms,
+        )
+
         dlg = MissingFileRecoveryDialog(
             self,
             title="Executable not found",
             message=(
                 "The tool's executable could not be located. This "
                 "usually means the program was moved, renamed, or "
-                "uninstalled since this tool was set up."
+                "uninstalled since this tool was set up. Browse to "
+                "find it, then choose how ScripTree should remember "
+                "the new location."
             ),
             missing_path=exe_path,
             allow_replace=can_replace,
             file_filter="Executables (*.exe *.bat *.cmd *.py *.sh);;All files (*)",
             browse_caption="Select replacement executable",
+            path_scope_options=scope_opts,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return False
+
         new_path = dlg.selected_replacement()
         if not new_path:
             return False
 
-        # Update the tool definition and persist it.
-        self._tool.executable = str(Path(new_path).resolve())
-        if self._file_path:
-            try:
-                save_tool(self._tool, self._file_path)
-            except Exception as e:  # noqa: BLE001
-                QMessageBox.warning(
-                    self, "Save failed",
-                    f"Updated the executable path but couldn't save "
-                    f"the tool file:\n{e}\n\n"
-                    "The change will be lost when ScripTree restarts.",
+        scope = dlg.selected_scope()
+        directory = dlg.selected_directory()
+        apply_all = dlg.apply_to_all()
+
+        # ------------------------------------------------------------
+        # SCOPE_REPLACE_FILE — v1 behavior: bake the absolute path into
+        # tool.executable and save.
+        # ------------------------------------------------------------
+        if scope == SCOPE_REPLACE_FILE or scope is None:
+            self._tool.executable = str(Path(new_path).resolve())
+            if self._file_path:
+                try:
+                    save_tool(self._tool, self._file_path)
+                except Exception as e:  # noqa: BLE001
+                    QMessageBox.warning(
+                        self, "Save failed",
+                        f"Updated the executable path but couldn't "
+                        f"save the tool file:\n{e}\n\n"
+                        "The change will be lost when ScripTree "
+                        "restarts.",
+                    )
+            return True
+
+        # ------------------------------------------------------------
+        # PATH-add scopes — the user picked "don't bake an absolute
+        # path; resolve via search path instead". For that to actually
+        # work we have to (a) make sure the search path being chosen
+        # actually contains the directory, AND (b) rewrite
+        # tool.executable to the bare basename so OS path lookup is
+        # used. Without (b) the runner keeps spawning the original
+        # missing absolute path and PATH never gets consulted.
+        # ------------------------------------------------------------
+        if directory is None:
+            return False
+
+        # Snapshot the basename from the file the user just picked. We
+        # rewrite tool.executable to this for every PATH-add scope so
+        # search-path lookup actually engages. The full absolute path
+        # is also assigned to argv[0] for THIS run so we don't have to
+        # re-trigger the same recovery loop after the search path
+        # change has only just landed.
+        new_full_path = str(Path(new_path).resolve())
+        new_basename = Path(new_full_path).name
+
+        applied: list[str] = []
+        errors: list[str] = []
+
+        def _record(label: str, result: path_env.ScopeResult) -> None:
+            if result.ok:
+                applied.append(f"{label}: {result.message}")
+            else:
+                errors.append(f"{label}: {result.message}")
+
+        # Persistent scopes change the .scriptree (tool.executable
+        # becomes the basename so PATH lookup fires next launch). The
+        # session-only scope leaves the .scriptree alone — the user
+        # explicitly opted into a transient fix.
+        scriptree_persisted = False
+
+        if scope == SCOPE_SESSION:
+            _record("session", path_env.add_to_session_path(directory))
+
+        elif scope == SCOPE_SCRIPTREE:
+            # Update the in-memory ToolDef so the env editor and any
+            # future Save reflect the change immediately, then save.
+            existing_pp = list(self._tool.path_prepend or [])
+            if directory not in existing_pp:
+                self._tool.path_prepend = existing_pp + [directory]
+            self._tool.executable = new_basename
+            if self._file_path:
+                try:
+                    save_tool(self._tool, self._file_path)
+                    applied.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"path_prepend += {directory}, executable = "
+                        f"{new_basename}"
+                    )
+                    scriptree_persisted = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"save failed: {e}"
+                    )
+            # Bulk-apply to other .scriptrees in the sidebar (the
+            # current one is already handled in-memory above).
+            if apply_all:
+                for t in ctx["all_scriptrees"]:
+                    if t == self._file_path:
+                        continue
+                    _record(
+                        f".scriptree {Path(t).name}",
+                        path_env.add_to_scriptree_path_prepend(t, directory),
+                    )
+
+        elif scope == SCOPE_SCRIPTREETREE:
+            targets = (
+                ctx["all_scriptreetrees"]
+                if apply_all and ctx["all_scriptreetrees"]
+                else ([ctx["tree_path"]] if ctx["tree_path"] else [])
+            )
+            for t in targets:
+                _record(
+                    f".scriptreetree {Path(t).name}",
+                    path_env.add_to_scriptreetree_path_prepend(t, directory),
                 )
+            # Tool's executable still needs to be a bare name for the
+            # tree's path_prepend to find it.
+            self._tool.executable = new_basename
+            if self._file_path:
+                try:
+                    save_tool(self._tool, self._file_path)
+                    applied.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"executable = {new_basename}"
+                    )
+                    scriptree_persisted = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"save failed: {e}"
+                    )
+
+        elif scope == SCOPE_USER_PATH:
+            _record("user PATH", path_env.add_to_user_path(directory))
+            self._tool.executable = new_basename
+            if self._file_path:
+                try:
+                    save_tool(self._tool, self._file_path)
+                    applied.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"executable = {new_basename}"
+                    )
+                    scriptree_persisted = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"save failed: {e}"
+                    )
+
+        elif scope == SCOPE_SYSTEM_PATH:
+            _record("system PATH", path_env.add_to_system_path(directory))
+            self._tool.executable = new_basename
+            if self._file_path:
+                try:
+                    save_tool(self._tool, self._file_path)
+                    applied.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"executable = {new_basename}"
+                    )
+                    scriptree_persisted = True
+                except Exception as e:  # noqa: BLE001
+                    errors.append(
+                        f".scriptree {Path(self._file_path).name}: "
+                        f"save failed: {e}"
+                    )
+
+        # Always also prepend to the running session — without this
+        # the current Run can't pick up the new directory and the
+        # user has to re-launch ScripTree to test their fix. Guarded
+        # by the same permission as the dedicated session scope so
+        # IT can keep an extra-tight environment if they want to.
+        if scope != SCOPE_SESSION and perms.can("add_to_session_path"):
+            path_env.add_to_session_path(directory)
+
+        # For THIS run only: pin argv[0] to the absolute new path. The
+        # caller reads `_recovery_argv0_override` and rewrites the
+        # already-built argv. This avoids any race where the search
+        # path change (registry, .scriptree path_prepend, etc.) hasn't
+        # propagated to the subprocess context yet.
+        self._recovery_argv0_override = new_full_path
+
+        # Surface the result. We mirror error vs. partial-success in
+        # the popup so the user can tell whether their .scriptree got
+        # rewritten or not.
+        if errors:
+            QMessageBox.warning(
+                self, "Some changes failed",
+                "Successful:\n  " + "\n  ".join(applied or ["(none)"])
+                + "\n\nFailed:\n  " + "\n  ".join(errors),
+            )
+            # Even if some persistent steps failed, the run can still
+            # proceed if argv0 was pinned to the absolute path.
+            return scriptree_persisted or scope == SCOPE_SESSION
+        if applied and hasattr(self, "_status") and self._status is not None:
+            self._status.setText(
+                f"\u2713 {len(applied)} change(s) applied"
+            )
         return True
+
+    def _gather_path_scope_context(self) -> dict:
+        """Collect IDE-wide context for the scope picker.
+
+        Walks up to find the main window and pulls (a) the path of
+        the loaded .scriptreetree (if any), and (b) lists of all
+        currently loaded .scriptree / .scriptreetree files in the
+        sidebar. Returns plain dicts/lists so the dialog stays
+        decoupled from the main window's API.
+        """
+        result = {
+            "tree_path": None,
+            "all_scriptrees": [],
+            "all_scriptreetrees": [],
+        }
+
+        # Walk up parent chain looking for the MainWindow.
+        parent = self.parent()
+        main_window = None
+        while parent is not None:
+            # Avoid hard import — duck-type on a sentinel attribute.
+            if hasattr(parent, "_launcher") and hasattr(parent, "_runners"):
+                main_window = parent
+                break
+            parent = parent.parent() if hasattr(parent, "parent") else None
+
+        if main_window is None:
+            return result
+
+        # Loaded tree path lives on the launcher.
+        try:
+            tree_file = getattr(main_window._launcher, "_tree_file", None)
+            if tree_file:
+                result["tree_path"] = str(tree_file)
+                result["all_scriptreetrees"] = [str(tree_file)]
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Loaded .scriptree files = the runner cache keys + the
+        # currently-open one if it's not in the cache yet.
+        try:
+            paths = set()
+            for runner in main_window._runners.values():
+                fp = getattr(runner, "_file_path", None)
+                if fp:
+                    paths.add(str(fp))
+            if self._file_path:
+                paths.add(self._file_path)
+            result["all_scriptrees"] = sorted(paths)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return result
 
     def _update_user_indicator(
         self, username: str = "", domain: str = ""
@@ -1969,6 +2272,7 @@ class ToolRunnerView(QWidget):
     # --- helpers ---------------------------------------------------------
 
     def _append_line(self, line: str, *, color: QColor | None = None) -> None:
+        line = _strip_ansi(line)
         cursor = self._output.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if color is not None:

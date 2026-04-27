@@ -175,6 +175,33 @@ CAPABILITIES: dict[str, str] = {
     "write_personal_configurations": "Save to the personal configurations folder",
     "edit_configurations": "Edit saved configurations",
     "edit_environment": "Edit environment variables",
+    # PATH-add scopes for the missing-executable recovery dialog. Each
+    # scope is a separate capability so IT can deny dangerous ones
+    # (system / user) while allowing safer ones (session / per-file).
+    # Default deployment ships .scriptree/.scriptreetree path_prepend
+    # and session-env as ALLOWED (file present + writable); user PATH
+    # and system PATH ship UNFILED (missing file = denied at app level)
+    # so an admin must opt into them by creating the capability files.
+    "add_to_session_path": (
+        "Add a directory to PATH for the current ScripTree session "
+        "via the missing-executable recovery dialog"
+    ),
+    "add_to_scriptree_path_prepend": (
+        "Append a directory to a .scriptree's path_prepend list "
+        "via the missing-executable recovery dialog"
+    ),
+    "add_to_scriptreetree_path_prepend": (
+        "Append a directory to a .scriptreetree's path_prepend list "
+        "via the missing-executable recovery dialog"
+    ),
+    "add_to_user_path": (
+        "Modify the current user's PATH environment variable "
+        "(persistent across sessions, no admin required)"
+    ),
+    "add_to_system_path": (
+        "Modify the system PATH environment variable (persistent "
+        "across sessions, requires admin elevation)"
+    ),
     "edit_visibility": "Edit UI visibility and hidden parameters",
     "edit_tree_structure": "Edit tree structure (add/remove/reorder tools)",
     "reorder_parameters": "Reorder parameters by drag-drop",

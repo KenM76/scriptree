@@ -88,6 +88,8 @@ denied for that user.
 | | `write_configurations` | Creating, saving, deleting, renaming configurations |
 | | `edit_configurations` | Modifying saved configurations |
 | | `edit_environment` | Changing environment variable overrides |
+| | `add_to_scriptree_path_prepend` | Appending to a `.scriptree`'s `path_prepend` via the missing-executable recovery dialog (default-allowed) |
+| | `add_to_scriptreetree_path_prepend` | Appending to a `.scriptreetree`'s `path_prepend` via the missing-executable recovery dialog (default-allowed) |
 | | `edit_visibility` | Changing UI visibility and hidden parameters |
 | | `edit_tree_structure` | Adding, removing, or reordering tree items |
 | | `reorder_parameters` | Drag-drop reordering of form parameters |
@@ -98,10 +100,19 @@ denied for that user.
 | | `access_settings` | Opening the Settings dialog |
 | | `load_user_plugins` | Loading parser plugins from external directories |
 | | `access_sensitive_paths` | Accessing paths outside the tool's own directory |
+| | `add_to_session_path` | Adding a directory to the running session's `os.environ['PATH']` via the missing-executable recovery dialog (default-allowed) |
 | **Settings** | `change_permissions_path` | Changing where permissions are loaded from |
 | | `change_settings_path` | Changing the settings INI file location |
+| | `add_to_user_path` | Modifying the current user's PATH via the registry (default-**denied** — admin must opt in) |
+| | `add_to_system_path` | Modifying the system-wide PATH via the registry; requires admin elevation (default-**denied** — admin must opt in) |
 | **Security** | `allow_symlinks` | Allowing symlinks in tool/tree path resolution |
 | | `allow_path_traversal` | Allowing `../` in tree leaf paths |
+
+#### PATH-add scopes — secure-by-default
+
+The five `add_to_*_path*` capabilities all gate the missing-executable recovery dialog's "add folder to a search path" options. Three ship default-allowed (file present in `permissions/`); two ship default-denied (file missing) and require an admin to create the empty capability file before they appear in the dialog. The default-denied set is the high-blast-radius pair: modifying the user's PATH or the system PATH would persist across sessions and affect every program the user runs, not just ScripTree.
+
+Denied scopes appear in the dialog as greyed-out radio buttons with a "Disabled by IT — to enable, ask an admin to create..." note, so users always understand why an option isn't available.
 
 ### Per-file permissions
 
