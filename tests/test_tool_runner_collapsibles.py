@@ -143,6 +143,37 @@ def test_bottom_panel_property_returns_extras_cmd_container() -> None:
     assert v._cmd_box.parentWidget() is panel
 
 
+def test_bottom_panel_size_hint_is_compact() -> None:
+    """The bottom panel uses _CompactPlainTextEdit for both the extras
+    and the command-line editors, so its sizeHint is small enough
+    that the run-controls dock opens at the smallest height that fits
+    both editors and their group-box chrome — no scroll bar required.
+
+    We don't assert an exact pixel count (font metrics vary) but the
+    panel's sizeHint height should be well under what a default
+    QPlainTextEdit pair would have produced (~250 px+)."""
+    v = ToolRunnerView(_tool())
+    h = v.bottom_panel.sizeHint().height()
+    # Two QGroupBox titles + margins + cmd option row + two single-
+    # line editors: should fit comfortably under 200 px on any
+    # reasonable font. Default QPlainTextEdits would have produced
+    # ~250-300 px.
+    assert h < 200, f"bottom_panel sizeHint too tall: {h}"
+
+
+def test_compact_plain_text_edit_one_line_size_hint() -> None:
+    """The _CompactPlainTextEdit subclass returns a sizeHint whose
+    height is roughly one text line + minimal chrome, instead of
+    ~100 px (default QPlainTextEdit)."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from scriptree.ui.tool_runner import _CompactPlainTextEdit
+
+    default = QPlainTextEdit()
+    compact = _CompactPlainTextEdit()
+    # Compact is dramatically shorter than default. Width is unchanged.
+    assert compact.sizeHint().height() < default.sizeHint().height() / 3
+
+
 def test_bottom_panel_round_trips_through_reparent() -> None:
     """install_runner_panels reparents bottom_panel into the run-controls
     dock; uninstall reattaches it to the runner's internal splitter.

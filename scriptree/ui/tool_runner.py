@@ -134,6 +134,39 @@ def _strip_ansi(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+class _CompactPlainTextEdit(QPlainTextEdit):
+    """QPlainTextEdit whose ``sizeHint`` is one text line tall.
+
+    The default ``QPlainTextEdit.sizeHint()`` is roughly 100 px high —
+    enough that when the bottom pane (extras + command line) is
+    reparented into a dock widget at install time, the dock asks the
+    docking system for a ~250 px slice of vertical space even when both
+    editors are nominally one-line affairs.
+
+    Overriding ``sizeHint`` to ``(width-of-default, font line spacing
+    + a little chrome)`` lets the dock open at the smallest height
+    that fits both editors (and their group-box titles + option row)
+    without a scrollbar. Users can still drag the dock's resize handle
+    or the splitter handle inside the form panel to grow the editors.
+    """
+
+    # Chrome budget on top of one text line: small vertical padding
+    # the framed text edit reserves for cursor + frame.
+    _CHROME_PX = 8
+
+    def sizeHint(self):  # type: ignore[override]
+        hint = super().sizeHint()
+        line_h = self.fontMetrics().lineSpacing() + self._CHROME_PX
+        hint.setHeight(line_h)
+        return hint
+
+    def minimumSizeHint(self):  # type: ignore[override]
+        hint = super().minimumSizeHint()
+        line_h = self.fontMetrics().lineSpacing() + self._CHROME_PX
+        hint.setHeight(line_h)
+        return hint
+
+
 # --- reorderable form container -------------------------------------------
 
 class ReorderableParamForm(QListWidget):
@@ -981,10 +1014,12 @@ class ToolRunnerView(QWidget):
         extras_layout = QVBoxLayout(extras_box)
         extras_layout.setContentsMargins(4, 2, 4, 4)
         extras_layout.setSpacing(0)
-        self._extras_edit = QPlainTextEdit()
-        # Start visually as a single line; user can drag the splitter
-        # handle above to grow it. No maximumHeight — splitter drag
-        # must be able to grow this freely.
+        self._extras_edit = _CompactPlainTextEdit()
+        # Start visually as a single line via _CompactPlainTextEdit's
+        # one-line sizeHint, so the run-controls dock opens as tightly
+        # as possible. User can drag the dock's resize handle or the
+        # splitter handle (when the panel is inside the runner) to
+        # grow it freely — no maximumHeight is set.
         mono = QFont()
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFamily("Consolas")
@@ -1034,7 +1069,7 @@ class ToolRunnerView(QWidget):
         cmd_opts_wrapper.setLayout(cmd_opts)
         cmd_layout.addWidget(cmd_opts_wrapper)
 
-        self._live_cmd = QPlainTextEdit()
+        self._live_cmd = _CompactPlainTextEdit()
         self._live_cmd.setPlaceholderText(
             "Command line — edit to override form values or add extras..."
         )
