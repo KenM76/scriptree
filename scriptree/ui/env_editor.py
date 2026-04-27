@@ -57,6 +57,28 @@ class EnvEditorDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        # Known-broken warning. The merge order of os.environ ->
+        # global -> tool -> config (and the override-checkbox logic
+        # that flips the layering) doesn't reliably reach child
+        # processes in v0.1.x — see issue tracker. Saved values
+        # round-trip through .scriptree / sidecar correctly; the
+        # bug is in how those values get applied at spawn time.
+        warning = QLabel(
+            "<b>\u26a0 Heads up:</b> the env-var / PATH-prepend "
+            "feature is <b>not fully working yet</b>. Edits save "
+            "and persist, but they may not actually reach the "
+            "child process at run time. To be fixed in a later "
+            "release; for now use OS-level environment variables "
+            "if you need a guaranteed effect."
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet(
+            "QLabel { background-color: #fff3cd; color: #664d03; "
+            "border: 1px solid #ffecb5; padding: 6px; "
+            "border-radius: 4px; }"
+        )
+        layout.addWidget(warning)
+
         layout.addWidget(QLabel("<b>Environment variables</b>"))
         layout.addWidget(
             QLabel(

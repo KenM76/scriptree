@@ -523,6 +523,78 @@ class MainWindow(QMainWindow):
         )
         self._run_controls_dock.toggleView(True)
 
+        # ads gives a freshly-revealed dock half of its parent area's
+        # vertical space — way too tall for the run controls. The
+        # dock area splitter needs an explicit ``setSizes`` to give
+        # the form most of the height. Defer to the next event-loop
+        # tick so ads has finished its own layout pass first; without
+        # the deferral the splitter sizes get clobbered.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._shrink_dock_to_content_height)
+
+    def _shrink_dock_to_content_height(self) -> None:
+        """Give the run-controls + output docks just enough height to
+        fit their content, and hand the rest to the form.
+
+        Walked the parent chain of each dock area until we hit the
+        first ``QSplitter`` — that's the ads dock-area splitter. We
+        compute a compact height for run-controls / output from their
+        widget's ``sizeHint`` and assign the remainder to whichever
+        sibling holds the form area.
+        """
+        from PySide6.QtWidgets import QSplitter
+
+        def _find_parent_splitter(widget) -> tuple[QSplitter, int] | None:
+            """Walk up until a QSplitter is found. Return (splitter,
+            child_index_holding_widget) or None if none found."""
+            child = widget
+            parent = widget.parentWidget()
+            while parent is not None and not isinstance(parent, QSplitter):
+                child = parent
+                parent = parent.parentWidget()
+            if not isinstance(parent, QSplitter):
+                return None
+            for i in range(parent.count()):
+                if parent.widget(i) is child:
+                    return parent, i
+            return None
+
+        def _compact_one(dock, compact_px: int) -> None:
+            area = dock.dockAreaWidget()
+            if area is None:
+                return
+            found = _find_parent_splitter(area)
+            if found is None:
+                return
+            splitter, idx = found
+            sizes = splitter.sizes()
+            if len(sizes) < 2 or idx >= len(sizes):
+                return
+            total = sum(sizes)
+            if total <= compact_px:
+                return
+            new_sizes = list(sizes)
+            new_sizes[idx] = compact_px
+            # Hand everything else to the LARGEST sibling (typically
+            # the form area) so the form takes precedence on startup.
+            others = [j for j in range(len(sizes)) if j != idx]
+            biggest = max(others, key=lambda j: sizes[j])
+            new_sizes[biggest] = total - compact_px - sum(
+                sizes[j] for j in others if j != biggest
+            )
+            splitter.setSizes(new_sizes)
+
+        # Run controls: pick the bottom panel's natural sizeHint plus
+        # ads's title-bar chrome (~30 px).
+        rc_widget = self._run_controls_dock.widget()
+        if rc_widget is not None:
+            rc_compact = max(rc_widget.sizeHint().height() + 30, 80)
+            _compact_one(self._run_controls_dock, rc_compact)
+
+        # Output dock: less critical (it lives below Tools, not Form),
+        # but a fresh install also gives it half of the left column.
+        # Leave it untouched for now — the user can drag if needed.
+
     def _uninstall_runner_panels(self) -> None:
         """Return the active runner's output + bottom panels to their
         internal splitter and reset dock titles."""

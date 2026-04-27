@@ -1,5 +1,13 @@
 # Environment variables and PATH
 
+> ⚠️ **Heads up (v0.1.x):** the user-defined env / PATH-prepend feature
+> is **not fully working yet**. Edits save and persist correctly, but
+> they may not actually reach the child process at run time. Treat
+> this page as the design document for the feature; don't rely on
+> these settings to take effect until the issue is resolved. Use
+> OS-level environment variables if you need a guaranteed effect for
+> now.
+
 ## Built-in `SCRIPTREE_*` variables
 
 When ScripTree starts, it publishes these variables on its own
