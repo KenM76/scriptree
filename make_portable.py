@@ -317,8 +317,14 @@ def _folder_size_mb(path: Path) -> float:
 
 
 def make_zip(folder: Path) -> Path:
-    """Zip ``folder`` as a sibling ``folder.zip``."""
-    zip_path = folder.with_suffix(".zip")
+    """Zip ``folder`` as a sibling ``folder.zip``.
+
+    NOTE: ``Path.with_suffix(".zip")`` only replaces text after the
+    LAST dot, so for a folder like ``ScripTree-v0.1.14`` it would
+    produce ``ScripTree-v0.1.zip`` (chopping ``.14``). Use string
+    concat instead so version-suffixed destinations zip correctly.
+    """
+    zip_path = folder.parent / (folder.name + ".zip")
     if zip_path.exists():
         zip_path.unlink()
     print(f"Zipping -> {zip_path}")
