@@ -6,14 +6,18 @@
 ::   run_scriptree.bat path\to\tree.scriptreetree -configuration standalone
 ::
 :: Search order for Python:
-::   1. <ScripTree>\lib\python\pythonw.exe   (portable install)
-::   2. pythonw.exe on PATH
-::   3. python.exe on PATH
-:: If none of those exist, prompts the user via PowerShell to either
-:: install a portable Python into lib\python\ (recommended), open the
-:: python.org download page, or cancel.
+::   1. <ScripTree>\lib\python\pythonw.exe / python.exe       (portable)
+::   2. <ScripTree>\lib\python\python-*-embed-*\python.exe    (extracted
+::      embeddable zip dropped one folder deep — common mistake; we
+::      pick it up automatically)
+::   3. <ScripTree>\lib\python-*-embed-*\python.exe           (extracted
+::      embeddable zip dropped next to lib\ instead of inside lib\python\)
+::   4. pythonw.exe / python.exe on PATH
+::
+:: If none of those exist, prints clear manual-install instructions and
+:: pauses so the user can read them before the window closes.
 
-setlocal
+setlocal EnableDelayedExpansion
 
 :: ── 1. Portable Python under lib\python\ ─────────────────────────────
 if exist "%~dp0lib\python\pythonw.exe" (
@@ -25,47 +29,77 @@ if exist "%~dp0lib\python\python.exe" (
     goto :launch
 )
 
-:: ── 2. pythonw.exe on PATH ───────────────────────────────────────────
+:: ── 2. Embeddable zip extracted into lib\python\python-*-embed-*\ ───
+::    e.g. user did "Extract All..." into lib\python\ and got
+::         lib\python\python-3.13.0-embed-amd64\python.exe
+for /d %%D in ("%~dp0lib\python\python-*-embed-*") do (
+    if exist "%%D\python.exe" (
+        set "PY=%%D\python.exe"
+        goto :launch
+    )
+)
+
+:: ── 3. Embeddable zip extracted next to lib\ (lib\python-*-embed-*\) ─
+for /d %%D in ("%~dp0lib\python-*-embed-*") do (
+    if exist "%%D\python.exe" (
+        set "PY=%%D\python.exe"
+        goto :launch
+    )
+)
+
+:: ── 4. pythonw.exe / python.exe on PATH ─────────────────────────────
 for %%P in (pythonw.exe) do set "PYW=%%~$PATH:P"
 if defined PYW (
     set "PY=%PYW%"
     goto :launch
 )
-
-:: ── 3. python.exe on PATH ────────────────────────────────────────────
 for %%P in (python.exe) do set "PYC=%%~$PATH:P"
 if defined PYC (
     set "PY=%PYC%"
     goto :launch
 )
 
-:: ── 4. No Python found — prompt the user ─────────────────────────────
-echo No Python interpreter found. Launching install prompt...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$choice = (New-Object -ComObject WScript.Shell).Popup('No Python 3 was found on this machine. ScripTree needs Python 3.11 or later.`n`nYes  = Install a portable Python into lib\python\ (recommended)`nNo   = Open python.org download page in your browser`nCancel = Quit', 0, 'ScripTree - Python required', 35); switch ($choice) { 6 { exit 10 } 7 { exit 20 } default { exit 30 } }"
-set "RC=%errorlevel%"
-
-if "%RC%"=="10" goto :install_portable
-if "%RC%"=="20" goto :open_browser
-goto :end
-
-:install_portable
+:: ── 5. No Python found — print clear manual instructions and pause ──
 echo.
-echo Installing portable Python into "%~dp0lib\python\"...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0lib\install_python.ps1" "%~dp0"
-if errorlevel 1 (
-    echo.
-    echo install_python.ps1 failed. Check the output above for details.
-    pause
-    goto :end
-)
-:: Re-launch ourselves now that lib\python\ is populated.
+echo ======================================================================
+echo   ScripTree needs Python 3 to run, and none was found on this PC.
+echo ======================================================================
 echo.
-echo Portable Python installed. Re-launching ScripTree...
-call "%~dp0run_scriptree.bat" %*
-goto :end
-
-:open_browser
-start "" "https://www.python.org/downloads/"
+echo To fix this:
+echo.
+echo   1. In your web browser, open:
+echo          https://www.python.org/downloads/windows/
+echo.
+echo   2. Scroll to the latest stable Python 3 (3.11 or newer).
+echo.
+echo   3. Under that version, download the file labeled:
+echo          "Windows embeddable package (64-bit)"
+echo      (it's a small ZIP, about 10 MB).
+echo.
+echo   4. Right-click the downloaded ZIP and choose "Extract All...".
+echo.
+echo   5. Move the extracted files INTO this folder:
+echo          %~dp0lib\python\
+echo.
+echo      so that this file ends up at:
+echo          %~dp0lib\python\python.exe
+echo.
+echo   6. Double-click run_scriptree.bat again.
+echo.
+echo ----------------------------------------------------------------------
+echo  Common mistake — nested extra folder
+echo ----------------------------------------------------------------------
+echo  If after extracting you see an extra folder layer like:
+echo          lib\python\python-3.13.0-embed-amd64\python.exe
+echo  or:
+echo          lib\python-3.13.0-embed-amd64\python.exe
+echo  ScripTree v0.1.15+ will FIND those automatically — just try
+echo  running this .bat again. Otherwise, move the contents of the inner
+echo  folder up one level so python.exe sits directly at:
+echo          lib\python\python.exe
+echo ----------------------------------------------------------------------
+echo.
+pause
 goto :end
 
 :launch
