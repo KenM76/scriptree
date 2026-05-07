@@ -140,11 +140,15 @@ _VERSION = 1
 def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> dict:
     """Serialise a single CellWindow to a plain dict.
 
-    include_member_fields â€” add preferred_position, catalog_path, is_positioned
+    include_member_fields — add preferred_position, catalog_path, is_positioned
     (only meaningful for member hexes within a master's _members set).
     These are populated by save_ring() which has access to the master's state.
+
+    v0.2.5+: also includes ``icon_path`` and ``text_label`` (per-cell
+    visual label override).  Both omitted when None to keep legacy
+    rings byte-identical when no label has been assigned.
     """
-    return {
+    d = {
         "shape": hex_win._shape,
         "orientation": hex_win._orientation,
         "size_px": hex_win._size_px,
@@ -152,6 +156,13 @@ def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> 
         "always_on_top": hex_win._always_on_top,
         "position": {"x": hex_win.pos().x(), "y": hex_win.pos().y()},
     }
+    icon_path = getattr(hex_win, "_icon_path", None)
+    if icon_path:
+        d["icon_path"] = icon_path
+    text_label = getattr(hex_win, "_text_label", None)
+    if text_label:
+        d["text_label"] = text_label
+    return d
 
 
 def _coerce_bool(v) -> bool:
@@ -363,6 +374,13 @@ def load_ring(
         master_win.apply_transparency_change(mf["transparency"])
         master_win.apply_always_on_top_change(mf["always_on_top"])
         master_win.move(mf["pos_x"], mf["pos_y"])
+        # Restore per-cell visual label (v0.2.5+).  Both keys are
+        # optional; absence leaves the cell to fall back to auto-
+        # derived letters from the catalog.
+        if isinstance(master_raw.get("icon_path"), str) and master_raw["icon_path"]:
+            master_win._icon_path = master_raw["icon_path"]
+        if isinstance(master_raw.get("text_label"), str) and master_raw["text_label"]:
+            master_win._text_label = master_raw["text_label"]
         master_win.show()
         _log(
             f"load_ring: standalone hex {master_win._id[:8]} spawned at "
@@ -417,6 +435,12 @@ def load_ring(
         member_win.apply_transparency_change(mf_m["transparency"])
         member_win.apply_always_on_top_change(mf_m["always_on_top"])
         member_win.move(mf_m["pos_x"], mf_m["pos_y"])
+        # Restore per-cell visual label (v0.2.5+).  Same opt-in
+        # semantics as the master/standalone branch above.
+        if isinstance(m_raw.get("icon_path"), str) and m_raw["icon_path"]:
+            member_win._icon_path = m_raw["icon_path"]
+        if isinstance(m_raw.get("text_label"), str) and m_raw["text_label"]:
+            member_win._text_label = m_raw["text_label"]
         member_win.show()
 
         # preferred_position â€” also clamp.

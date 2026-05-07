@@ -226,6 +226,69 @@ def _coerce_str(value, allowed: list[str], default: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Auto-letter derivation from a catalog or tool name
+# ---------------------------------------------------------------------------
+
+# Words skipped when deriving letters from a multi-word name.  These are
+# articles, conjunctions, prepositions that would make a poor first letter
+# in a 2-letter abbreviation.  Per user spec: "skips over words like and
+# or and the, etc."  Comparison is lower-case.
+_LETTER_SKIP_WORDS: frozenset[str] = frozenset({
+    "a", "an", "and", "or", "the", "of", "to", "in", "on", "for",
+    "at", "by", "as", "is", "if",
+})
+
+
+def _derive_letters(name: str) -> str:
+    """Derive a 1-2 character abbreviation from ``name``.
+
+    User spec (verbatim, 2026-05-07):
+      "they take the first and second letter of the tool's name if it
+       is one word, or first and second capital letter if it is one
+       word with capital letter at start and a second one elsewhere,
+       or the letter of the first word and second word (but skips
+       over words like and or and the, etc) unless that is the only
+       word after the first one, then it will use the character for
+       that."
+
+    Rules in order:
+      1. Multi-word with 2+ meaningful (non-skip) words →
+         first letter of each of the first two meaningful words.
+      2. Multi-word but only ONE meaningful word survives the skip
+         filter → fall through to single-word logic on that word.
+      3. Single word starting with a capital AND containing another
+         capital → use the first two capitals (CamelCase / PascalCase).
+      4. Otherwise → the first two characters of the word.
+
+    Always returns at least one character.  Returns ``"?"`` only when
+    the input is empty / whitespace.
+    """
+    s = (name or "").strip()
+    if not s:
+        return "?"
+
+    words = [w for w in s.split() if w]
+    meaningful = [w for w in words if w.lower() not in _LETTER_SKIP_WORDS]
+
+    # Rule 1: ≥2 meaningful words.
+    if len(meaningful) >= 2:
+        return (meaningful[0][0] + meaningful[1][0]).upper()
+
+    # Pick the single word to inspect: meaningful (if any) or the first.
+    word = meaningful[0] if meaningful else words[0]
+
+    # Rule 3: CamelCase / PascalCase — first cap + second cap.
+    caps = [c for c in word if c.isupper()]
+    if word[0].isupper() and len(caps) >= 2:
+        return caps[0] + caps[1]
+
+    # Rule 4: first two characters of the word.
+    if len(word) >= 2:
+        return word[:2].upper()
+    return word[0].upper()
+
+
+# ---------------------------------------------------------------------------
 # Settings dialog
 # ---------------------------------------------------------------------------
 
@@ -1059,6 +1122,11 @@ class CellWindow(QMainWindow):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose, False)   # registry owns lifetime
 
+        # Accept file drops from Explorer (.scriptree, .scriptreetree,
+        # .scriptreering).  Behaviour depends on cell role; see
+        # dragEnterEvent / dropEvent below.
+        self.setAcceptDrops(True)
+
         # ----------------------------------------------------------------
         # Identity and role
         # ----------------------------------------------------------------
@@ -1104,6 +1172,26 @@ class CellWindow(QMainWindow):
         # Masters always use None â€” they show the merged tree of two sources.
         # ----------------------------------------------------------------
         self._catalog_path: str | None = None
+
+        # ----------------------------------------------------------------
+        # Per-cell visual label (v0.2.5).
+        #
+        # Resolution order at paint time (handled in paintEvent):
+        #   1. ``_icon_path`` — path to a PNG/SVG/etc. shown centred
+        #      and scaled to ~70 % of the cell's inscribed circle.
+        #   2. ``_text_label`` — explicit user-assigned text, drawn
+        #      with auto-resized font that fits the cell width.
+        #   3. Auto-derived letters from the loaded catalog's name
+        #      (see ``_derive_letters``).
+        #   4. Nothing — empty cell shows just the shape.
+        #
+        # All three flavours render in the cell's translucent
+        # foreground colour so they read as part of the cell rather
+        # than a sticker on top.  Persisted in QSettings (per-cell)
+        # and in .scriptreering files (per-saved-ring).
+        # ----------------------------------------------------------------
+        self._icon_path: str | None = None
+        self._text_label: str | None = None
 
         # ----------------------------------------------------------------
         # Load persisted settings (overrides branding defaults).
@@ -1374,6 +1462,18 @@ class CellWindow(QMainWindow):
         raw_cp = s.value(self._settings_key("catalog_path"))
         self._catalog_path = raw_cp if isinstance(raw_cp, str) and raw_cp else None
 
+        # Per-cell visual label (icon path + text override).  Empty
+        # string is treated as "unset" so legacy QSettings entries
+        # without these keys behave the same as fresh installs.
+        raw_icon = s.value(self._settings_key("icon_path"))
+        self._icon_path = (
+            raw_icon if isinstance(raw_icon, str) and raw_icon else None
+        )
+        raw_text = s.value(self._settings_key("text_label"))
+        self._text_label = (
+            raw_text if isinstance(raw_text, str) and raw_text else None
+        )
+
     def _save_settings(self) -> None:
         """Persist current per-hex settings to QSettings immediately."""
         s = QSettings()
@@ -1383,6 +1483,8 @@ class CellWindow(QMainWindow):
         s.setValue(self._settings_key("transparency"), self._transparency)
         s.setValue(self._settings_key("always_on_top"), self._always_on_top)
         s.setValue(self._settings_key("catalog_path"), self._catalog_path or "")
+        s.setValue(self._settings_key("icon_path"), self._icon_path or "")
+        s.setValue(self._settings_key("text_label"), self._text_label or "")
         s.sync()
 
     # ------------------------------------------------------------------
@@ -1515,6 +1617,23 @@ class CellWindow(QMainWindow):
         painter.setPen(stroke_pen)
         painter.drawPolygon(poly)
 
+        # ---- Cell label / icon (standalone cells only) ------------------
+        # User contract (2026-05-07): "I want the cells to have the
+        # option to have icons. If not an icon they can be assigned
+        # text that auto resizes to fit. If they are opening from a
+        # file they should start with their icon, and if no icon, their
+        # text assignment, and if no text is assigned they take the
+        # first and second letter of the tool's name…"
+        #
+        # Resolution order:
+        #   1. _icon_path → paint scaled pixmap.
+        #   2. _text_label → paint user-assigned text.
+        #   3. _catalog_path → derive 1-2 letters from catalog name.
+        # All three render at the cell's translucent default so they
+        # blend with the background.
+        if self.role != "master":
+            self._paint_cell_label(painter, size, cx, cy)
+
         # ---- Master centre dot ------------------------------------------
         if self.role == "master":
             # Small filled circle in menuBg colour at the centre.
@@ -1554,6 +1673,341 @@ class CellWindow(QMainWindow):
                       badge_r * 2, badge_r * 2),
                 Qt.AlignCenter,
                 str(badge_count),
+            )
+
+    # ------------------------------------------------------------------
+    # Label / icon rendering
+    # ------------------------------------------------------------------
+
+    def _paint_cell_label(
+        self, painter: QPainter, size: int, cx: float, cy: float,
+    ) -> None:
+        """Paint the standalone cell's icon / text / auto-letters.
+
+        Called from ``paintEvent`` after the polygon fill, before any
+        role-specific overlays.  Translucent foreground so it reads as
+        part of the cell.
+        """
+        # Priority 1: icon from file.
+        if self._icon_path:
+            from PySide6.QtGui import QPixmap
+            pix = QPixmap(self._icon_path)
+            if not pix.isNull():
+                # Inscribed-circle diameter is roughly cell_size * 0.7.
+                target = max(16, int(size * 0.7))
+                scaled = pix.scaled(
+                    target, target,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                # Apply transparency multiplier so the icon visually
+                # matches the cell's overall translucency.
+                if self._transparency < 0.999:
+                    painter.save()
+                    painter.setOpacity(self._transparency)
+                    painter.drawPixmap(
+                        int(cx - scaled.width() / 2),
+                        int(cy - scaled.height() / 2),
+                        scaled,
+                    )
+                    painter.restore()
+                else:
+                    painter.drawPixmap(
+                        int(cx - scaled.width() / 2),
+                        int(cy - scaled.height() / 2),
+                        scaled,
+                    )
+                return
+
+        # Priority 2 / 3: text — explicit override or auto-derived.
+        text = self._text_label
+        if not text:
+            text = self._auto_label_text()
+        if not text:
+            return  # nothing to paint
+        self._paint_label_text(painter, size, cx, cy, text)
+
+    def _auto_label_text(self) -> str | None:
+        """Derive a label from the loaded catalog's name.
+
+        For ``.scriptree`` files we read the ``ToolDef.name``; for
+        ``.scriptreetree`` files we read the ``TreeDef.name``.  The
+        result is fed through ``_derive_letters`` so even tools with
+        long names produce a 1-2 character label.
+
+        Cached on a per-(catalog_path, mtime) key so we don't re-read
+        the file on every paint event.
+        """
+        cp = self._catalog_path
+        if not cp:
+            return None
+        try:
+            from pathlib import Path as _Path
+            p = _Path(cp)
+            if not p.is_file():
+                return None
+            try:
+                mtime = p.stat().st_mtime_ns
+            except OSError:
+                mtime = 0
+            cache_key = (str(p.resolve()), mtime)
+            cache = getattr(self, "_label_cache", None)
+            if cache and cache[0] == cache_key:
+                return cache[1]
+            # Cache miss — read the catalog name.
+            name = ""
+            ext = p.suffix.lower()
+            if ext == ".scriptreetree":
+                from scriptree.core.io import load_tree
+                name = load_tree(str(p)).name or p.stem
+            elif ext == ".scriptree":
+                from scriptree.core.io import load_tool
+                name = load_tool(str(p)).name or p.stem
+            else:
+                name = p.stem
+            label = _derive_letters(name)
+            self._label_cache = (cache_key, label)
+            return label
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_auto_label_text({cp!r}) failed: {exc!r}")
+            return None
+
+    def _paint_label_text(
+        self, painter: QPainter, size: int,
+        cx: float, cy: float, text: str,
+    ) -> None:
+        """Paint ``text`` centred in the cell, auto-sized to fit.
+
+        Font size is chosen so the rendered text fits within ~70 % of
+        the cell's diameter — works for the typical 1-3 character
+        auto-derived labels and for short user-assigned overrides.
+        Longer text shrinks down to a minimum of 8 px before
+        ellipsising.
+
+        Colour: the cell's stroke colour (which is already palette-
+        coordinated) at the cell's transparency multiplier.  This
+        keeps the label visually part of the cell rather than a
+        sticker.
+        """
+        # Target box: 70 % of cell width.
+        target_w = max(16, int(size * 0.70))
+        target_h = max(16, int(size * 0.70))
+
+        # Initial font size guess based on text length.
+        if len(text) <= 2:
+            font_px = max(10, int(size * 0.45))
+        elif len(text) <= 4:
+            font_px = max(10, int(size * 0.30))
+        else:
+            font_px = max(10, int(size * 0.20))
+
+        font = QFont()
+        font.setBold(True)
+        # Shrink iteratively until the text fits the target box.
+        for _ in range(8):
+            font.setPixelSize(font_px)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            advance = metrics.horizontalAdvance(text)
+            ascent = metrics.ascent()
+            if advance <= target_w and ascent <= target_h:
+                break
+            new_px = int(font_px * 0.85)
+            if new_px < 8:
+                font_px = 8
+                break
+            font_px = new_px
+
+        # Use the stroke colour at the cell's overall transparency.
+        # Stroke colour is already coordinated with the palette and
+        # readable against the fill.
+        col = QColor(self._compute_stroke_color())
+        col.setAlpha(round(255 * self._transparency))
+        painter.setPen(col)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        rect = QRect(
+            int(cx - target_w / 2),
+            int(cy - target_h / 2),
+            target_w,
+            target_h,
+        )
+        painter.drawText(
+            rect,
+            Qt.AlignmentFlag.AlignCenter,
+            text,
+        )
+
+    # ------------------------------------------------------------------
+    # File drag-and-drop
+    # ------------------------------------------------------------------
+    #
+    # User contract (2026-05-07): "to open a scriptree or scriptreetree
+    # or scriptreering file I should be able to drag and drop it onto
+    # a cell, or have a scriptree or scriptreetree open a new cell
+    # docked to an existing tree ring if dropped on that tree ring.
+    # If I drop a tree ring file onto an existing tree ring or cell it
+    # should just open undocked to the other, but still related in
+    # that I can take cells from one ring and dock them to the other."
+    #
+    # Dispatch matrix:
+    #
+    #   File type       │ Standalone cell    │ Master / ring
+    #   ────────────────┼────────────────────┼───────────────────────────
+    #   .scriptree      │ Bind to this cell  │ Spawn a new docked member
+    #   .scriptreetree  │ Bind to this cell  │ Spawn a new docked member
+    #   .scriptreering  │ Open new ring      │ Open new ring (same proc)
+    #                   │ (same registry)    │ (same registry)
+    #
+    # ``Open new ring (same registry)`` means the cells from the
+    # dropped ring file appear at their saved positions WITHOUT
+    # auto-docking with the existing ones — the user can drag
+    # individual cells between rings later because everything lives
+    # in the same SnapEngine.
+
+    @staticmethod
+    def _drop_paths(event) -> list[str]:  # noqa: ANN001 — Qt event
+        """Extract local file paths from a drag/drop event.
+
+        Returns only paths whose extension matches the three formats
+        we accept; other URLs (http://, file:// of unknown types) are
+        filtered out so we never attempt to load random files.
+        """
+        md = event.mimeData()
+        if not md.hasUrls():
+            return []
+        out: list[str] = []
+        for u in md.urls():
+            if not u.isLocalFile():
+                continue
+            p = u.toLocalFile()
+            ext = p.lower().rsplit(".", 1)[-1] if "." in p else ""
+            if ext in ("scriptree", "scriptreetree", "scriptreering"):
+                out.append(p)
+        return out
+
+    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
+        if self._drop_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        if self._drop_paths(event):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: ANN001
+        paths = self._drop_paths(event)
+        if not paths:
+            super().dropEvent(event)
+            return
+        event.acceptProposedAction()
+        for p in paths:
+            self._handle_dropped_file(p)
+
+    def _handle_dropped_file(self, path: str) -> None:
+        """Dispatch a dropped file based on extension + this cell's role.
+
+        See the matrix in the section header above.  Always emits a
+        ``[CellWindow] drop ...`` log line so the dispatch is
+        observable from stderr.
+        """
+        from pathlib import Path as _Path
+        from scriptree.shell import recent_files as _rf
+
+        p = _Path(path)
+        if not p.is_file():
+            _log(f"drop ignored — file not found: {path!r}")
+            return
+
+        ext = p.suffix.lower()
+        _log(
+            f"drop {ext!r} on {self.role} {self._id[:8]}: {p.name!r}"
+        )
+
+        if ext in (".scriptree", ".scriptreetree"):
+            if self.role == "master":
+                self._drop_spawn_docked_member(p)
+            else:
+                # Standalone cell: bind the catalog to THIS cell.
+                self._catalog_path = str(p.resolve())
+                self._save_settings()
+                _rf.add(str(p.resolve()))
+                # Invalidate cached label so the new catalog's name
+                # gets used on the next paint.
+                self._label_cache = None
+                self.update()
+                _log(f"  bound to cell {self._id[:8]}")
+        elif ext == ".scriptreering":
+            self._drop_open_related_ring(p)
+        else:
+            _log(f"  unsupported extension: {ext}")
+
+    def _drop_spawn_docked_member(self, path) -> None:  # noqa: ANN001
+        """Master case: spawn a fresh standalone cell bound to the
+        dropped catalog, position it adjacent to the master, and
+        register it in the master's group so it joins the ring.
+
+        For now we don't programmatically dock the new cell to an
+        exact honeycomb slot — we drop it ~1 cell width to the right
+        of the master and let the user nudge it into position.  A
+        future refinement could call ``snap_engine.try_attach`` to
+        pick the first free honeycomb slot.
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell import recent_files as _rf
+
+        new_x = self.pos().x() + self.width() + 12
+        new_y = self.pos().y()
+        new_cell = CellWindow(
+            self._branding,
+            catalog_path=str(path.resolve()),
+        )
+        new_cell.move(new_x, new_y)
+        # Wire to the snap engine if available.
+        try:
+            from scriptree.shell.ring_main import _wire_hex_to_snap
+            _wire_hex_to_snap(new_cell)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"  could not wire new cell to snap engine: {exc!r}")
+        new_cell.show()
+        _rf.add(str(path.resolve()))
+        _log(
+            f"  spawned new cell {new_cell._id[:8]} bound to "
+            f"{path.name!r} adjacent to master {self._id[:8]}"
+        )
+        # Note: actual ring membership (group_master_id, _members[id])
+        # is set by the snap-commit pathway when the user drags this
+        # cell into a real honeycomb slot adjacent to the master.
+        # Until then it's a free standalone next to the ring.
+
+    def _drop_open_related_ring(self, path) -> None:  # noqa: ANN001
+        """Open a .scriptreering file in the current process.
+
+        New ring's cells appear at their saved positions; they do NOT
+        auto-dock to existing cells, but they share the SnapEngine so
+        the user can drag a cell from one ring near a cell from
+        another and snap them together.
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.ring_main import _get_snap_engine
+        from scriptree.shell.ring_io import load_ring
+
+        try:
+            registry = CellRegistry.instance()
+            snap = _get_snap_engine()
+            master = load_ring(path, self._branding, registry, snap)
+            master._saved_ring_path = path
+            _log(
+                f"  opened ring {path.name!r} → master "
+                f"{master._id[:8]} (related, undocked from existing)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"  load_ring({path!r}) failed: {exc!r}")
+            QMessageBox.warning(
+                None, "Could not open ring",
+                f"Failed to open {path.name}:\n\n{exc}",
             )
 
     # ------------------------------------------------------------------

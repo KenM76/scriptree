@@ -1,6 +1,6 @@
 # Trim log
 
-- **Trimmed on:** 2026-04-21 09:39:45
+- **Trimmed on:** 2026-05-07 13:31:43
 - **Platform:** win32
 - **PySide6 size before:** 620.8 MB
 - **PySide6 size after:** 49.8 MB

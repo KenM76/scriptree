@@ -1,6 +1,6 @@
-# PySide6
+# PySide6-QtAds
 
-- **Version:** 6.10.2
+- **Version:** 4.5.0.2
 - **Source:** PyPI (via pip install)
 - **Installed:** 2026-05-07 13:31:41
 - **Installed by:** `lib/update_lib.py` on

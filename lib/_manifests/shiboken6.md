@@ -1,8 +1,8 @@
 # shiboken6
 
-- **Version:** 6.6.3.1
+- **Version:** 6.10.2
 - **Source:** PyPI (via pip install)
-- **Installed:** 2026-04-21 08:29:32
+- **Installed:** 2026-05-07 13:31:41
 - **Installed by:** `lib/update_lib.py` on
   `win32` / Python 3.11.9
 
