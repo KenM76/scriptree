@@ -56,3 +56,10 @@ design.
   `group_layout.repack` keeps members edge-touching, non-overlapping,
   and on-screen.
   → `rags/lessons/group_uniform_size_and_repack.md`
+- [v3-architecture] **close_member_uses_membership_not_source_id**:
+  master.source_a_id / source_b_id are frozen identity fields, not
+  the current cluster — `_close_this` must use `_members` and let
+  `_check_master_validity` enforce the quorum rule, otherwise
+  closing one of the original two seed cells of a 3+ member ring
+  tears down the whole master.
+  → `rags/lessons/close_member_uses_membership_not_source_id.md`

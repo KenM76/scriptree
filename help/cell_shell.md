@@ -104,16 +104,26 @@ sub-folders plus a top-level row:
 └── Exit all
 ```
 
-### "Load X" spawns a new cell (v0.2.8)
+### "Load X" — empty cell binds, bound cell spawns sibling (v0.2.11)
 
 Every "load" action under **ScripTree ▶** — Load ScripTree, Load
-ScripTreeTree, Open recent — **spawns a fresh sibling cell** with the
-loaded catalog and leaves the source cell untouched. (Drag-drop of a
-catalog onto a cell behaves the same way.) Tree Ring → Load ring has
-always worked this way; v0.2.8 brought the catalog actions into line.
+ScripTreeTree, Open recent — and **Tree Ring ▶ Load ring** routes
+through one rule:
 
-If you actually want to *rebind* the current cell, use **Cell ▶ Clear
-loaded file** first and then drop the new catalog on it (or use Load).
+* **Empty cell** (no catalog bound, not a master) → the loaded
+  catalog populates *this* cell. The placeholder you opened becomes
+  the loaded cell. For a `.scriptreering`, the empty cell closes
+  and the ring's master + members appear in its place.
+* **Bound cell** (already has a catalog) or **master** → a fresh
+  sibling cell is spawned next to the source. The source stays
+  untouched.
+
+Drag-drop of a catalog onto a cell follows the same rule: empty cell
+binds, bound cell spawns a sibling, master adds the dropped catalog
+as a new member.
+
+If you want to *rebind* an already-bound cell, use **Cell ▶ Clear
+loaded file** first.
 
 ---
 

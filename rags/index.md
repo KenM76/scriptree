@@ -109,3 +109,8 @@ gives the per-topic slice.
   broadcast through `_apply_group_geometry` and a pure-logic
   `group_layout.repack` keeps members edge-touching, non-overlapping,
   and on-screen.  → `rags/lessons/group_uniform_size_and_repack.md`
+- [v3-architecture] **close_member_uses_membership_not_source_id**:
+  master.source_a_id / source_b_id are frozen identity fields, not
+  the current cluster — `_close_this` must use `_members` and let
+  `_check_master_validity` enforce the quorum rule.
+  → `rags/lessons/close_member_uses_membership_not_source_id.md`

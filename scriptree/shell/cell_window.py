@@ -3525,18 +3525,22 @@ class CellWindow(QMainWindow):
                 _log(f"_autoload_disable: remove_autoload_ring({scope}) failed: {exc!r}")
 
     def _load_catalog_dialog(self, prefer_ext: str = "") -> None:
-        """Open a file dialog to load a catalog into a NEW sibling cell.
+        """Open a file dialog and load a catalog into this cell or a sibling.
 
-        Per user direction (2026-05-07): "when I go to a cell or ring
-        and click to load a scriptree, scriptreetree, or ring it should
-        open a new cell or ring and leave the existing one open."
+        Behaviour (v0.2.11):
 
-        This cell stays untouched.  We spawn a fresh standalone
-        ``CellWindow`` next to this one, bound to the chosen catalog.
+        * **Empty cell** (``self._catalog_path is None`` and not a
+          master): the chosen catalog binds to *this* cell.  No new
+          window is spawned — the empty placeholder cell becomes the
+          loaded one.
+        * **Bound cell** (already has a catalog) or **master**: a
+          fresh sibling cell is spawned next to ``self``, bound to
+          the chosen catalog.  ``self`` stays untouched, matching
+          the v0.2.8 contract for non-empty cells.
 
-        prefer_ext — if ".scriptree" or ".scriptreetree", that filter is
-        selected by default in the dialog.  The user can still switch
-        filters to pick the other type.
+        ``prefer_ext`` — ``".scriptree"`` or ``".scriptreetree"``
+        selects that filter by default in the dialog.  The user can
+        still switch filters to pick the other type.
         """
         from pathlib import Path as _Path
 
@@ -3550,15 +3554,16 @@ class CellWindow(QMainWindow):
         _FILTER_ANY  = "All files (*)"
         all_filters = ";;".join([_FILTER_TOOL, _FILTER_TREE, _FILTER_ALL, _FILTER_ANY])
 
+        action = "loads here" if self._can_bind_self() else "opens in a new cell"
         if prefer_ext == ".scriptreetree":
             default_filter = _FILTER_TREE
-            caption = "Load ScripTreeTree (opens in a new cell)"
+            caption = f"Load ScripTreeTree ({action})"
         elif prefer_ext == ".scriptree":
             default_filter = _FILTER_TOOL
-            caption = "Load ScripTree (opens in a new cell)"
+            caption = f"Load ScripTree ({action})"
         else:
             default_filter = _FILTER_ALL
-            caption = "Load ScripTree or ScripTreeTree (opens in a new cell)"
+            caption = f"Load ScripTree or ScripTreeTree ({action})"
 
         chosen, _ = QFileDialog.getOpenFileName(
             None,
@@ -3568,11 +3573,12 @@ class CellWindow(QMainWindow):
             default_filter,
         )
         if chosen:
-            self._spawn_sibling_with_catalog(chosen)
+            self._open_catalog_path(chosen)
 
     def _open_recent_catalog(self, path: str) -> None:
-        """Load a recent catalog into a NEW sibling cell (this cell
-        stays untouched).  Per V3 v0.2.8 user direction."""
+        """Load a recent catalog into this cell (when empty) or a
+        sibling (when already bound).  See ``_load_catalog_dialog``
+        for the empty-vs-bound rule."""
         from pathlib import Path as _Path
         from scriptree.shell import recent_files as _rf
 
@@ -3598,7 +3604,115 @@ class CellWindow(QMainWindow):
                 s.setValue(key, _json.dumps(items))
                 s.sync()
             return
-        self._spawn_sibling_with_catalog(path)
+        self._open_catalog_path(path)
+
+    def _can_bind_self(self) -> bool:
+        """True iff a chosen catalog should populate this cell rather
+        than spawn a sibling.
+
+        Empty standalone cells (no role=master, no catalog bound)
+        qualify — they're placeholders waiting for content, so loading
+        into them is the natural action.  Master cells and already-
+        bound standalones get sibling-spawn behaviour instead.
+        """
+        return (
+            self.role != "master"
+            and not self._catalog_path
+        )
+
+    def _open_catalog_path(self, catalog_path: str) -> None:
+        """Dispatch a chosen catalog path to the right entry-point.
+
+        * ``.scriptree`` / ``.scriptreetree`` on an **empty** cell →
+          ``_bind_catalog_to_self``.
+        * ``.scriptree`` / ``.scriptreetree`` on a **bound** cell or
+          **master** → ``_spawn_sibling_with_catalog``.
+        * ``.scriptreering`` → handled by ``_open_ring_path`` so an
+          empty cell gets replaced by the loaded ring rather than
+          orphaned next to it.
+        """
+        from pathlib import Path as _Path
+
+        ext = _Path(catalog_path).suffix.lower()
+        if ext == ".scriptreering":
+            self._open_ring_path(catalog_path)
+            return
+        if self._can_bind_self():
+            self._bind_catalog_to_self(catalog_path)
+        else:
+            self._spawn_sibling_with_catalog(catalog_path)
+
+    def _bind_catalog_to_self(self, catalog_path: str) -> None:
+        """Bind ``catalog_path`` to *this* cell — the same in-place
+        behaviour as the drop-on-standalone code path.  Updates the
+        recent-files list, refreshes the label cache, and triggers
+        a repaint.
+        """
+        from pathlib import Path as _Path
+        from scriptree.shell import recent_files as _rf
+
+        try:
+            resolved = str(_Path(catalog_path).resolve())
+        except OSError:
+            resolved = catalog_path
+        self._catalog_path = resolved
+        try:
+            self._save_settings()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_bind_catalog_to_self: _save_settings raised {exc!r}")
+        try:
+            _rf.add(resolved)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_bind_catalog_to_self: recent_files.add raised {exc!r}")
+        self._label_cache = None
+        try:
+            self._refresh_label_from_catalog()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_bind_catalog_to_self: _refresh_label_from_catalog raised {exc!r}")
+        self.update()
+        _log(f"_bind_catalog_to_self: bound {resolved!r} to cell {self._id[:8]}")
+
+    def _open_ring_path(self, ring_path: str) -> None:
+        """Load a ``.scriptreering`` file.
+
+        When called on an **empty** cell, this cell is closed first —
+        the loaded ring's master + members take its place on screen.
+        On a **bound** cell or **master**, the ring loads alongside
+        whatever is already there (no replacement).
+
+        The actual ring spawning is done by ``ring_io.load_ring`` so
+        the master's auto-repack and edge-fold checks run normally.
+        """
+        from pathlib import Path as _Path
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.ring_io import load_ring
+        from scriptree.shell.ring_main import _get_snap_engine
+
+        registry = CellRegistry.instance()
+        snap = _get_snap_engine()
+        path = _Path(ring_path)
+
+        replace_self = self._can_bind_self()
+        try:
+            master = load_ring(path, self._branding, registry, snap)
+            master._saved_ring_path = path
+            _log(
+                f"_open_ring_path: loaded {path.name} - master {master._id[:8]} "
+                f"(replace_self={replace_self})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_open_ring_path: load_ring failed: {exc!r}")
+            QMessageBox.warning(
+                None, "Load failed", f"Could not load ring:\n{exc}",
+            )
+            return
+
+        if replace_self:
+            # Empty placeholder — let the freshly-loaded ring stand
+            # in for it.  We close ``self`` last so the ring shell
+            # doesn't see an empty desktop and quit before the new
+            # master is registered.
+            self.close()
 
     def _spawn_sibling_with_catalog(self, catalog_path: str) -> None:
         """Spawn a fresh standalone cell next to this one, bound to
@@ -3904,20 +4018,50 @@ class CellWindow(QMainWindow):
     def _close_this(self) -> None:
         """Close this hexagon. If it's the last one, quit the app.
 
-        If this hex is a source of a master, close the master too.
+        Group semantics (corrected v0.2.11): closing a *member* removes
+        it from the master's ``_members`` and runs
+        ``_check_master_validity`` — the master only goes away when
+        fewer than 2 members remain.  The previous behaviour (close
+        the master if this cell was its ``source_a_id`` /
+        ``source_b_id``) was wrong: those fields record the
+        *originating* pair, not the current cluster, so closing the
+        first cell ever docked into a 4-cell ring tore the whole
+        master down even though three live members remained.
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
 
-        # Close any master that has this hex as a source.
-        masters_to_close = [
-            m for m in registry.masters()
-            if m.source_a_id == self._id or m.source_b_id == self._id
-        ]
-        for master in masters_to_close:
-            _log(f"Closing master {master._id} because source {self._id} closed")
-            registry.masterDespawned.emit(master._id)
-            master.close()
+        # ── Member case — leave group cleanly ────────────────────────
+        # If this cell is a member of a master, take it out of the
+        # master's _members + _positioned + _dock_partners so the
+        # master can decide for itself whether to close (it does so
+        # only when fewer than 2 members are left, via
+        # _check_master_validity).
+        if self.role != "master" and self._group_master_id is not None:
+            master = registry.get(self._group_master_id)
+            if master is not None and master.role == "master":
+                master._members.pop(self._id, None)
+                master._positioned.discard(self._id)
+                master._dock_partners.discard(self._id)
+                master._auto_hidden.discard(self._id)
+                # Repack the surviving members so they fill the gap
+                # the closed cell left behind, then re-evaluate
+                # whether the master should still exist.
+                try:
+                    master._repack_members()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_close_this: master._repack_members raised "
+                        f"{exc!r} — continuing"
+                    )
+                _check_master_validity(master, registry)
+
+        # ── Master case — closing the master itself ──────────────────
+        # Falling through to self.close() below is fine: the master's
+        # closeEvent (if any) handles member cleanup.  We do NOT
+        # cascade-close based on source_a_id / source_b_id any more.
+        if self.role == "master":
+            registry.masterDespawned.emit(self._id)
 
         # Check if this is the last non-master hex.
         standalones = registry.standalones()
