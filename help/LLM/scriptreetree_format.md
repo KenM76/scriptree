@@ -13,7 +13,8 @@ nodes are named folders.
   "nodes": [/* list[Node] */],
   "menus": [/* list[MenuItemDef], optional — see scriptree_format.md */],
   "folder_layout": "flat | tabs (optional, default 'flat')",
-  "path_prepend": [/* list[string], optional, v0.1.11+ */]
+  "path_prepend": [/* list[string], optional, v0.1.11+ */],
+  "cell": {/* CellAppearance, optional, see below — v0.2.7+ */}
 }
 ```
 
@@ -58,7 +59,7 @@ tab bar is chosen in this order:
 1. `display_name` from the tree node (if non-empty) — pretty label
    controlled by the tree author
 2. `ToolDef.name` from the referenced `.scriptree` file — the tool's
-   own name (often technical, e.g. `SwDxfExport dxf_export`)
+   own name (often technical, e.g. `DxfExport dxf_export`)
 3. The referenced file's stem (fallback if the tool can't be loaded)
 
 For **folders**, `display_name` overrides the folder's `name` field
@@ -135,6 +136,55 @@ by users.
 > than 20 sibling tabs in a single QTabWidget. For small trees
 > (≤7 tools) flat is usually clearer.
 
+## `cell` sub-object (v0.2.7+, optional)
+
+Same shape as the `cell` sub-object on a `.scriptree` (see
+[`scriptree_format.md`](scriptree_format.md) → "`cell` sub-object").
+Controls how the V3 cell shell paints a launcher cell bound to this
+`.scriptreetree`.
+
+```json
+"cell": {
+  "icon": "string, optional — path to an icon file",
+  "icon_data": "string, optional — base64-encoded image bytes (embedded)",
+  "icon_format": "string, optional — \"png\" | \"jpg\" | \"svg\" | ...",
+  "text_label": "string, optional — explicit text override",
+  "icon_scale": "number, optional — relative scale, range 0.25–2.00, default 1.00",
+  "label_opacity": "number, optional — alpha, range 0.20–1.00, default 1.00"
+}
+```
+
+Field rules, defaults, ranges, label-painting priority, and the
+relative-path convention (forward-slash, relative-to-catalog when
+the icon sits under the catalog dir; absolute otherwise) are
+identical to the `.scriptree` case. The whole sub-object is omitted
+on save when every field is at its default, so legacy `.scriptreetree`
+files stay byte-identical.
+
+The cell shell uses these fields when a cell is bound to this tree;
+they have no effect on the V1 editor or runner. A `.scriptreering`
+file does NOT override them — icon and text always come from the
+catalog itself; the ring file only persists position, size,
+transparency, shape, and the catalog path each cell points at.
+
+## Use of `.scriptreetree` from the V3 cell shell
+
+The cell shell binds catalogs to cells. A `.scriptreetree` bound to
+a single cell (single-left click) renders as one popup folder of
+tools. When two cells are docked into a ring, the shell builds a
+**merged** `.scriptreetree` on the fly into
+`%TEMP%/scriptreering_merged_<hash>.scriptreetree`, with one
+top-level folder per member; this is what V1 receives on a master's
+double-right-click. The hash is derived from the membership
+signature, so re-docking the same cells produces the same path
+(V1 can keep the file open across re-docks).
+
+Master cells themselves have no persistent `catalog_path` — their
+"catalog" is materialised on demand from the members' catalogs. A
+`.scriptreetree` saved manually with the same content as a merged
+tree would behave identically when bound to a cell, but the on-disk
+form is reserved for member catalogs.
+
 ## Tree configuration sidecar
 
 Tree-level configurations live in a separate sidecar:
@@ -147,8 +197,8 @@ Tree-level configurations live in a separate sidecar:
     {
       "name": "default",
       "tool_configs": {
-        "./sw_bridge/list-components.scriptree": "production",
-        "./SwApiTrainingGen.scriptree": "verbose"
+        "./file-utils/list-files.scriptree": "production",
+        "./ReportGen.scriptree": "verbose"
       }
     }
   ]
@@ -162,23 +212,23 @@ Edit these via the **Configs...** button in the tree view toolbar.
 ```json
 {
   "schema_version": 1,
-  "name": "SolidWorks toolkit",
+  "name": "Demo toolkit",
   "nodes": [
     {
       "type": "folder",
-      "name": "sw_bridge",
+      "name": "file-utils",
       "children": [
-        { "type": "leaf", "path": "./sw_bridge/list-components.scriptree" },
-        { "type": "leaf", "path": "./sw_bridge/compare-hardware.scriptree" }
+        { "type": "leaf", "path": "./file-utils/list-files.scriptree" },
+        { "type": "leaf", "path": "./file-utils/compare-dirs.scriptree" }
       ]
     },
     {
       "type": "folder",
-      "name": "Training data",
+      "name": "Reports",
       "children": [
         { "type": "leaf",
-          "path": "./SwApiTrainingGen.scriptree",
-          "display_name": "Generate training pairs" }
+          "path": "./ReportGen.scriptree",
+          "display_name": "Generate report" }
       ]
     }
   ]

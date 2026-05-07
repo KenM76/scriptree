@@ -375,9 +375,39 @@ automatically remove the Run-key entry — the user must manually remove it via
 
 ---
 
-## 14. Version History
+## 14. Cell appearance — what lives where (v0.2.7+)
+
+A `.scriptreering` file is purely a **layout** record: positions,
+sizes, transparency, shapes, and which catalog each cell points at.
+
+**Cell appearance — icon, text label, scale, opacity — does NOT live
+in this file.** It lives in the bound catalog (`.scriptree` /
+`.scriptreetree`) under a top-level `cell` sub-object. See
+[`scriptree_format.md`](scriptree_format.md) and
+[`scriptreetree_format.md`](scriptreetree_format.md) → "`cell`
+sub-object".
+
+This split has two benefits:
+
+1. **Catalog-portable visuals.** Embedding an icon into a catalog
+   means anyone who opens that catalog (in any ring, on any machine)
+   sees the same label. Storing it on the ring would mean every ring
+   that loads the catalog needs a fresh copy.
+2. **Layout decoupled from identity.** A user can save many
+   `.scriptreering` files referencing the same catalog without
+   duplicating its label data, and rebranding the catalog updates
+   every ring instantly.
+
+When a cell is rendered from a `.scriptreering`, the loader reads
+position/size/transparency from this file but defers icon/text/scale/
+opacity entirely to the catalog's `cell` sub-object. If the catalog
+omits the sub-object, the cell uses defaults (auto-derived letters,
+scale 1.00, opacity 1.00) — identical to the legacy behaviour.
+
+## 15. Version History
 
 | Version | Date | Summary |
 |---------|------|---------|
 | v1 DRAFT | 2026-05-04 | Initial format. Master + members, position clamping, autoload config, Windows Run-key registration. |
 | v1.1     | 2026-05-04 | Standalone-hex ring support: `master.role = "standalone"` + empty members list. No version bump (additive/backward-compatible). Save as ring + Auto-load on startup added to standalone right-click menu. Double-right-click opens composite editor for all hex roles. |
+| v1.2     | 2026-05-07 | Cell appearance (icon / text / scale / opacity) promoted to the **catalog** JSON (`.scriptree` / `.scriptreetree`) as a top-level `cell` sub-object. Ring files do not carry icon/scale/opacity — they reference catalogs via `catalog_path` and inherit the cell's appearance from there. No format change here; this is a documentation note. |

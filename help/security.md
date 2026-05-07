@@ -86,6 +86,10 @@ denied for that user.
 | **Editing** | `edit_tool_definition` | Opening the tool definition editor |
 | | `read_configurations` | Switching between saved configurations (read-only) |
 | | `write_configurations` | Creating, saving, deleting, renaming configurations |
+| | `read_personal_configurations` | Read access to per-user configuration sidecars (V3) |
+| | `write_personal_configurations` | Write access to per-user configuration sidecars (V3) |
+| | `read_shared_configurations` | Read access to shared / committed configuration sidecars (V3) |
+| | `write_shared_configurations` | Write access to shared / committed configuration sidecars (V3) |
 | | `edit_configurations` | Modifying saved configurations |
 | | `edit_environment` | Changing environment variable overrides |
 | | `add_to_scriptree_path_prepend` | Appending to a `.scriptree`'s `path_prepend` via the missing-executable recovery dialog (default-allowed) |

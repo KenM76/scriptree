@@ -21,13 +21,18 @@ configuration and switch between them with a single click.
 In the runner view, the top strip looks like:
 
 ```
-Configuration: [default ▾]  [Save] [Save as...] [Delete] [Edit...] [Env...]
+Configuration: [default ▾]  [☐ Default]  [Save] [Save as...] [Delete] [Edit...] [Env...]
 ```
 
 - **The combo box** lists every saved configuration. Selecting one loads
   its values into the form. Switching configurations also resets the
   undo history — the undo stack belongs to the configuration you were
   editing.
+- **Default checkbox** (v0.2.2) — marks the currently-selected
+  configuration as the **set's default**. The default is what
+  standalone-mode launches use when no `-configuration` flag is
+  supplied; see "Default configuration" below. Toggling the checkbox
+  saves the sidecar immediately.
 - **Save** — overwrite the *active* configuration with the current form
   values. No prompt; it just saves.
 - **Save as...** — prompt for a new name and create a new configuration
@@ -43,6 +48,31 @@ Configuration: [default ▾]  [Save] [Save as...] [Delete] [Edit...] [Env...]
   elements appear in standalone mode, which parameters are hidden with
   locked values, and whether to prompt for alternate credentials before
   each run.
+
+## Default configuration (v0.2.2)
+
+A `ConfigurationSet` carries a `default_name` field naming the
+configuration that **standalone-mode launches use when no
+`-configuration` argument is supplied** on the command line. Resolution
+order:
+
+1. **`-configuration NAME`** on the CLI (or via the cell shell when
+   it builds the V1 argv) — wins outright.
+2. **`default_name`** — the configuration the user explicitly marked
+   as default via the checkbox.
+3. **`active`** — the last-used configuration (the one selected when
+   the file was last saved).
+4. **First configuration** in the list — final fallback if all of the
+   above are missing or stale.
+
+If you never tick the Default checkbox, behaviour is identical to
+pre-v0.2.2: standalone mode uses whichever configuration was active
+when you closed the editor. Tick it to pin a specific configuration
+regardless of what the editor was last left on.
+
+Renaming or deleting the configuration named in `default_name` clears
+the field at load time, so the resolution falls through to `active` /
+first configuration. Save the sidecar to persist the cleanup.
 
 ## The Edit popup
 
@@ -78,6 +108,7 @@ The sidecar is a small JSON file:
 {
   "schema_version": 1,
   "active": "verbose",
+  "default_name": "default",
   "configurations": [
     { "name": "default", "values": { "name": "hello" }, "extras": [] },
     {
@@ -91,6 +122,10 @@ The sidecar is a small JSON file:
 ```
 
 - `active` is the currently-selected configuration.
+- `default_name` (v0.2.2, optional) names the set's default
+  configuration for standalone-mode launches. Empty / omitted falls
+  back to `active` (legacy behaviour). See "Default configuration"
+  above.
 - Each configuration has `name`, `values` (keyed by param ID), `extras`
   (a list of raw argv tokens to append), and optional `env` /
   `path_prepend` for environment overrides.

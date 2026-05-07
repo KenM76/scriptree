@@ -18,6 +18,7 @@ disagree, the code wins — open an issue and fix the docs.
   "env": { "KEY": "value" },
   "path_prepend": ["directory", "..."],
   "menus": [/* list[MenuItemDef], optional, omitted when empty */],
+  "cell": {/* CellAppearance, optional, see below — v0.2.7+ */},
   "source": {
     "mode": "manual | argparse | click | docopt | heuristic | powershell | winhelp",
     "help_text_cached": "string or null"
@@ -198,6 +199,72 @@ collapsible "Logging" group.
 > loader applies the tool-level default to every section that doesn't
 > declare its own `layout`. New files should use per-section `layout`
 > and omit the tool-level field.
+
+## `cell` sub-object (v0.2.7+, optional)
+
+Controls how the V3 cell shell paints a launcher cell bound to this
+`.scriptree`. **Entirely optional** — when every field sits at its
+default the whole sub-object is omitted from the on-disk JSON, so
+legacy files stay byte-identical.
+
+```json
+"cell": {
+  "icon": "string, optional — path to an icon file",
+  "icon_data": "string, optional — base64-encoded image bytes (embedded)",
+  "icon_format": "string, optional — \"png\" | \"jpg\" | \"jpeg\" | \"svg\" | ... — only meaningful when icon_data is set",
+  "text_label": "string, optional — explicit text override for the cell label",
+  "icon_scale": "number, optional — relative scale, range 0.25–2.00, default 1.00",
+  "label_opacity": "number, optional — alpha multiplier, range 0.20–1.00, default 1.00"
+}
+```
+
+### Field rules
+
+| Field | Type | Default | Range | Notes |
+|-------|------|---------|-------|-------|
+| `icon` | string | `""` (empty) | — | Path to an icon file. **Forward slashes preferred**, relative resolution: if the icon sits inside the `.scriptree` file's directory tree, the writer normalises to `./...`-style relative-to-catalog. Otherwise an absolute path is stored. Either form loads. Mutually exclusive with `icon_data` (Embed clears `icon`; Unembed clears `icon_data` and writes a fresh relative `icon`). |
+| `icon_data` | string | `""` | — | Base64-encoded image bytes. When non-empty, the cell renders from this in-JSON payload. Set by **Embed** in Settings → Cell label; cleared by **Unembed (Save as…)**. |
+| `icon_format` | string | `""` | — | Image format hint for `icon_data` (`"png"`, `"jpg"`, `"svg"`, etc.). Required only when `icon_data` is set; ignored when `icon` is used. |
+| `text_label` | string | `""` | — | Explicit label text. When non-empty, takes priority over auto-derived letters but loses to icons. |
+| `icon_scale` | float | `1.00` | `[0.25, 2.00]` | Relative — the painter resizes the icon proportionally to the cell's current `size_px`. So a 100 % icon "feels the same size" on a 56-px cell as on a 96-px cell. Out-of-range values are clamped silently at load. |
+| `label_opacity` | float | `1.00` | `[0.20, 1.00]` | Alpha multiplier on the painted label / icon. Out-of-range values are clamped. |
+
+### Label-painting priority (recap)
+
+1. `icon_data` → render embedded image at `icon_scale` × `label_opacity`.
+2. `icon` (file path) → render the file the same way.
+3. `text_label` → render the explicit text at `label_opacity`.
+4. **Auto-derived letters** from `name` (CamelCase precedence, skip-word
+   filter, two-letter fallback). See `help/cell_shell.md` for the full
+   rules.
+5. `?` if all of the above produce nothing.
+
+### Compactness
+
+The whole `cell` sub-object is omitted from the on-disk JSON when
+every field is at its default. Likewise, individual fields with
+default values are omitted. Readers must treat any missing field as
+its default.
+
+### Example with an embedded icon
+
+```json
+"cell": {
+  "icon_data": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAg...",
+  "icon_format": "png",
+  "icon_scale": 1.25,
+  "label_opacity": 0.85
+}
+```
+
+### Example with a relative icon path
+
+```json
+"cell": {
+  "icon": "./icons/dxf-export.svg",
+  "icon_scale": 0.8
+}
+```
 
 ## `source` block
 

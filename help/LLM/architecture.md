@@ -1,19 +1,24 @@
 # Architecture
 
-ScripTree is a Python 3.12 / PySide6 application. The package splits
-cleanly into a portable `core/` (pure Python, no Qt imports) and a
-replaceable `ui/` (PySide6). A future Linux/macOS fork swaps out `ui/`
-without touching `core/`.
+ScripTree is a Python 3.11+ / PySide6 application. V3 splits the
+package into three layers: a portable `core/` (pure Python, no Qt
+imports), a replaceable `ui/` (PySide6, the V1 editor), and a new
+`shell/` (PySide6, the V3 cell + ring desktop launcher). A future
+Linux/macOS fork swaps out `ui/` and `shell/` without touching
+`core/`.
 
-## Package layout
+## Package layout (V3)
 
 ```
 scriptree/
 ├── core/
 │   ├── model.py       # ToolDef, ParamDef, SectionDef, TreeNode dataclasses
+│   │                  #   ToolDef and TreeDef carry an optional `cell`
+│   │                  #   sub-object (icon / text / scale / opacity).
 │   ├── io.py          # .scriptree / .scriptreetree JSON load/save
-│   ├── configs.py     # sidecar (Configuration, ConfigurationSet,
-│   │                  #   UIVisibility, TreeConfiguration, safetree)
+│   ├── configs.py     # sidecar (Configuration, ConfigurationSet with
+│   │                  #   default_name, UIVisibility, TreeConfiguration,
+│   │                  #   safetree)
 │   ├── credentials.py # session-scoped encrypted credential store
 │   ├── runner.py      # argv assembly, env merging, subprocess spawn,
 │   │                  #   spawn_streaming_as_user (Windows)
@@ -27,10 +32,14 @@ scriptree/
 │           ├── winhelp.py     # priority 30 — Windows /? help
 │           ├── heuristic.py   # priority 999 — catch-all fallback
 │           └── _core.py       # shared heuristic engine (not a plugin)
-├── ui/
+├── ui/                         # V1 editor (run via run_scriptree.bat)
 │   ├── main_window.py         # menus, recent files, mode switch,
 │   │                          #   View → standalone
-│   ├── tool_editor.py         # property-panel editor
+│   ├── tool_editor.py         # property-panel editor with
+│   │                          #   Configurations bar (incl. Default
+│   │                          #   checkbox) and Cell label group
+│   │                          #   (icon / text / scale / opacity +
+│   │                          #   Embed / Unembed)
 │   ├── tool_runner.py         # form + output pane + config bar +
 │   │                          #   credential prompt + user indicator
 │   ├── tree_view.py           # .scriptreetree launcher + Configs...
@@ -40,8 +49,95 @@ scriptree/
 │   ├── tree_config_editor.py  # tree-level configuration editor
 │   ├── env_editor.py          # KEY=value text editor dialog
 │   └── widgets/               # one file per widget type
-└── main.py                    # argparse CLI: [file] [-configuration NAME]
+├── shell/                      # V3 cell + ring shell
+│   │                          #   (run via run_scriptreering.bat)
+│   ├── ring_main.py           # entry point: QApplication, primary
+│   │                          #   listener, autoload, --new-process
+│   ├── single_instance.py     # QLocalServer pipe per user;
+│   │                          #   try_handoff() for secondary processes
+│   ├── cell_window.py         # CellWindow — frameless hex/square
+│   │                          #   widget; click-toggle popup, drag
+│   │                          #   snap, drop handling, role-aware
+│   │                          #   right-click menu
+│   ├── cell_registry.py       # CellRegistry — id → CellWindow lookup
+│   ├── snap_engine.py         # honeycomb-neighbour snap detection,
+│   │                          #   master spawn, undock-on-shake
+│   ├── ring_io.py             # .scriptreering JSON load/save,
+│   │                          #   position clamping, autoload list
+│   ├── tree_popup.py          # in-process QMenu builder for the
+│   │                          #   single-click cell popup; merges
+│   │                          #   member sub-folders for masters
+│   ├── merged_tree.py         # build_merged_tree_for_master:
+│   │                          #   temp .scriptreetree per ring
+│   │                          #   membership signature
+│   ├── v1_launcher.py         # subprocess spawn into V1 (always
+│   │                          #   passes -standalone for .scriptree
+│   │                          #   tools)
+│   ├── recent_files.py        # JSON-backed MRU per catalog type
+│   └── branding_loader.py     # branding.config.json → app name,
+│                              #   icon, default catalog folder
+└── main.py                    # V1's argparse CLI:
+                               #   [file] [-standalone] [-configuration NAME]
 ```
+
+## V3 layering: core → ui → shell
+
+The three packages form a strict dependency stack:
+
+```
+shell/   →   ui/   →   core/
+```
+
+- **`core/`** imports nothing from PySide6 (enforced by
+  `tests/test_architecture.py`). The cross-platform seam.
+- **`ui/`** is V1 — the editor and runner. Imports `core/` freely.
+  Self-contained: it can run without `shell/` ever being loaded
+  (`run_scriptree.bat`).
+- **`shell/`** is V3's desktop launcher. Imports `core/` for model /
+  io types but **never** imports `ui/`. The shell launches V1 as
+  a subprocess (`v1_launcher.py`), not by importing `ToolRunnerView`
+  or `MainWindow`. Two consequences:
+  - A crash in the shell can't take down a running V1 editor.
+  - A crash in V1 can't take down the cell shell.
+  - V1 is updated by replacing the `ui/` package; the shell needs
+    no recompile.
+
+## The two launchers
+
+| Launcher | Entry point | What runs |
+|---|---|---|
+| `run_scriptree.bat` | `scriptree/main.py` (`scriptree.main:main`) | V1 — the editor / runner. Argparse CLI: `[file] [-standalone] [-configuration NAME]`. |
+| `run_scriptreering.bat` | `scriptree/shell/ring_main.py` (`scriptree.shell.ring_main:main`) | V3 — the cell shell. CLI: positional `.scriptreering` paths, `--load-ring`, `--autoload-rings`, `--register-autostart-{user,system}`, `--unregister-autostart {user,system}`, `--new-process`. |
+
+Both launchers live in the same install. Users typically run the
+shell. Clicking a tool inside the shell shells out to the V1 launcher
+as a fire-and-forget subprocess via `sys.executable` (no `cmd.exe`,
+no console flash) with the right `-standalone` / `-configuration`
+flags built up by `v1_launcher.launch_tool`.
+
+## Single-instance handoff (v0.2.1)
+
+`shell/single_instance.py` provides a per-user `QLocalServer` pipe
+named `ScripTreeRing--<sanitised-username>` (overrideable via
+`SCRIPTREERING_PIPE_NAME` for tests).
+
+`ring_main.main()` flow:
+
+1. **Try handoff first.** If a primary is already listening, encode
+   each positional arg as a JSON command (`spawn_cell`, `load_ring`,
+   `load_catalog`), forward over the socket, wait for ack, exit 0.
+2. **If no primary**, register `PrimaryServer` after `QApplication`
+   construction. Inbound `messageReceived` routes into
+   `_handle_primary_message`, which spawns sibling `CellWindow`
+   instances in the running process — fully dockable with existing
+   cells via the shared `SnapEngine`.
+3. **`--new-process`** opts out of *both* halves: skip the handoff
+   attempt and skip the primary listen. Useful for diagnostics; not
+   recommended for everyday use because the diagnostic instance's
+   cells can't dock with the primary's.
+
+The pipe name is per-user so two users on the same machine each get
+their own primary process.
 
 ## The `core` / `ui` boundary
 

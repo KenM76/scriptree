@@ -13,6 +13,7 @@ file can be committed to version control while the sidecar stays local.
 {
   "schema_version": 1,
   "active": "string — name of the currently-selected configuration",
+  "default_name": "string, optional — name of the set's default configuration (v0.2.2+)",
   "configurations": [
     {
       "name": "string, non-empty, unique within configurations[]",
@@ -33,6 +34,15 @@ file can be committed to version control while the sidecar stays local.
 - `schema_version` — int, currently `1`.
 - `active` — must match one of `configurations[*].name`. If it doesn't,
   the loader falls back to the first configuration.
+- `default_name` (v0.2.2+) — optional. Names the set's **default
+  configuration** for standalone-mode launches. The runner / cell
+  shell calls `ConfigurationSet.default_config()` which resolves in
+  this order: (1) `default_name` if it points at a real configuration,
+  (2) `active`, (3) first configuration. Empty string or absent field
+  = no explicit default; fall through to `active`. The loader clears
+  `default_name` when it points at a deleted/renamed configuration so
+  legacy code that reads the field directly never gets a stale value.
+  Omitted from the on-disk JSON when empty.
 - `configurations` — always non-empty. The editor enforces "at least
   one" by disabling the Delete button when only one remains.
 - `name` — unique within the set. The name `safetree` is reserved by
@@ -71,8 +81,9 @@ Empty `env` and `path_prepend` fields are omitted from the on-disk JSON
 to keep the sidecar small and stable under version control. Empty
 `extras` and `values` are also omitted. `ui_visibility` is omitted when
 all values are at defaults. `hidden_params` is omitted when empty.
-`prompt_credentials` is omitted when `false`. Readers must treat missing
-fields as empty collections / default values.
+`prompt_credentials` is omitted when `false`. `default_name` is
+omitted when empty. Readers must treat missing fields as empty
+collections / default values.
 
 ## Default configuration set
 
