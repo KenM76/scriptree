@@ -33,6 +33,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -42,10 +43,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -345,14 +348,27 @@ class ToolEditorView(QWidget):
 
         # Argument template + live preview + form preview.
         #
-        # The lower half of the editor is a horizontal splitter with
-        # the template editor on the left and a live form preview on
-        # the right. The preview renders exactly what a ``ToolRunnerView``
-        # would show at runtime for the tool *as currently edited*,
-        # with all input widgets disabled so the user can't type into
-        # them by mistake. Every param mutation path calls
+        # The lower half of the editor is a small internal QMainWindow
+        # whose central widget is the template editor and whose right
+        # dock holds the form preview.  Wrapping in a QMainWindow gives
+        # the preview a real ``QDockWidget`` — users can detach it,
+        # float it onto a second monitor, re-dock it left/right/top/
+        # bottom, or hide it via the editor's View menu.  When docked
+        # the resize behaviour is identical to the prior splitter.
+        #
+        # The preview renders exactly what a ``ToolRunnerView`` would
+        # show at runtime for the tool *as currently edited*, with all
+        # input widgets disabled so the user can't type into them by
+        # mistake.  Every param mutation path calls
         # ``_rebuild_form_preview`` to keep it in sync.
-        lower_split = QSplitter(Qt.Orientation.Horizontal)
+        self._preview_host = QMainWindow()
+        # ``Qt.Widget`` strips the QMainWindow's window-flag bits so it
+        # behaves as a normal child widget inside our outer layout.
+        self._preview_host.setWindowFlags(Qt.WindowType.Widget)
+        # Allow the host to expand into available space.
+        self._preview_host.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         tmpl_box = QGroupBox("Argument template")
         tmpl_outer = QVBoxLayout(tmpl_box)
@@ -447,26 +463,38 @@ class ToolEditorView(QWidget):
         self._preview.setReadOnly(True)
         tmpl_outer.addWidget(QLabel("Live preview:"))
         tmpl_outer.addWidget(self._preview)
-        lower_split.addWidget(tmpl_box)
+
+        # Template box becomes the central widget of the internal host.
+        self._preview_host.setCentralWidget(tmpl_box)
 
         # Populate the visual list from the initial template.
         self._sync_visual_from_model()
 
-        # Form preview panel.
-        preview_box = QGroupBox("Form preview (what the user will see)")
-        preview_outer = QVBoxLayout(preview_box)
-        preview_outer.setContentsMargins(6, 6, 6, 6)
+        # Form preview — wrapped in a QDockWidget so the user can
+        # detach / float / re-dock it independently.
         self._form_preview_container = QWidget()
         self._form_preview_layout = QVBoxLayout(self._form_preview_container)
         self._form_preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_scroll = QScrollArea()
         preview_scroll.setWidgetResizable(True)
         preview_scroll.setWidget(self._form_preview_container)
-        preview_outer.addWidget(preview_scroll)
-        lower_split.addWidget(preview_box)
-        lower_split.setStretchFactor(0, 1)
-        lower_split.setStretchFactor(1, 1)
-        outer.addWidget(lower_split)
+
+        self._preview_dock = QDockWidget(
+            "Form preview (what the user will see)", self._preview_host
+        )
+        self._preview_dock.setObjectName("FormPreviewDock")
+        self._preview_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._preview_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self._preview_dock.setWidget(preview_scroll)
+        self._preview_host.addDockWidget(
+            Qt.DockWidgetArea.RightDockWidgetArea, self._preview_dock
+        )
+
+        outer.addWidget(self._preview_host, stretch=1)
 
         # Buttons.
         btn_row = QHBoxLayout()
@@ -1218,6 +1246,30 @@ class ToolEditorView(QWidget):
         layout.addRow(label, widget)
 
     # --- save / cancel --------------------------------------------------
+
+    def save(self) -> None:
+        """Public entry point — same as clicking the Save button.
+
+        Invoked by the main window's File → Save tool action so the
+        same code path runs for both keyboard / menu shortcuts and the
+        editor's own button row.
+        """
+        self._on_save()
+
+    def save_as(self) -> None:
+        """Public entry point — same as clicking the Save as... button."""
+        self._on_save_as()
+
+    def file_path(self) -> str | None:
+        """Return the on-disk path the editor is currently bound to,
+        or ``None`` for an unsaved tool."""
+        return self._file_path
+
+    def preview_dock(self) -> QDockWidget:
+        """Return the form-preview QDockWidget — used by the main window
+        to wire its View menu's Show/Hide form preview toggle to the
+        same dock the user can also drag/float directly."""
+        return self._preview_dock
 
     def _on_save(self) -> None:
         if self._read_only and self._file_path is not None:

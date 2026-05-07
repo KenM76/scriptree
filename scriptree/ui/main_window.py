@@ -261,11 +261,69 @@ class MainWindow(QMainWindow):
         act_new_tree.triggered.connect(self._new_tree)
         m_file.addAction(act_new_tree)
 
+        # Save tool (.scriptree) — enabled while the tool editor is active.
+        # Distinct from "Save tree": the editor edits a single ToolDef,
+        # while the launcher edits the .scriptreetree that references it.
+        self._act_save_tool = QAction("Save &tool", self)
+        self._act_save_tool.setToolTip(
+            "Save the currently-edited .scriptree tool. "
+            "Available while the tool editor is open."
+        )
+        self._act_save_tool.triggered.connect(self._save_tool)
+        self._act_save_tool.setEnabled(False)
+        m_file.addAction(self._act_save_tool)
+
+        self._act_save_tool_as = QAction("Save tool &as...", self)
+        self._act_save_tool_as.setToolTip(
+            "Save the currently-edited .scriptree tool to a new path."
+        )
+        self._act_save_tool_as.triggered.connect(self._save_tool_as)
+        self._act_save_tool_as.setEnabled(False)
+        m_file.addAction(self._act_save_tool_as)
+
         self._act_save_tree = QAction("&Save tree", self)
         self._act_save_tree.setShortcut("Ctrl+S")
         self._act_save_tree.triggered.connect(self._save_tree)
         self._act_save_tree.setEnabled(False)
         m_file.addAction(self._act_save_tree)
+
+        self._act_save_tree_as = QAction("Save tree as...", self)
+        self._act_save_tree_as.setToolTip(
+            "Save the loaded .scriptreetree to a new path."
+        )
+        self._act_save_tree_as.triggered.connect(self._save_tree_as)
+        self._act_save_tree_as.setEnabled(False)
+        m_file.addAction(self._act_save_tree_as)
+
+        # ── Open in ScripTreeRing ─────────────────────────────────────
+        # Hand the currently-loaded file off to the cell shell:
+        #   Open in cell shell  →  one cell bound to the file (works
+        #     for .scriptree, .scriptreetree, and .scriptreering).
+        #   Open tree in ring shell  →  explode the tree's top-level
+        #     items into N cells, automatically arranged as a ring
+        #     around a master.  Only meaningful for trees.
+        m_file.addSeparator()
+
+        self._act_open_in_cell = QAction("Open in &cell shell", self)
+        self._act_open_in_cell.setToolTip(
+            "Open the active file in ScripTreeRing as a single cell. "
+            "Spawns one cell bound to the loaded .scriptree, "
+            ".scriptreetree, or .scriptreering."
+        )
+        self._act_open_in_cell.triggered.connect(self._open_in_cell)
+        self._act_open_in_cell.setEnabled(False)
+        m_file.addAction(self._act_open_in_cell)
+
+        self._act_open_in_ring = QAction("Open tree in &ring shell", self)
+        self._act_open_in_ring.setToolTip(
+            "Open the loaded .scriptreetree in ScripTreeRing as a "
+            "multi-cell ring. Each top-level folder or leaf becomes "
+            "its own cell, and the cells are arranged as a ring "
+            "around a master."
+        )
+        self._act_open_in_ring.triggered.connect(self._open_in_ring)
+        self._act_open_in_ring.setEnabled(False)
+        m_file.addAction(self._act_open_in_ring)
 
         # ── Cell Layout (.scriptreering) ─────────────────────────────
         # The cell shell (run_scriptreering.bat) saves multi-cell
@@ -757,6 +815,137 @@ class MainWindow(QMainWindow):
         if self._launcher.save():
             self.statusBar().showMessage("Tree saved.")
 
+    def _save_tree_as(self) -> None:
+        """Prompt for a new ``.scriptreetree`` path and save the
+        loaded tree there.  Delegates to ``TreeLauncherView.save_as``."""
+        if self._launcher.save_as():
+            path = self._launcher.tree_file()
+            if path is not None:
+                self.statusBar().showMessage(f"Tree saved to {path.name}")
+                self._add_recent_file(str(path))
+
+    def _save_tool(self) -> None:
+        """Save the active editor's .scriptree.  Disabled when no editor."""
+        editor = self._active_editor
+        if editor is None:
+            self.statusBar().showMessage(
+                "No tool editor active — open a tool to edit."
+            )
+            return
+        editor.save()
+
+    def _save_tool_as(self) -> None:
+        """Save-As variant — prompts for a path even when one is set."""
+        editor = self._active_editor
+        if editor is None:
+            self.statusBar().showMessage(
+                "No tool editor active — open a tool to edit."
+            )
+            return
+        editor.save_as()
+
+    # ── Open in ScripTreeRing handlers ─────────────────────────────
+
+    def _active_file_path(self) -> str | None:
+        """Return the most-relevant on-disk path for "Open in cell".
+
+        Priority:
+          1. The active editor's bound file (if any).
+          2. The active tool runner's path (if any).
+          3. The loaded tree's path (if any).
+          4. ``None`` — nothing relevant to hand off.
+        """
+        editor = self._active_editor
+        if editor is not None:
+            ep = editor.file_path()
+            if ep:
+                return ep
+        if self._current_path:
+            return self._current_path
+        tree_file = self._launcher.tree_file()
+        if tree_file is not None:
+            return str(tree_file)
+        return None
+
+    def _open_in_cell(self) -> None:
+        """Hand the active file off to ScripTreeRing as a single cell.
+
+        For ``.scriptreering`` the shell loads the ring as-is.  For
+        ``.scriptree`` / ``.scriptreetree`` the shell spawns one cell
+        bound to that catalog.
+        """
+        path = self._active_file_path()
+        if not path:
+            QMessageBox.information(
+                self, "Nothing to open",
+                "Open a .scriptree or .scriptreetree first, then use "
+                "this action to send it to the cell shell.",
+            )
+            return
+        try:
+            from ..shell.v1_launcher import launch_ring_shell
+            launch_ring_shell(path)
+            self.statusBar().showMessage(
+                f"Launched ScripTreeRing with {Path(path).name}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Launch failed",
+                f"Could not launch ScripTreeRing:\n\n{exc}",
+            )
+
+    def _open_in_ring(self) -> None:
+        """Explode the loaded tree's top-level items into a ring.
+
+        Each top-level node becomes its own cell; folders are
+        materialised as their own temp ``.scriptreetree`` files first.
+        The ring is written to ``%TEMP%`` and handed to ScripTreeRing.
+        """
+        tree_file = self._launcher.tree_file()
+        if tree_file is None:
+            QMessageBox.information(
+                self, "No tree loaded",
+                "Open a .scriptreetree first.  'Open tree in ring "
+                "shell' explodes the tree's top-level items into "
+                "separate cells.",
+            )
+            return
+        if self._launcher.is_dirty():
+            reply = QMessageBox.question(
+                self, "Unsaved tree changes",
+                "The current tree has unsaved changes.  The ring "
+                "shell reads the tree from disk, so any unsaved edits "
+                "will not appear in the cells.  Save now?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            if reply == QMessageBox.StandardButton.Save:
+                if not self._launcher.save():
+                    return
+        try:
+            from ..shell.explode_tree import explode_tree_to_ring
+            from ..shell.v1_launcher import launch_ring_shell
+            ring_path = explode_tree_to_ring(tree_file)
+            launch_ring_shell(ring_path)
+            self.statusBar().showMessage(
+                f"Launched ScripTreeRing with exploded ring "
+                f"({ring_path.name})"
+            )
+        except ValueError as exc:
+            QMessageBox.information(
+                self, "Empty tree",
+                f"Cannot open as a ring: {exc}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Launch failed",
+                f"Could not build / launch the ring:\n\n{exc}",
+            )
+
     # ── Cell Layout (.scriptreering) handlers ─────────────────────────
     #
     # The editor only knows about the catalog it has loaded, so these
@@ -912,6 +1101,33 @@ class MainWindow(QMainWindow):
         self._act_save_tree.setEnabled(
             self._launcher.tree_file() is not None or dirty
         )
+        # "Save tree as..." just needs *some* tree to be loaded — even
+        # an unsaved freshly-created tree is a valid Save-As target.
+        self._act_save_tree_as.setEnabled(
+            self._launcher.tree_file() is not None or dirty
+        )
+        self._refresh_ring_actions()
+
+    def _refresh_ring_actions(self) -> None:
+        """Sync the enabled state of the Open-in-cell / Open-in-ring
+        actions with what's currently loaded.
+
+        Called from anywhere the active file context changes: tree
+        load, tool open, editor open/close.
+        """
+        # Open in cell shell — any active file path qualifies.
+        self._act_open_in_cell.setEnabled(self._active_file_path() is not None)
+        # Open in ring shell — only meaningful when a tree is loaded
+        # (the action explodes top-level items into separate cells).
+        self._act_open_in_ring.setEnabled(
+            self._launcher.tree_file() is not None
+        )
+
+    def _refresh_tool_save_actions(self) -> None:
+        """Sync Save tool / Save tool As enabled state to the editor."""
+        editor_active = self._active_editor is not None
+        self._act_save_tool.setEnabled(editor_active)
+        self._act_save_tool_as.setEnabled(editor_active)
 
     def _confirm_discard_tree(self) -> bool:
         if not self._launcher.is_dirty():
@@ -996,6 +1212,8 @@ class MainWindow(QMainWindow):
         self._close_active_editor()
         self._uninstall_runner_panels()
         self._discard_unsaved_runner()
+        # Path may have changed — recompute "Open in cell" availability.
+        self._refresh_ring_actions()
 
         key = self._runner_key(path)
         if key is not None:
@@ -1031,6 +1249,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"ScripTree — editing {tool.name or '(unnamed)'}"
         )
+        # Editor became active — enable Save tool / Save tool as.
+        self._refresh_tool_save_actions()
+        self._refresh_ring_actions()
 
     def _close_active_editor(self) -> None:
         if self._active_editor is None:
@@ -1038,6 +1259,9 @@ class MainWindow(QMainWindow):
         self._stack.removeWidget(self._active_editor)
         self._active_editor.deleteLater()
         self._active_editor = None
+        # Editor went away — disable Save tool / Save tool as.
+        self._refresh_tool_save_actions()
+        self._refresh_ring_actions()
 
     def _discard_unsaved_runner(self) -> None:
         if self._unsaved_runner is None:

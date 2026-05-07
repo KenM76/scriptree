@@ -320,6 +320,36 @@ class TreeLauncherView(QWidget):
         """Write the tree to disk. Returns True on success."""
         return self._save_tree()
 
+    def save_as(self) -> bool:
+        """Prompt for a new ``.scriptreetree`` path, then save there.
+
+        Returns True on success.  Always opens the Save-As dialog,
+        even when the tree was previously bound to a file — the new
+        path becomes the tree's path on success (subsequent ``save()``
+        calls write to it).
+        """
+        if self._tree is None:
+            return False
+        if getattr(self, "_tree_read_only", False):
+            QMessageBox.warning(
+                self, "Read-only",
+                "This tree file is read-only and cannot be saved.",
+            )
+            return False
+        path = self._ask_save_path()
+        if not path:
+            return False
+        # Re-bind to the new path before delegating to ``_save_tree``,
+        # which writes to ``self._tree_file``.
+        self._tree_file = Path(path).resolve()
+        # The new file may live on a different filesystem with its own
+        # permissions; refresh the read-only flag so subsequent edits
+        # are gated correctly.
+        from ..core.permissions import check_write_access
+        access = check_write_access(self._tree_file)
+        self._tree_read_only = not access.fully_writable
+        return self._save_tree()
+
     def mark_running(self, path: str, running: bool) -> None:
         """Visually flag the leaf for ``path`` as running or idle.
 

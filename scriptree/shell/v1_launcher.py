@@ -171,6 +171,59 @@ def launch_editor_blank() -> None:
     _spawn(cmd)
 
 
+def _ring_launcher_cmd() -> list[str]:
+    """Return the argv prefix used to launch ScripTreeRing (the cell shell).
+
+    Mirrors ``_v1_launcher_cmd`` but targets ``run_scriptreering.py``
+    instead.  Used by the V1 editor's "Open in cell" / "Open in ring"
+    File menu actions to hand a catalog or ring file off to the cell
+    shell as a separate process.
+    """
+    root = _project_root()
+    script = root / "run_scriptreering.py"
+    if not script.is_file():
+        raise FileNotFoundError(
+            f"Cannot locate run_scriptreering.py in {root}"
+        )
+    py = sys.executable
+    if not py:
+        if sys.platform == "win32":
+            bat = root / "run_scriptreering.bat"
+            if bat.is_file():
+                return [str(bat)]
+        else:
+            sh = root / "run_scriptreering.sh"
+            if sh.is_file():
+                return ["bash", str(sh)]
+        raise FileNotFoundError(
+            f"sys.executable is empty and no fallback launcher "
+            f"available in {root}"
+        )
+    return [py, str(script)]
+
+
+def launch_ring_shell(*paths: str | Path) -> None:
+    """Spawn ScripTreeRing with one or more positional file paths.
+
+    Each ``path`` is forwarded to the ring shell.  Behaviour follows
+    ScripTreeRing's existing argv parser:
+
+    * ``.scriptree`` / ``.scriptreetree``  →  spawns one cell bound to
+      that catalog.
+    * ``.scriptreering``                    →  loads the ring file as a
+      master + N members.
+
+    When the ring shell is already running (single-instance handoff),
+    these paths are forwarded to the primary instance and absorbed
+    into its existing ``SnapEngine`` so cells spawn alongside whatever
+    is already on screen.
+    """
+    norm = [str(Path(p)) for p in paths]
+    cmd = _ring_launcher_cmd() + norm
+    _log(f"launch_ring_shell: {[Path(p).name for p in norm]}")
+    _spawn(cmd)
+
+
 # ---------------------------------------------------------------------------
 # V2-menu-engine polyfill — drop-in replacement for `apps.menu.main`
 # ---------------------------------------------------------------------------

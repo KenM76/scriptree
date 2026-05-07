@@ -29,3 +29,7 @@ subprocess oddities encountered while building V3.
   isn't a hang — pytest's summary flushes late through pipes. Check
   the actual exit code before killing.
   → `rags/lessons/pytest_progress_dots_stall.md`
+- [pyside6] **qmainwindow_as_child_widget**: a `QDockWidget` only
+  works under a `QMainWindow` ancestor; embed an internal
+  `QMainWindow` inside a `QWidget` to host real dockable panels.
+  → `rags/lessons/qmainwindow_as_child_widget.md`

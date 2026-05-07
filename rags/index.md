@@ -91,3 +91,16 @@ gives the per-topic slice.
 - [v3-process] **diagnostics_tagged_stderr_logs**: every subsystem
   emits `[Tag] message` to stderr via a local `_log()` helper.
   → `rags/lessons/diagnostics_tagged_stderr_logs.md`
+- [pyside6] **qmainwindow_as_child_widget**: a `QDockWidget` only
+  works under a `QMainWindow` ancestor; embed an internal
+  `QMainWindow` inside a `QWidget` to host real dockable panels.
+  → `rags/lessons/qmainwindow_as_child_widget.md`
+- [v3-architecture] **explode_tree_via_temp_ring**: turn a
+  `.scriptreetree` into a multi-cell ring by writing a synthetic
+  `.scriptreering` to `%TEMP%` and handing it to the cell shell;
+  no new imperative API needed.
+  → `rags/lessons/explode_tree_via_temp_ring.md`
+- [v3-architecture] **save_as_rebinds_path**: Save-As must re-bind
+  `self._tree_file` (and refresh `_tree_read_only`) *before*
+  delegating to the existing save method.
+  → `rags/lessons/save_as_rebinds_path.md`

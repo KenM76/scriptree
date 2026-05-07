@@ -211,6 +211,15 @@ Right-click any cell → **Tree Ring ▶ Save ring…**. The dialog defaults to 
 
 The V1 editor doesn't render cells, but **File → Save Cell Layout** (or **Save Cell Layout As…**) saves a single-cell `.scriptreering` referencing the `.scriptreetree` you currently have loaded. Open it later with **File → Open Cell Layout…** (which launches ScripTreeRing on it) or by double-clicking the `.scriptreering` in Explorer once the file association is set.
 
+### Hand a file off to the cell shell from the V1 editor (v0.2.9)
+
+Two File-menu actions launch ScripTreeRing on whatever you're currently working on:
+
+- **File → Open in cell shell** — works for any active file (the editor's bound `.scriptree`, the loaded `.scriptreetree`, or a `.scriptreering`). The shell spawns one cell bound to the file (or loads the ring if it's a `.scriptreering`).
+- **File → Open tree in ring shell** — only enabled when a `.scriptreetree` is loaded. Each top-level item (folder or leaf) becomes its own cell, and the cells appear in a honeycomb ring around a master. Folders are materialised as their own temp `.scriptreetree` files in `%TEMP%` with absolute leaf paths. The ring file is written to `%TEMP%/scriptreering_explode_<hash>.scriptreering` and handed to ScripTreeRing.
+
+Both actions fire-and-forget the cell shell as a separate process; the editor stays open. If ScripTreeRing is already running, single-instance handoff (above) routes the new file into the existing primary so the cells appear alongside whatever's already on screen.
+
 ---
 
 ## Autoload on Windows startup
