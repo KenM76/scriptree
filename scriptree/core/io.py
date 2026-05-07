@@ -64,6 +64,25 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         d["path_prepend"] = list(tool.path_prepend)
     if tool.menus:
         d["menus"] = [_menu_item_to_dict(m) for m in tool.menus]
+    # Cell-shell visual settings (V3, optional).  Each emitted only
+    # when set so legacy tools round-trip byte-identical.  A "cell"
+    # sub-object groups them so the top-level ToolDef JSON stays
+    # uncluttered for the common case where no cell metadata exists.
+    cell_d: dict[str, Any] = {}
+    if tool.cell_icon:
+        cell_d["icon"] = tool.cell_icon
+    if tool.cell_icon_data:
+        cell_d["icon_data"] = tool.cell_icon_data
+    if tool.cell_icon_format:
+        cell_d["icon_format"] = tool.cell_icon_format
+    if tool.cell_text_label:
+        cell_d["text_label"] = tool.cell_text_label
+    if tool.cell_icon_scale != 1.0:
+        cell_d["icon_scale"] = float(tool.cell_icon_scale)
+    if tool.cell_label_opacity != 1.0:
+        cell_d["label_opacity"] = float(tool.cell_label_opacity)
+    if cell_d:
+        d["cell"] = cell_d
     return d
 
 
@@ -134,6 +153,19 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         )
         for s in raw_sections
     ]
+    # Cell-shell visual settings: live under a "cell" sub-object so
+    # the top-level JSON stays uncluttered for tools that don't have
+    # any.  Missing object → default field values (all empty / 1.0).
+    cell_d = data.get("cell") or {}
+    if not isinstance(cell_d, dict):
+        cell_d = {}
+
+    def _cell_float(key: str, default: float) -> float:
+        try:
+            return float(cell_d.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     return ToolDef(
         name=data["name"],
         executable=data["executable"],
@@ -152,6 +184,12 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         },
         path_prepend=[str(p) for p in (data.get("path_prepend") or [])],
         menus=_load_menus(data.get("menus")),
+        cell_icon=str(cell_d.get("icon", "")),
+        cell_icon_data=str(cell_d.get("icon_data", "")),
+        cell_icon_format=str(cell_d.get("icon_format", "")),
+        cell_text_label=str(cell_d.get("text_label", "")),
+        cell_icon_scale=_cell_float("icon_scale", 1.0),
+        cell_label_opacity=_cell_float("label_opacity", 1.0),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 
@@ -274,17 +312,51 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
     # JSON for trees that don't use it.
     if tree.path_prepend:
         d["path_prepend"] = list(tree.path_prepend)
+    # Cell-shell visual settings — same shape as ToolDef.cell_*
+    # (grouped under a "cell" sub-object, omitted when all-default
+    # so legacy trees stay byte-identical).
+    cell_d: dict[str, Any] = {}
+    if tree.cell_icon:
+        cell_d["icon"] = tree.cell_icon
+    if tree.cell_icon_data:
+        cell_d["icon_data"] = tree.cell_icon_data
+    if tree.cell_icon_format:
+        cell_d["icon_format"] = tree.cell_icon_format
+    if tree.cell_text_label:
+        cell_d["text_label"] = tree.cell_text_label
+    if tree.cell_icon_scale != 1.0:
+        cell_d["icon_scale"] = float(tree.cell_icon_scale)
+    if tree.cell_label_opacity != 1.0:
+        cell_d["label_opacity"] = float(tree.cell_label_opacity)
+    if cell_d:
+        d["cell"] = cell_d
     return d
 
 
 def tree_from_dict(data: dict[str, Any]) -> TreeDef:
     _check_schema(data)
+    cell_d = data.get("cell") or {}
+    if not isinstance(cell_d, dict):
+        cell_d = {}
+
+    def _cell_float(key: str, default: float) -> float:
+        try:
+            return float(cell_d.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     return TreeDef(
         name=data["name"],
         nodes=[_node_from_dict(n) for n in data.get("nodes", [])],
         menus=_load_menus(data.get("menus")),
         folder_layout=data.get("folder_layout", "flat"),
         path_prepend=list(data.get("path_prepend", [])),
+        cell_icon=str(cell_d.get("icon", "")),
+        cell_icon_data=str(cell_d.get("icon_data", "")),
+        cell_icon_format=str(cell_d.get("icon_format", "")),
+        cell_text_label=str(cell_d.get("text_label", "")),
+        cell_icon_scale=_cell_float("icon_scale", 1.0),
+        cell_label_opacity=_cell_float("label_opacity", 1.0),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

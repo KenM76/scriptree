@@ -461,9 +461,16 @@ class SettingsDialog(QDialog):
         # Icon path row — Browse + Clear; only enabled when "Icon" radio.
         icon_path_row = QHBoxLayout()
         icon_path_row.addSpacing(20)
-        self._icon_path_label = QLabel(
-            hexagon._icon_path if hexagon._icon_path else "(no icon set)"
-        )
+        # Display label: shows the resolved path, or "(embedded)"
+        # when the catalog carries the icon as base64 instead of a
+        # path reference.
+        if getattr(hexagon, "_icon_data_b64", ""):
+            initial_label = "(icon embedded in catalog file)"
+        elif hexagon._icon_path:
+            initial_label = hexagon._icon_path
+        else:
+            initial_label = "(no icon set)"
+        self._icon_path_label = QLabel(initial_label)
         self._icon_path_label.setStyleSheet("QLabel { color: #888; }")
         self._icon_path_label.setMinimumWidth(160)
         self._icon_path_label.setWordWrap(True)
@@ -473,6 +480,31 @@ class SettingsDialog(QDialog):
         icon_path_row.addWidget(self._icon_browse_btn)
         icon_path_row.addWidget(self._icon_clear_btn)
         label_layout.addLayout(icon_path_row)
+
+        # Embed / Unembed row — bake an external icon into the
+        # catalog JSON, or extract an embedded one back out to a
+        # file.  Per V3 v0.2.7 user direction: "there should be an
+        # embed / unembed -> save as feature to embed the icon in
+        # the json tree file or pull the one that is in there and
+        # make it back into an external link."
+        embed_row = QHBoxLayout()
+        embed_row.addSpacing(20)
+        self._icon_embed_btn = QPushButton("Embed in catalog")
+        self._icon_embed_btn.setToolTip(
+            "Read the linked icon file from disk, base64-encode it, "
+            "and store it inside the .scriptree / .scriptreetree JSON "
+            "so the icon ships with the catalog."
+        )
+        self._icon_unembed_btn = QPushButton("Unembed (Save as…)")
+        self._icon_unembed_btn.setToolTip(
+            "Extract the icon currently embedded in the catalog "
+            "JSON to a file you choose, and rewrite the catalog so "
+            "it points at that file instead."
+        )
+        embed_row.addWidget(self._icon_embed_btn)
+        embed_row.addWidget(self._icon_unembed_btn)
+        embed_row.addStretch(1)
+        label_layout.addLayout(embed_row)
 
         # Icon scale slider — live preview as you drag.  Default 100
         # = the cell's natural inscribed-circle size (~70 % diameter).
@@ -555,6 +587,8 @@ class SettingsDialog(QDialog):
         self._label_opacity_slider.valueChanged.connect(
             self._on_label_opacity_changed
         )
+        self._icon_embed_btn.clicked.connect(self._on_icon_embed)
+        self._icon_unembed_btn.clicked.connect(self._on_icon_unembed)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -602,16 +636,29 @@ class SettingsDialog(QDialog):
 
     def _update_label_controls_enabled(self) -> None:
         """Enable / disable the per-mode controls based on the radio
-        selection.  Called from radio toggle handler and at init."""
+        selection + cell state.  Called from radio toggle handler and
+        at init."""
         is_text = self._label_mode_text_rb.isChecked()
         is_icon = self._label_mode_icon_rb.isChecked()
+        has_icon_path = bool(self._hex._icon_path)
+        has_embedded = bool(getattr(self._hex, "_icon_data_b64", ""))
+        catalog_bound = bool(self._hex._catalog_path)
+
         self._text_input.setEnabled(is_text)
         self._icon_browse_btn.setEnabled(is_icon)
         self._icon_clear_btn.setEnabled(
-            is_icon and bool(self._hex._icon_path)
+            is_icon and (has_icon_path or has_embedded)
         )
         self._icon_scale_slider.setEnabled(is_icon)
         self._icon_scale_label.setEnabled(is_icon)
+        # Embed: needs an external path AND a catalog to embed into.
+        self._icon_embed_btn.setEnabled(
+            is_icon and has_icon_path and catalog_bound
+        )
+        # Unembed: only meaningful when the catalog has embedded data.
+        self._icon_unembed_btn.setEnabled(
+            is_icon and has_embedded and catalog_bound
+        )
 
     def _on_label_mode_changed(self, btn_id: int, checked: bool) -> None:
         """Radio toggle in the Cell label group.
@@ -684,6 +731,95 @@ class SettingsDialog(QDialog):
         """Live preview for label opacity."""
         self._label_opacity_label.setText(f"Label opacity: {value}%")
         self._hex.apply_label_opacity_change(value / 100.0)
+
+    def _on_icon_embed(self) -> None:
+        """Embed the currently-linked external icon into the bound
+        catalog JSON.  Per user spec: "embed the icon in the json
+        tree file"."""
+        if not self._hex._catalog_path:
+            QMessageBox.information(
+                self, "No catalog loaded",
+                "This cell isn't bound to a .scriptree or "
+                ".scriptreetree file, so there's no catalog to embed "
+                "the icon into.  Right-click → ScripTree → Load… to "
+                "bind a catalog first.",
+            )
+            return
+        if not self._hex._icon_path:
+            QMessageBox.information(
+                self, "No icon to embed",
+                "Use Browse… to pick an icon image file, then Embed "
+                "it into the catalog.",
+            )
+            return
+        try:
+            from scriptree.core.cell_metadata import embed_icon
+            md = embed_icon(self._hex._catalog_path, self._hex._icon_path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Embed failed",
+                f"Could not embed the icon:\n\n{exc}",
+            )
+            return
+        # Sync cell state from the post-write metadata.
+        self._hex._icon_data_b64 = md.icon_data
+        self._hex._icon_data_format = md.icon_format
+        self._hex._icon_path = None
+        self._hex._label_cache = None
+        self._hex.update()
+        self._icon_path_label.setText("(icon embedded in catalog file)")
+        self._update_label_controls_enabled()
+
+    def _on_icon_unembed(self) -> None:
+        """Extract the catalog's embedded icon to a file, then rewrite
+        the catalog to reference the file instead.  Per user spec:
+        "pull the one that is in there and make it back into an
+        external link."""
+        if not self._hex._catalog_path:
+            QMessageBox.information(
+                self, "No catalog loaded",
+                "There's no catalog associated with this cell to "
+                "extract an embedded icon from.",
+            )
+            return
+        if not getattr(self._hex, "_icon_data_b64", ""):
+            QMessageBox.information(
+                self, "Nothing to unembed",
+                "The catalog has no embedded icon — there's nothing "
+                "to extract.",
+            )
+            return
+        # Default save path: catalog's directory + suggested name.
+        from pathlib import Path as _Path
+        from PySide6.QtWidgets import QFileDialog
+        catalog_p = _Path(self._hex._catalog_path)
+        ext = (self._hex._icon_data_format or "png").lstrip(".")
+        suggested = catalog_p.parent / f"{catalog_p.stem}_icon.{ext}"
+        chosen, _ = QFileDialog.getSaveFileName(
+            self,
+            "Unembed icon — save as",
+            str(suggested),
+            f"Image (*.{ext});;All files (*)",
+        )
+        if not chosen:
+            return
+        try:
+            from scriptree.core.cell_metadata import unembed_icon_to_file
+            md = unembed_icon_to_file(self._hex._catalog_path, chosen)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Unembed failed",
+                f"Could not extract the icon:\n\n{exc}",
+            )
+            return
+        # Sync cell state.
+        self._hex._icon_path = md.icon_resolved_path or chosen
+        self._hex._icon_data_b64 = ""
+        self._hex._icon_data_format = ""
+        self._hex._label_cache = None
+        self._hex.update()
+        self._icon_path_label.setText(self._hex._icon_path)
+        self._update_label_controls_enabled()
 
     def _on_rotate(self) -> None:
         shape_key = self._SHAPE_DISPLAY.get(self._shape_combo.currentText(), "hexagon")
@@ -1410,6 +1546,14 @@ class CellWindow(QMainWindow):
         # ----------------------------------------------------------------
         self._icon_path: str | None = None
         self._text_label: str | None = None
+        # Embedded icon (base64 string + format) — populated when the
+        # bound catalog has ``cell_icon_data`` set instead of an
+        # external ``cell_icon`` path.  Both empty when no icon /
+        # external path.  Paint code prefers _icon_data_b64 over
+        # _icon_path so embedded icons survive even if the source
+        # file moves on disk.
+        self._icon_data_b64: str = ""
+        self._icon_data_format: str = ""
         # Icon scale — multiplier of the natural inscribed-circle size
         # (which is ~70 % of the cell's diameter).  1.0 means "use the
         # natural size".  Range from the Settings dialog: 0.25 – 2.0.
@@ -1437,6 +1581,25 @@ class CellWindow(QMainWindow):
         # Constructor catalog_path overrides persisted value (clone-spawn path).
         if catalog_path is not None:
             self._catalog_path = catalog_path
+
+        # If we have a catalog (constructor arg, persisted setting, or
+        # later load), pull cell-visual settings (icon, text, scale,
+        # opacity) directly from its JSON.  These take precedence
+        # over QSettings — per the V3 v0.2.7 user direction "the icon
+        # settings should be stored in the json of the scriptree,
+        # scriptreetree or scriptreering file the cell/ring is
+        # associated with."  ``_label_cache`` is a runtime field so
+        # we have to attribute-set it before any paint can happen;
+        # _refresh_label_from_catalog reads/writes it.
+        self._label_cache: tuple | None = None  # type: ignore[assignment]
+        if self._catalog_path:
+            try:
+                self._refresh_label_from_catalog()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"refresh_label_from_catalog at init failed: "
+                    f"{exc!r}; cell will use QSettings fallback"
+                )
 
         # ----------------------------------------------------------------
         # Pre-compute ShapeGeometry (also used by SnapEngine).
@@ -1800,9 +1963,17 @@ class CellWindow(QMainWindow):
         without clobbering the other.  Pass ``None`` to clear, or a
         string to set.
 
+        Persistence destination depends on whether the cell is bound
+        to a catalog (``.scriptree`` / ``.scriptreetree``):
+          * If yes — write to the catalog JSON's ``cell`` sub-object
+            (per V3 v0.2.7 user direction).  ``icon_path`` is
+            normalised relative to the catalog when possible.
+          * If no — fall back to QSettings (transient cells without
+            a bound catalog still need somewhere to keep their
+            preference).
+
         Always invalidates ``_label_cache`` (auto-letters cache) and
-        repaints.  Saves QSettings synchronously so the change
-        survives a restart.
+        repaints.
         """
         if icon_path is not self._UNSET:
             self._icon_path = icon_path  # type: ignore[assignment]
@@ -1811,19 +1982,124 @@ class CellWindow(QMainWindow):
         # Invalidate auto-label cache; the new override may be in
         # effect on the next paint.
         self._label_cache = None
-        self._save_settings()
+
+        self._persist_label_state(
+            icon_changed=icon_path is not self._UNSET,
+            text_changed=text_label is not self._UNSET,
+        )
         self.update()
 
     def apply_icon_scale_change(self, scale: float) -> None:
         """Live-update the icon scale multiplier (0.25–2.0)."""
         self._icon_scale = max(0.25, min(2.0, scale))
-        self._save_settings()
+        self._persist_label_state(scale_changed=True)
         self.update()
 
     def apply_label_opacity_change(self, opacity: float) -> None:
         """Live-update the label opacity multiplier (0.20–1.00)."""
         self._label_opacity = max(0.20, min(1.00, opacity))
-        self._save_settings()
+        self._persist_label_state(opacity_changed=True)
+        self.update()
+
+    def _persist_label_state(  # noqa: C901
+        self,
+        *,
+        icon_changed: bool = False,
+        text_changed: bool = False,
+        scale_changed: bool = False,
+        opacity_changed: bool = False,
+    ) -> None:
+        from pathlib import Path
+        """Persist the cell's label state to wherever it belongs.
+
+        When the cell is bound to a ``.scriptree`` / ``.scriptreetree``
+        catalog, writes to the catalog JSON's ``cell`` sub-object so
+        the icon ships with the tool/tree definition.  Otherwise
+        falls back to QSettings (the v0.2.6 behaviour).
+
+        ``*_changed`` flags let us write only the field that the
+        user actually changed — keeps the other fields untouched on
+        disk so a no-op save doesn't clobber data the catalog file
+        carried before this cell loaded it.
+        """
+        catalog = self._catalog_path
+        # No catalog → fall back to QSettings (unbound cell).
+        if not catalog or not Path(catalog).is_file():
+            self._save_settings()
+            return
+
+        # Catalog-bound cell — write the changed fields back to the
+        # JSON.  Unchanged fields are passed as None so write_for
+        # leaves them alone.
+        try:
+            from scriptree.core.cell_metadata import write_for
+            kwargs = {}
+            if icon_changed:
+                kwargs["icon"] = self._icon_path or ""
+            if text_changed:
+                kwargs["text_label"] = self._text_label or ""
+            if scale_changed:
+                kwargs["icon_scale"] = float(self._icon_scale)
+            if opacity_changed:
+                kwargs["label_opacity"] = float(self._label_opacity)
+            if not kwargs:
+                # Initial sync — write everything.
+                kwargs = {
+                    "icon": self._icon_path or "",
+                    "text_label": self._text_label or "",
+                    "icon_scale": float(self._icon_scale),
+                    "label_opacity": float(self._label_opacity),
+                }
+            write_for(catalog, **kwargs)
+            _log(
+                f"persisted cell label to catalog {Path(catalog).name!r} "
+                f"(changed: {kwargs!r})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_persist_label_state: write_for({catalog!r}) failed: "
+                f"{exc!r} — falling back to QSettings"
+            )
+            self._save_settings()
+
+    def _refresh_label_from_catalog(self) -> None:
+        """Pull cell label state from the currently-bound catalog file
+        and apply it.  Called after ``_catalog_path`` changes (Load…,
+        drop, etc.).  Does nothing for cells with no catalog.
+
+        Catalog values take precedence over QSettings — the user
+        explicitly bound this cell to a tool/tree, so the tool/tree's
+        embedded preference is what they want.
+        """
+        from pathlib import Path
+        catalog = self._catalog_path
+        if not catalog or not Path(catalog).is_file():
+            return
+        try:
+            from scriptree.core.cell_metadata import read_for
+            md = read_for(catalog)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_refresh_label_from_catalog: read_for({catalog!r}) "
+                f"failed: {exc!r}; keeping current state"
+            )
+            return
+        # Apply.  ``icon_resolved_path`` is the absolute path the
+        # paint code can hand to QPixmap.  ``icon_data`` (embedded)
+        # is stored on a parallel attribute the paint code prefers
+        # over ``_icon_path``.
+        if md.is_embedded():
+            self._icon_path = None
+            self._icon_data_b64 = md.icon_data
+            self._icon_data_format = md.icon_format
+        else:
+            self._icon_path = md.icon_resolved_path or None
+            self._icon_data_b64 = ""
+            self._icon_data_format = ""
+        self._text_label = md.text_label or None
+        self._icon_scale = md.icon_scale
+        self._label_opacity = md.label_opacity
+        self._label_cache = None
         self.update()
 
     def apply_always_on_top_change(self, on: bool) -> None:
@@ -1983,47 +2259,64 @@ class CellWindow(QMainWindow):
         role-specific overlays.  Translucent foreground so it reads as
         part of the cell.
         """
-        # Priority 1: icon from file.
-        if self._icon_path:
+        # Priority 1: icon — embedded base64 first, then external file.
+        # Embedded wins because it survives even if the source file
+        # has been moved on disk.
+        pix = None
+        if self._icon_data_b64:
+            from PySide6.QtGui import QPixmap
+            try:
+                import base64
+                raw = base64.b64decode(self._icon_data_b64.encode("ascii"))
+                pix = QPixmap()
+                if not pix.loadFromData(
+                    raw, self._icon_data_format.upper() or None
+                ):
+                    pix = None
+            except Exception:  # noqa: BLE001
+                pix = None
+        if pix is None and self._icon_path:
             from PySide6.QtGui import QPixmap
             pix = QPixmap(self._icon_path)
-            if not pix.isNull():
-                # Inscribed-circle diameter is ~cell_size * 0.7.
-                # Multiply by ``_icon_scale`` so the user can grow or
-                # shrink the icon relative to the cell.  Because the
-                # base is ``size`` (the cell's current pixel
-                # dimension), this scale automatically tracks future
-                # cell-size changes — per user spec: "once accepted
-                # this scale will automatically adjust with the
-                # scaling of the cell shape."
-                target = max(8, int(size * 0.7 * self._icon_scale))
-                scaled = pix.scaled(
-                    target, target,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
+            if pix.isNull():
+                pix = None
+        if pix is not None:
+            # Inscribed-circle diameter is ~cell_size * 0.7.
+            # Multiply by ``_icon_scale`` so the user can grow or
+            # shrink the icon relative to the cell.  Because the
+            # base is ``size`` (the cell's current pixel
+            # dimension), this scale automatically tracks future
+            # cell-size changes — per user spec: "once accepted
+            # this scale will automatically adjust with the
+            # scaling of the cell shape."
+            target = max(8, int(size * 0.7 * self._icon_scale))
+            scaled = pix.scaled(
+                target, target,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            # Apply (cell transparency × label opacity) so the
+            # icon visually matches the cell's translucency and
+            # the user's per-cell label-opacity override.
+            effective_op = max(
+                0.0, min(1.0, self._transparency * self._label_opacity),
+            )
+            if effective_op < 0.999:
+                painter.save()
+                painter.setOpacity(effective_op)
+                painter.drawPixmap(
+                    int(cx - scaled.width() / 2),
+                    int(cy - scaled.height() / 2),
+                    scaled,
                 )
-                # Apply (cell transparency × label opacity) so the
-                # icon visually matches the cell's translucency and
-                # the user's per-cell label-opacity override.
-                effective_op = max(
-                    0.0, min(1.0, self._transparency * self._label_opacity),
+                painter.restore()
+            else:
+                painter.drawPixmap(
+                    int(cx - scaled.width() / 2),
+                    int(cy - scaled.height() / 2),
+                    scaled,
                 )
-                if effective_op < 0.999:
-                    painter.save()
-                    painter.setOpacity(effective_op)
-                    painter.drawPixmap(
-                        int(cx - scaled.width() / 2),
-                        int(cy - scaled.height() / 2),
-                        scaled,
-                    )
-                    painter.restore()
-                else:
-                    painter.drawPixmap(
-                        int(cx - scaled.width() / 2),
-                        int(cy - scaled.height() / 2),
-                        scaled,
-                    )
-                return
+            return
 
         # Priority 2 / 3: text — explicit override or auto-derived.
         text = self._text_label
@@ -2246,6 +2539,9 @@ class CellWindow(QMainWindow):
                 # Invalidate cached label so the new catalog's name
                 # gets used on the next paint.
                 self._label_cache = None
+                # Pull cell-visual fields from the new catalog (per
+                # V3 v0.2.7: icon settings live in the catalog JSON).
+                self._refresh_label_from_catalog()
                 self.update()
                 _log(f"  bound to cell {self._id[:8]}")
         elif ext == ".scriptreering":
@@ -3042,6 +3338,8 @@ class CellWindow(QMainWindow):
             self._catalog_path = chosen
             self._save_settings()
             _rf.add(chosen)
+            self._refresh_label_from_catalog()
+            self.update()
             _log(f"Catalog set to {chosen!r} for id={self._id[:8]}")
 
     def _open_recent_catalog(self, path: str) -> None:
@@ -3074,6 +3372,8 @@ class CellWindow(QMainWindow):
         self._catalog_path = path
         self._save_settings()
         _rf.add(path)
+        self._refresh_label_from_catalog()
+        self.update()
         _log(f"Catalog set from recent: {path!r} for id={self._id[:8]}")
 
     def _save_catalog_as_dialog(self) -> None:

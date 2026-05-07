@@ -252,6 +252,35 @@ class ToolDef:
     # and as a menu bar extension in the main window. Grouped by
     # ``MenuItemDef.menu`` into top-level menus.
     menus: list[MenuItemDef] = field(default_factory=list)
+    # Cell-shell visual settings (V3, optional).  Persisted in the
+    # .scriptree JSON so a tool ships with its preferred presentation.
+    # All optional; cells fall back to auto-derived letters when none
+    # of these are set.  Per the v0.2.7 user direction (2026-05-07):
+    # "The icon settings should be stored in the json of the
+    # scriptree, scriptreetree or scriptreering file the cell/ring
+    # is associated with."
+    #
+    #   cell_icon         — relative-by-default path to an image file.
+    #                       Resolved against the .scriptree's parent
+    #                       directory at load time.
+    #   cell_icon_data    — base64-encoded image bytes (an "embedded"
+    #                       icon).  When set, takes precedence over
+    #                       cell_icon (which should be empty in that
+    #                       case after Embed).
+    #   cell_icon_format  — image format hint for cell_icon_data
+    #                       (e.g. "png", "jpg", "svg").  Required if
+    #                       cell_icon_data is set.
+    #   cell_text_label   — explicit short text override.
+    #   cell_icon_scale   — multiplier of the natural inscribed-circle
+    #                       size (default 1.0).
+    #   cell_label_opacity — multiplier of the cell's transparency
+    #                       (default 1.0).
+    cell_icon: str = ""
+    cell_icon_data: str = ""
+    cell_icon_format: str = ""
+    cell_text_label: str = ""
+    cell_icon_scale: float = 1.0
+    cell_label_opacity: float = 1.0
     schema_version: int = SCHEMA_VERSION
     # Absolute path of the ``.scriptree`` file this tool was loaded
     # from — populated by ``load_tool()``. Used at run time to resolve
@@ -388,6 +417,15 @@ class TreeDef:
     # tab-bar right-click menu — that's an in-session override and
     # doesn't persist back to disk.
     folder_layout: str = "flat"
+    # Cell-shell visual settings — same shape as the corresponding
+    # fields on ToolDef.  See ToolDef.cell_icon docstring for the
+    # full contract.  Per V3 v0.2.7 user direction.
+    cell_icon: str = ""
+    cell_icon_data: str = ""
+    cell_icon_format: str = ""
+    cell_text_label: str = ""
+    cell_icon_scale: float = 1.0
+    cell_label_opacity: float = 1.0
     schema_version: int = SCHEMA_VERSION
 
 
