@@ -1646,7 +1646,7 @@ class HexagonWindow(QMainWindow):
                 self._break_free_from_cluster()
 
             try:
-                from scriptree.shell.main import _get_snap_engine
+                from scriptree.shell.ring_main import _get_snap_engine
                 snap = _get_snap_engine()
                 if snap is not None:
                     snap.attach_drag(self._id)
@@ -1697,7 +1697,7 @@ class HexagonWindow(QMainWindow):
                 if self._snap_overlay is not None:
                     self._snap_overlay.hide()
                 try:
-                    from scriptree.shell.main import _get_snap_engine
+                    from scriptree.shell.ring_main import _get_snap_engine
                     snap = _get_snap_engine()
                     if snap is not None:
                         snap.detach_drag(self._id)
@@ -1949,7 +1949,6 @@ class HexagonWindow(QMainWindow):
 
         # ---- Multi-instance actions ----
         spawn_action = menu.addAction("Spawn another hexagon")
-        close_action = menu.addAction("Close this hexagon")
 
         # "Leave group" â€” shown when this hex belongs to a master's group.
         leave_group_action = None
@@ -1963,10 +1962,29 @@ class HexagonWindow(QMainWindow):
         menu.addSeparator()
 
         about_action = menu.addAction(f"About {brand}")
-        settings_action = menu.addAction("Settingsâ€¦")
-        preferences_action = menu.addAction("Preferencesâ€¦")
+        settings_action = menu.addAction("Settings…")
+        preferences_action = menu.addAction("Preferences…")
         menu.addSeparator()
-        quit_action = menu.addAction("Quit")
+
+        # ---- Close / exit actions â€” role-aware ----
+        # The user contract is: every cell offers a way to close
+        # itself and a way to exit ScripTreeRing entirely. Master
+        # cells (rings) additionally offer "close ring" (members
+        # become standalone) and "close all related" (close master
+        # + all its members).
+        close_cell_action = None
+        close_ring_action = None
+        close_all_related_action = None
+        if self.role == "master":
+            close_ring_action = menu.addAction(
+                "Close ring (undock all members)"
+            )
+            close_all_related_action = menu.addAction(
+                "Close all related (master + members)"
+            )
+        else:
+            close_cell_action = menu.addAction("Close this cell")
+        exit_all_action = menu.addAction("Exit all")
 
         chosen = menu.exec(pos)
 
@@ -1994,8 +2012,15 @@ class HexagonWindow(QMainWindow):
             self._autoload_set_scope("system")
         elif chosen == spawn_action:
             self._spawn_another()
-        elif chosen == close_action:
+        elif close_cell_action is not None and chosen == close_cell_action:
             self._close_this()
+        elif close_ring_action is not None and chosen == close_ring_action:
+            self._close_ring_undock_all()
+        elif close_all_related_action is not None \
+                and chosen == close_all_related_action:
+            self._close_all_related()
+        elif chosen == exit_all_action:
+            self._exit_all()
         elif leave_group_action is not None and chosen == leave_group_action:
             self._explicit_leave_group()
         elif chosen == about_action:
@@ -2013,8 +2038,6 @@ class HexagonWindow(QMainWindow):
             self._open_settings_dialog()
         elif chosen == preferences_action:
             self._open_preferences_dialog()
-        elif chosen == quit_action:
-            QApplication.quit()
 
     # ------------------------------------------------------------------
     # Ring save / load / autoload handlers
@@ -2076,7 +2099,7 @@ class HexagonWindow(QMainWindow):
         path = _Path(chosen)
         try:
             from scriptree.shell.hexagon_registry import HexagonRegistry
-            from scriptree.shell.main import _get_snap_engine
+            from scriptree.shell.ring_main import _get_snap_engine
             registry = HexagonRegistry.instance()
             snap = _get_snap_engine()
             master = load_ring(path, self._branding, registry, snap)
@@ -2499,8 +2522,96 @@ class HexagonWindow(QMainWindow):
         self.close()
 
         if is_last:
-            _log("Last hexagon closed â€” quitting application")
+            _log("Last hexagon closed — quitting application")
             QApplication.quit()
+
+    # ------------------------------------------------------------------
+    # Role-aware close + exit handlers (right-click menu)
+    # ------------------------------------------------------------------
+
+    def _close_ring_undock_all(self) -> None:
+        """Master-cell action: destroy the master and let its member
+        cells revert to standalones.
+
+        Members keep their positions and catalogs; only the master is
+        gone, plus the dock relationship.  Equivalent to "Disband
+        group" but framed in user-facing language: "close ring".
+        """
+        from scriptree.shell.hexagon_registry import HexagonRegistry
+        if self.role != "master":
+            _log("_close_ring_undock_all on non-master — falling back to _close_this")
+            self._close_this()
+            return
+        registry = HexagonRegistry.instance()
+        # Iterate a copy of member ids so we can release relationships
+        # without mutating during iteration.
+        member_ids = list((self._members or {}).keys())
+        for mid in member_ids:
+            member = registry.get(mid)
+            if member is None:
+                continue
+            # Clear the member's link back to this master so it
+            # behaves as a standalone again.
+            member._group_master_id = None
+            member._docked_to.discard(self._id)
+        registry.masterDespawned.emit(self._id)
+        _log(
+            f"Closed ring {self._id[:8]} — {len(member_ids)} member(s) "
+            f"reverted to standalone"
+        )
+        self.close()
+
+    def _close_all_related(self) -> None:
+        """Master-cell action: close the master AND all its member cells.
+
+        Use case: "I'm done with this whole group of tools — make it
+        all go away."  After this, only cells that weren't members of
+        the ring remain.  If the entire desktop becomes empty, quit.
+        """
+        from scriptree.shell.hexagon_registry import HexagonRegistry
+        if self.role != "master":
+            _log("_close_all_related on non-master — falling back to _close_this")
+            self._close_this()
+            return
+        registry = HexagonRegistry.instance()
+        member_ids = list((self._members or {}).keys())
+        _log(
+            f"Closing ring + members: master={self._id[:8]} "
+            f"+ {len(member_ids)} member(s)"
+        )
+        # Close members first so the master's masterDespawned doesn't
+        # try to revert them to standalones mid-tear-down.
+        for mid in member_ids:
+            member = registry.get(mid)
+            if member is None:
+                continue
+            try:
+                member.close()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"  member close failed for {mid[:8]}: {exc!r}")
+        registry.masterDespawned.emit(self._id)
+        self.close()
+        # If we just emptied the desktop, quit.
+        if not registry.standalones() and not registry.masters():
+            _log("All cells closed via 'close all related' — quitting")
+            QApplication.quit()
+
+    def _exit_all(self) -> None:
+        """Close every cell ScripTreeRing knows about and quit.
+
+        This is the "fire and exit" option — the same effect as
+        clicking the X on each cell in turn, but in one click.
+        """
+        from scriptree.shell.hexagon_registry import HexagonRegistry
+        registry = HexagonRegistry.instance()
+        all_cells = list(registry.standalones()) + list(registry.masters())
+        _log(f"Exit all: closing {len(all_cells)} cell(s)")
+        for cell in all_cells:
+            try:
+                cell.close()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"  cell.close() failed for {getattr(cell, '_id', '?')[:8]}: {exc!r}")
+        QApplication.quit()
 
     def _open_settings_dialog(self) -> None:
         """Open (or raise) the modeless Settings dialog."""

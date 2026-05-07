@@ -389,7 +389,7 @@ def load_ring(
     # Wire master to snap engine.
     if snap_engine is not None:
         try:
-            from scriptree.shell.main import _on_snap_preview
+            from scriptree.shell.ring_main import _on_snap_preview
             snap_engine.snapPreview.connect(
                 lambda src, tgt, mode, geom, h=master_win: _on_snap_preview(
                     src, tgt, mode, geom, h
@@ -443,7 +443,7 @@ def load_ring(
         # Wire member to snap engine.
         if snap_engine is not None:
             try:
-                from scriptree.shell.main import _on_snap_preview
+                from scriptree.shell.ring_main import _on_snap_preview
                 snap_engine.snapPreview.connect(
                     lambda src, tgt, mode, geom, h=member_win: _on_snap_preview(
                         src, tgt, mode, geom, h

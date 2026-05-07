@@ -44,27 +44,45 @@ def test_v1_launcher_cmd_uses_python_directly() -> None:
 
 def test_launch_tool_passes_path_to_subprocess() -> None:
     """``launch_tool(path)`` should Popen([sys.executable,
-    run_scriptree.py, path]) fire-and-forget.  Path may be normalised
-    to native separators (``Path(...)``) en route to argv, so we
-    compare on the resolved path."""
+    run_scriptree.py, path, -standalone]) fire-and-forget.  Path may
+    be normalised to native separators by ``Path(...)`` en route to
+    argv, so we compare path-equality, not string equality."""
     with patch.object(v1_launcher, "subprocess") as mock_sub:
         v1_launcher.launch_tool("C:/tmp/foo.scriptree")
     mock_sub.Popen.assert_called_once()
     args, kwargs = mock_sub.Popen.call_args
     cmd = args[0]
-    # Normalise both sides for cross-platform separator differences.
-    assert Path(cmd[-1]) == Path("C:/tmp/foo.scriptree")
+    # The path should appear somewhere in argv.
+    paths_in_cmd = [a for a in cmd if a.endswith("foo.scriptree")]
+    assert len(paths_in_cmd) == 1
+    assert Path(paths_in_cmd[0]) == Path("C:/tmp/foo.scriptree")
+    # And -standalone MUST be present (otherwise V1 opens the full editor).
+    assert "-standalone" in cmd
     assert kwargs.get("shell") is False
+
+
+def test_launch_tool_includes_standalone_flag() -> None:
+    """The ``-standalone`` flag is required so V1 opens the lightweight
+    standalone runner instead of the full MainWindow editor.  This was
+    the v0.2.1 -> v0.2.2 fix for 'single-click brings up the editor
+    instead of standalone mode'."""
+    with patch.object(v1_launcher, "subprocess") as mock_sub:
+        v1_launcher.launch_tool("any.scriptree")
+    cmd = mock_sub.Popen.call_args[0][0]
+    assert "-standalone" in cmd, (
+        f"-standalone missing from launch_tool argv: {cmd}"
+    )
 
 
 def test_launch_tool_passes_configuration() -> None:
     """When ``configuration`` is supplied the argv should include
-    ``-configuration <name>`` after the path."""
+    ``-configuration <name>`` AND keep the ``-standalone`` flag."""
     with patch.object(v1_launcher, "subprocess") as mock_sub:
         v1_launcher.launch_tool("foo.scriptree", configuration="prod")
     cmd = mock_sub.Popen.call_args[0][0]
     assert "-configuration" in cmd
     assert cmd[cmd.index("-configuration") + 1] == "prod"
+    assert "-standalone" in cmd
     assert cmd[-2:] == ["-configuration", "prod"]
 
 

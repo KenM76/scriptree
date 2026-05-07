@@ -114,20 +114,27 @@ def _log(msg: str) -> None:
 
 
 def launch_tool(scriptree_path: str | Path, configuration: str | None = None) -> None:
-    """Spawn V1 with a single ``.scriptree`` file in standalone mode.
+    """Spawn V1 with a single ``.scriptree`` file in **standalone mode**.
 
-    Used when a user clicks a tool inside a cell's menu.  V1's existing
-    CLI accepts ``python run_scriptree.py path/to/tool.scriptree
-    [-configuration <name>]`` and opens the standalone runner.
+    Used when a user clicks a tool inside a cell's menu.  V1's CLI:
+
+        python run_scriptree.py <tool.scriptree> -standalone [-configuration <name>]
+
+    The ``-standalone`` flag is critical — without it V1 opens its
+    full editor (MainWindow) instead of the lightweight standalone
+    runner that the cell-shell contract promises.  ``-configuration``
+    implies ``-standalone`` already, but we pass both explicitly so
+    the intent is unambiguous in launch logs.
+
     Fire-and-forget — we do not wait for V1 to exit.
     """
     p = Path(scriptree_path)
-    cmd = _v1_launcher_cmd() + [str(p)]
+    cmd = _v1_launcher_cmd() + [str(p), "-standalone"]
     if configuration:
         cmd.extend(["-configuration", configuration])
     _log(
         f"launch_tool: leaf={p.name!r}  exists={p.is_file()}  "
-        f"configuration={configuration!r}"
+        f"configuration={configuration!r}  standalone=True"
     )
     if not p.is_file():
         _log(

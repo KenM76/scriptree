@@ -1141,6 +1141,27 @@ class ToolRunnerView(QWidget):
         # sits at its preferred width and the row wraps when crowded.
         cfg_layout.addWidget(self._cfg_combo)
 
+        # "Default" checkbox — when checked, the selected configuration
+        # becomes the default that standalone-mode launches use when no
+        # ``-configuration`` CLI arg is supplied.  When unchecked,
+        # standalone falls back to whichever configuration was last
+        # active.  Only one configuration can be the default at a
+        # time; checking it on a different config clears the previous
+        # one.  Persists via ConfigurationSet.default_name in the
+        # sidecar JSON.
+        self._cfg_default_check = QCheckBox("Default")
+        self._cfg_default_check.setToolTip(
+            "Mark this configuration as the default used by standalone "
+            "launches (e.g. clicking a tool in a cell-shell menu).\n\n"
+            "If no default is set, standalone falls back to the "
+            "last-used configuration. Only one configuration can be "
+            "the default at a time."
+        )
+        self._cfg_default_check.toggled.connect(
+            self._on_cfg_default_toggled
+        )
+        cfg_layout.addWidget(self._cfg_default_check)
+
         self._btn_cfg_save = QPushButton("Save")
         self._btn_cfg_save.setToolTip(
             "Save the current form values into the selected configuration."
@@ -2744,6 +2765,9 @@ class ToolRunnerView(QWidget):
         handlers can route to the correct ConfigurationSet. Personal
         entries are prefixed with a lock glyph to distinguish them
         visually.
+
+        Also syncs the "Default" checkbox to whichever configuration's
+        ``default_name`` matches the now-selected entry.
         """
         self._cfg_loading = True
         try:
@@ -2764,6 +2788,64 @@ class ToolRunnerView(QWidget):
                     break
         finally:
             self._cfg_loading = False
+        self._sync_cfg_default_check()
+
+    def _sync_cfg_default_check(self) -> None:
+        """Sync the "Default" checkbox state to the currently-selected
+        configuration's status as the set's ``default_name``."""
+        if not hasattr(self, "_cfg_default_check"):
+            return  # called before construction completes
+        storage, name = self._active_selection
+        target_set = (
+            self._cfg_set if storage == "shared"
+            else self._personal_cfg_set
+        )
+        is_default = bool(
+            target_set is not None and target_set.default_name == name
+        )
+        # blockSignals so toggling state doesn't fire _on_cfg_default_toggled.
+        self._cfg_default_check.blockSignals(True)
+        self._cfg_default_check.setChecked(is_default)
+        self._cfg_default_check.blockSignals(False)
+
+    def _on_cfg_default_toggled(self, checked: bool) -> None:
+        """User toggled the "Default" checkbox.  Update the active
+        configuration set's ``default_name`` and persist the sidecar.
+
+        Checking on a different config implicitly clears the previous
+        default — only one configuration can be the default at a time
+        per (shared / personal) set.
+        """
+        if self._cfg_loading:
+            return
+        storage, name = self._active_selection
+        target_set = (
+            self._cfg_set if storage == "shared"
+            else self._personal_cfg_set
+        )
+        if target_set is None:
+            return
+        new_default = name if checked else ""
+        if target_set.default_name == new_default:
+            return
+        target_set.default_name = new_default
+        # Persist immediately — the user expects this checkbox to
+        # behave like the rest of the configuration bar (auto-save
+        # on change).
+        try:
+            self._save_cfg_sidecar()
+            verb = (
+                f"set '{name}' as default"
+                if checked
+                else f"cleared default (was '{name}')"
+            )
+            if hasattr(self, "_status") and self._status is not None:
+                self._status.setText(f"✓ {verb}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Save failed",
+                f"Could not persist the default-config change:\n\n{exc}",
+            )
 
     def _refresh_cfg_buttons(self) -> None:
         """Enable/disable configuration buttons based on state.
@@ -2966,6 +3048,9 @@ class ToolRunnerView(QWidget):
         self._history_index = -1
         self._push_history_snapshot()
         self._refresh_edit_buttons()
+        # Update the "Default" checkbox to reflect whether the
+        # newly-selected config is the default for its set.
+        self._sync_cfg_default_check()
         label = f"\U0001f512 {name}" if storage == "personal" else name
         self._status.setText(f"Loaded configuration '{label}'.")
 

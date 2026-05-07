@@ -127,10 +127,18 @@ class Configuration:
 class ConfigurationSet:
     """The ordered list of configurations for a single tool.
 
-    ``active`` is the name of the currently-selected configuration; it
-    must match one of the ``configurations`` entries. An empty list is
-    not a valid state — callers should guarantee at least one entry
-    (use :func:`default_configuration_set`).
+    ``active`` is the name of the currently-selected configuration in
+    the editor's combo box (the "last-used" pointer).  ``default_name``
+    is the name of the configuration the user has explicitly marked as
+    *the default* via the editor's "Default" checkbox; standalone-mode
+    launches with no ``-configuration`` flag pick this one up.
+
+    Resolution order when no ``-configuration`` is supplied:
+      1. If ``default_name`` is non-empty AND names a real
+         configuration in the set, use that.
+      2. Otherwise fall back to ``active`` (the last-used).
+      3. If neither resolves, the runner builds a one-shot in-memory
+         ``"default"`` from ParamDef defaults (legacy behaviour).
 
     ``source_filename`` and ``source_locations`` are only populated for
     personal sidecars. They record the tool filename and the parent
@@ -140,6 +148,7 @@ class ConfigurationSet:
     """
 
     active: str = "default"
+    default_name: str = ""
     configurations: list[Configuration] = field(default_factory=list)
     source_filename: str = ""
     source_locations: list[str] = field(default_factory=list)
@@ -159,6 +168,20 @@ class ConfigurationSet:
             self.active = self.configurations[0].name
             return self.configurations[0]
         raise ValueError("ConfigurationSet has no configurations")
+
+    def default_config(self) -> Configuration:
+        """Return the configuration to use when no explicit
+        ``-configuration`` flag was supplied.
+
+        Prefers ``default_name`` if set and resolvable; otherwise
+        falls back to ``active``.  Always returns a real Configuration
+        (or raises if the set is empty).
+        """
+        if self.default_name:
+            c = self.find(self.default_name)
+            if c is not None:
+                return c
+        return self.active_config()
 
     def names(self) -> list[str]:
         return [c.name for c in self.configurations]
@@ -207,6 +230,10 @@ def configs_to_dict(cfg_set: ConfigurationSet) -> dict[str, Any]:
         "active": cfg_set.active,
         "configurations": [_config_to_dict(c) for c in cfg_set.configurations],
     }
+    # Default-config pointer is only emitted when explicitly set so
+    # legacy sidecars stay byte-identical.
+    if cfg_set.default_name:
+        d["default_name"] = cfg_set.default_name
     # Source info is only populated for personal sidecars. Emit only
     # when non-empty to keep shared sidecars compact.
     if cfg_set.source_filename:
@@ -301,12 +328,19 @@ def configs_from_dict(data: dict[str, Any]) -> ConfigurationSet:
     active = str(data.get("active", configs[0].name))
     if not any(c.name == active for c in configs):
         active = configs[0].name
+    # default_name pointer.  Empty when not in the file (legacy sidecar)
+    # OR when the named config no longer exists (renamed / deleted).
+    raw_default = data.get("default_name", "")
+    default_name = str(raw_default) if raw_default else ""
+    if default_name and not any(c.name == default_name for c in configs):
+        default_name = ""
     source_filename = str(data.get("source_filename", ""))
     source_locations = [
         str(loc) for loc in (data.get("source_locations") or [])
     ]
     return ConfigurationSet(
         active=active,
+        default_name=default_name,
         configurations=configs,
         source_filename=source_filename,
         source_locations=source_locations,

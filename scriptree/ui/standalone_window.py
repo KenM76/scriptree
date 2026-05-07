@@ -78,11 +78,18 @@ class StandaloneWindow(QMainWindow):
         if config_name:
             runner.apply_named_configuration(config_name)
         else:
-            # Re-apply the active configuration now that standalone
-            # mode is set — the initial apply during __init__ ran
-            # before _standalone_mode was True, so visibility flags
-            # weren't applied.
-            cfg = runner._cfg_set.active_config()
+            # No explicit -configuration flag — resolve via the set's
+            # default_name pointer (set via the editor's "Default"
+            # checkbox), falling back to ``active`` (the last-used
+            # one).  V1 path (active only) is preserved when no
+            # default is set, so existing behaviour is unchanged for
+            # any sidecar that hasn't opted in.
+            cfg = runner._cfg_set.default_config()
+            # Sync ``active`` to whatever default_config picked, so the
+            # standalone window's combo box (if visible) reflects the
+            # actually-applied config.
+            if runner._cfg_set.active != cfg.name:
+                runner._cfg_set.active = cfg.name
             runner._apply_configuration(cfg)
 
         vis = runner.active_visibility

@@ -1,11 +1,11 @@
 """
-main.py â€” ScripTree v2 shell entry point.
+ring_main.py — ScripTreeRing entry point.
 
 Launch:
-    py -3.11 -m apps.shell.main
+    py -3.11 -m scriptree.shell.ring_main
 
 Or import and call:
-    from scriptree.shell.main import main; main()
+    from scriptree.shell.ring_main import main; main()
 
 Subsystems wired here
 ---------------------
