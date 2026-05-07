@@ -251,14 +251,22 @@ def _derive_letters(name: str) -> str:
        word after the first one, then it will use the character for
        that."
 
+      Follow-up clarification: "SolidWorks toolkit should show as SW
+      as the first 2 capital letters rule takes precidence."
+
     Rules in order:
-      1. Multi-word with 2+ meaningful (non-skip) words →
-         first letter of each of the first two meaningful words.
-      2. Multi-word but only ONE meaningful word survives the skip
-         filter → fall through to single-word logic on that word.
-      3. Single word starting with a capital AND containing another
-         capital → use the first two capitals (CamelCase / PascalCase).
-      4. Otherwise → the first two characters of the word.
+      1. **CamelCase wins.**  If ANY word in the input starts with a
+         capital AND contains a second capital, use the first two
+         capitals from that word (e.g. "SolidWorks toolkit" → "SW",
+         "MakeCode" → "MC", "ScripTreeRing" → "ST").
+      2. Multi-word with 2+ meaningful (non-skip) words → first
+         letter of each of the first two meaningful words
+         (e.g. "git status" → "GS", "the quick fox" → "QF").
+      3. Multi-word but only ONE meaningful word survives the skip
+         filter → fall through to single-word logic on that word
+         (e.g. "the cat" → "CA", "foo and" → "FO").
+      4. Otherwise → the first two characters of the (meaningful)
+         word, upper-cased.
 
     Always returns at least one character.  Returns ``"?"`` only when
     the input is empty / whitespace.
@@ -270,17 +278,21 @@ def _derive_letters(name: str) -> str:
     words = [w for w in s.split() if w]
     meaningful = [w for w in words if w.lower() not in _LETTER_SKIP_WORDS]
 
-    # Rule 1: ≥2 meaningful words.
+    # Rule 1 (precedence): CamelCase / PascalCase from any word in
+    # the input.  Walk in order so the first qualifying word wins —
+    # matches what the user expects from "SolidWorks toolkit" → SW.
+    for w in (meaningful or words):
+        if w[0].isupper():
+            caps = [c for c in w if c.isupper()]
+            if len(caps) >= 2:
+                return caps[0] + caps[1]
+
+    # Rule 2: ≥2 meaningful words.
     if len(meaningful) >= 2:
         return (meaningful[0][0] + meaningful[1][0]).upper()
 
     # Pick the single word to inspect: meaningful (if any) or the first.
     word = meaningful[0] if meaningful else words[0]
-
-    # Rule 3: CamelCase / PascalCase — first cap + second cap.
-    caps = [c for c in word if c.isupper()]
-    if word[0].isupper() and len(caps) >= 2:
-        return caps[0] + caps[1]
 
     # Rule 4: first two characters of the word.
     if len(word) >= 2:
@@ -393,12 +405,116 @@ class SettingsDialog(QDialog):
         self._always_on_top_cb.setChecked(hexagon._always_on_top)
         layout.addWidget(self._always_on_top_cb)
 
-        # ---- 6. Rotate 90Â° --------------------------------------------------
-        self._rotate_btn = QPushButton("Rotate 90Â°")
+        # ---- 6. Rotate 90° --------------------------------------------------
+        self._rotate_btn = QPushButton("Rotate 90°")
         self._rotate_btn.setToolTip(
             "Cycle between Flat-top and Pointy-top orientations (no-op for Square)"
         )
         layout.addWidget(self._rotate_btn)
+
+        # ---- 7. Cell label (icon / custom text / default auto) -------------
+        # Per user spec (2026-05-07): the per-cell Settings dialog needs
+        # to choose between three label modes (Default / Custom Text /
+        # Icon), an icon scale slider that live-updates as you drag,
+        # and a label-opacity setting.  Once committed, the icon scale
+        # is a *relative* value so it tracks future cell-size changes.
+        from PySide6.QtWidgets import (
+            QGroupBox, QRadioButton, QButtonGroup, QLineEdit, QFileDialog,
+        )
+        label_grp = QGroupBox("Cell label")
+        label_layout = QVBoxLayout(label_grp)
+
+        # Mode radio buttons.  ``Default`` clears overrides so the
+        # paint code falls back to auto-derived letters.
+        self._label_mode_default_rb = QRadioButton("Default (auto letters)")
+        self._label_mode_text_rb = QRadioButton("Custom text")
+        self._label_mode_icon_rb = QRadioButton("Icon")
+        self._label_mode_grp = QButtonGroup(self)
+        self._label_mode_grp.addButton(self._label_mode_default_rb, 0)
+        self._label_mode_grp.addButton(self._label_mode_text_rb, 1)
+        self._label_mode_grp.addButton(self._label_mode_icon_rb, 2)
+
+        # Pick the radio that reflects the cell's current state.
+        if hexagon._icon_path:
+            self._label_mode_icon_rb.setChecked(True)
+        elif hexagon._text_label:
+            self._label_mode_text_rb.setChecked(True)
+        else:
+            self._label_mode_default_rb.setChecked(True)
+
+        label_layout.addWidget(self._label_mode_default_rb)
+        label_layout.addWidget(self._label_mode_text_rb)
+
+        # Custom-text input — only enabled when "Custom text" radio is on.
+        text_row = QHBoxLayout()
+        text_row.addSpacing(20)  # indent
+        self._text_input = QLineEdit(hexagon._text_label or "")
+        self._text_input.setPlaceholderText(
+            "Up to a few characters; auto-resized to fit"
+        )
+        self._text_input.setMaxLength(12)
+        text_row.addWidget(self._text_input)
+        label_layout.addLayout(text_row)
+
+        label_layout.addWidget(self._label_mode_icon_rb)
+
+        # Icon path row — Browse + Clear; only enabled when "Icon" radio.
+        icon_path_row = QHBoxLayout()
+        icon_path_row.addSpacing(20)
+        self._icon_path_label = QLabel(
+            hexagon._icon_path if hexagon._icon_path else "(no icon set)"
+        )
+        self._icon_path_label.setStyleSheet("QLabel { color: #888; }")
+        self._icon_path_label.setMinimumWidth(160)
+        self._icon_path_label.setWordWrap(True)
+        self._icon_browse_btn = QPushButton("Browse…")
+        self._icon_clear_btn = QPushButton("Clear")
+        icon_path_row.addWidget(self._icon_path_label, stretch=1)
+        icon_path_row.addWidget(self._icon_browse_btn)
+        icon_path_row.addWidget(self._icon_clear_btn)
+        label_layout.addLayout(icon_path_row)
+
+        # Icon scale slider — live preview as you drag.  Default 100
+        # = the cell's natural inscribed-circle size (~70 % diameter).
+        # Range 25–200 lets the user shrink/grow the icon relative
+        # to the cell.  Since the rendered icon is computed as
+        # ``size * 0.70 * (icon_scale / 100)`` and ``size`` is the
+        # cell's ``_size_px``, the scale is automatically relative —
+        # resizing the cell scales the icon with it.
+        scale_row = QVBoxLayout()
+        scale_row.setContentsMargins(20, 0, 0, 0)
+        icon_scale_int = round(hexagon._icon_scale * 100)
+        self._icon_scale_label = QLabel(f"Icon scale: {icon_scale_int}%")
+        self._icon_scale_slider = QSlider(Qt.Horizontal)
+        self._icon_scale_slider.setMinimum(25)
+        self._icon_scale_slider.setMaximum(200)
+        self._icon_scale_slider.setSingleStep(5)
+        self._icon_scale_slider.setPageStep(10)
+        self._icon_scale_slider.setValue(icon_scale_int)
+        scale_row.addWidget(self._icon_scale_label)
+        scale_row.addWidget(self._icon_scale_slider)
+        label_layout.addLayout(scale_row)
+
+        # Label opacity slider — multiplies the cell's transparency.
+        # Always visible (applies to all modes including default
+        # auto-letters).  Default 100 = same opacity as the cell.
+        op_row = QVBoxLayout()
+        label_op_int = round(hexagon._label_opacity * 100)
+        self._label_opacity_label = QLabel(
+            f"Label opacity: {label_op_int}%"
+        )
+        self._label_opacity_slider = QSlider(Qt.Horizontal)
+        self._label_opacity_slider.setMinimum(20)
+        self._label_opacity_slider.setMaximum(100)
+        self._label_opacity_slider.setSingleStep(5)
+        self._label_opacity_slider.setPageStep(10)
+        self._label_opacity_slider.setValue(label_op_int)
+        op_row.addWidget(self._label_opacity_label)
+        op_row.addWidget(self._label_opacity_slider)
+        label_layout.addLayout(op_row)
+
+        layout.addWidget(label_grp)
+        self._update_label_controls_enabled()
 
         # ---- Separator ------------------------------------------------------
         layout.addSpacing(4)
@@ -424,6 +540,21 @@ class SettingsDialog(QDialog):
         self._rotate_btn.clicked.connect(self._on_rotate)
         self._reset_btn.clicked.connect(self._on_reset)
         self._close_btn.clicked.connect(self.close)
+
+        # Cell-label group connections (live preview).  Every value
+        # change calls into the hex's apply_*_label_change methods
+        # which mutate state, persist to QSettings, and call update()
+        # so the cell repaints immediately as the user drags.
+        self._label_mode_grp.idToggled.connect(self._on_label_mode_changed)
+        self._text_input.textChanged.connect(self._on_label_text_changed)
+        self._icon_browse_btn.clicked.connect(self._on_icon_browse)
+        self._icon_clear_btn.clicked.connect(self._on_icon_clear)
+        self._icon_scale_slider.valueChanged.connect(
+            self._on_icon_scale_changed
+        )
+        self._label_opacity_slider.valueChanged.connect(
+            self._on_label_opacity_changed
+        )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -466,6 +597,93 @@ class SettingsDialog(QDialog):
     def _on_always_on_top_changed(self, checked: bool) -> None:
         self._hex.apply_always_on_top_change(checked)
         self._hex._save_settings()
+
+    # ---- Cell-label slots ------------------------------------------------
+
+    def _update_label_controls_enabled(self) -> None:
+        """Enable / disable the per-mode controls based on the radio
+        selection.  Called from radio toggle handler and at init."""
+        is_text = self._label_mode_text_rb.isChecked()
+        is_icon = self._label_mode_icon_rb.isChecked()
+        self._text_input.setEnabled(is_text)
+        self._icon_browse_btn.setEnabled(is_icon)
+        self._icon_clear_btn.setEnabled(
+            is_icon and bool(self._hex._icon_path)
+        )
+        self._icon_scale_slider.setEnabled(is_icon)
+        self._icon_scale_label.setEnabled(is_icon)
+
+    def _on_label_mode_changed(self, btn_id: int, checked: bool) -> None:
+        """Radio toggle in the Cell label group.
+
+        Mode 0 (Default) clears both icon_path and text_label so the
+        paint code falls back to auto-derived letters.
+        Mode 1 (Custom text) sets text_label from the input field
+        (or "" if empty) and clears icon_path.
+        Mode 2 (Icon) keeps the cell's existing icon_path (or
+        "(none)" until the user browses).
+        """
+        if not checked:
+            return  # ignore the "unchecked" half of the toggle pair
+        from PySide6.QtCore import QTimer
+        if btn_id == 0:
+            # Default: clear overrides.
+            self._hex.apply_label_change(
+                icon_path=None, text_label=None,
+            )
+        elif btn_id == 1:
+            # Custom text — apply whatever's in the input now.
+            self._hex.apply_label_change(
+                icon_path=None,
+                text_label=self._text_input.text() or None,
+            )
+        elif btn_id == 2:
+            # Icon — keep the existing path (if any).  User clicks
+            # Browse to assign one.  Clear text_label to give icon
+            # priority.
+            self._hex.apply_label_change(
+                icon_path=self._hex._icon_path,
+                text_label=None,
+            )
+        self._update_label_controls_enabled()
+
+    def _on_label_text_changed(self, text: str) -> None:
+        """Live update as the user types in the custom-text box."""
+        if not self._label_mode_text_rb.isChecked():
+            return
+        self._hex.apply_label_change(text_label=text or None)
+
+    def _on_icon_browse(self) -> None:
+        """Open a file picker for the icon image."""
+        from PySide6.QtWidgets import QFileDialog
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select cell icon",
+            self._hex._icon_path or "",
+            "Images (*.png *.jpg *.jpeg *.svg *.ico *.bmp);;All files (*)",
+        )
+        if not chosen:
+            return
+        self._hex.apply_label_change(icon_path=chosen)
+        self._icon_path_label.setText(chosen)
+        self._icon_clear_btn.setEnabled(True)
+
+    def _on_icon_clear(self) -> None:
+        """Clear the cell's icon_path (icon mode falls back to default
+        text if no path; auto-letters otherwise)."""
+        self._hex.apply_label_change(icon_path=None)
+        self._icon_path_label.setText("(no icon set)")
+        self._icon_clear_btn.setEnabled(False)
+
+    def _on_icon_scale_changed(self, value: int) -> None:
+        """Live preview as the user drags the scale slider."""
+        self._icon_scale_label.setText(f"Icon scale: {value}%")
+        self._hex.apply_icon_scale_change(value / 100.0)
+
+    def _on_label_opacity_changed(self, value: int) -> None:
+        """Live preview for label opacity."""
+        self._label_opacity_label.setText(f"Label opacity: {value}%")
+        self._hex.apply_label_opacity_change(value / 100.0)
 
     def _on_rotate(self) -> None:
         shape_key = self._SHAPE_DISPLAY.get(self._shape_combo.currentText(), "hexagon")
@@ -1192,6 +1410,21 @@ class CellWindow(QMainWindow):
         # ----------------------------------------------------------------
         self._icon_path: str | None = None
         self._text_label: str | None = None
+        # Icon scale — multiplier of the natural inscribed-circle size
+        # (which is ~70 % of the cell's diameter).  1.0 means "use the
+        # natural size".  Range from the Settings dialog: 0.25 – 2.0.
+        # Because the renderer multiplies by ``self._size_px * 0.7``,
+        # the scale is automatically RELATIVE to the cell — resizing
+        # the cell scales the icon with it.  Per user spec: "once
+        # accepted this scale will automatically adjust with the
+        # scaling of the cell shape."
+        self._icon_scale: float = 1.0
+        # Label opacity — multiplier of the cell's overall transparency.
+        # 1.0 = label fully matches cell transparency.  Lower = fainter
+        # label.  Independent of the cell-shape transparency so a user
+        # can have a fully opaque cell with a faint letter, or vice
+        # versa.
+        self._label_opacity: float = 1.0
 
         # ----------------------------------------------------------------
         # Load persisted settings (overrides branding defaults).
@@ -1473,6 +1706,21 @@ class CellWindow(QMainWindow):
         self._text_label = (
             raw_text if isinstance(raw_text, str) and raw_text else None
         )
+        # Icon scale + label opacity (v0.2.6+).  Defaults are 1.0 if
+        # unset.  Both clamped so a malformed QSettings value can't
+        # produce an invisible / oversized label.
+        try:
+            self._icon_scale = max(0.25, min(2.0, float(
+                s.value(self._settings_key("icon_scale"), 1.0)
+            )))
+        except (TypeError, ValueError):
+            self._icon_scale = 1.0
+        try:
+            self._label_opacity = max(0.20, min(1.00, float(
+                s.value(self._settings_key("label_opacity"), 1.0)
+            )))
+        except (TypeError, ValueError):
+            self._label_opacity = 1.0
 
     def _save_settings(self) -> None:
         """Persist current per-hex settings to QSettings immediately."""
@@ -1485,6 +1733,8 @@ class CellWindow(QMainWindow):
         s.setValue(self._settings_key("catalog_path"), self._catalog_path or "")
         s.setValue(self._settings_key("icon_path"), self._icon_path or "")
         s.setValue(self._settings_key("text_label"), self._text_label or "")
+        s.setValue(self._settings_key("icon_scale"), float(self._icon_scale))
+        s.setValue(self._settings_key("label_opacity"), float(self._label_opacity))
         s.sync()
 
     # ------------------------------------------------------------------
@@ -1527,8 +1777,53 @@ class CellWindow(QMainWindow):
         CellRegistry.instance().hexagonReshaped.emit(self._id)
 
     def apply_transparency_change(self, alpha: float) -> None:
-        """Live-update fill transparency (0.30â€“1.00 alpha multiplier on fill colour)."""
+        """Live-update fill transparency (0.30–1.00 alpha multiplier on fill colour)."""
         self._transparency = max(0.30, min(1.00, alpha))
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Cell-label apply_* (live-update from Settings dialog)
+    # ------------------------------------------------------------------
+
+    _UNSET = object()  # sentinel for "don't change this attribute"
+
+    def apply_label_change(
+        self,
+        *,
+        icon_path: str | None | object = _UNSET,
+        text_label: str | None | object = _UNSET,
+    ) -> None:
+        """Live-update the cell's label override fields and persist.
+
+        ``icon_path`` and ``text_label`` accept a sentinel
+        ``_UNSET`` (the default) so callers can update only one
+        without clobbering the other.  Pass ``None`` to clear, or a
+        string to set.
+
+        Always invalidates ``_label_cache`` (auto-letters cache) and
+        repaints.  Saves QSettings synchronously so the change
+        survives a restart.
+        """
+        if icon_path is not self._UNSET:
+            self._icon_path = icon_path  # type: ignore[assignment]
+        if text_label is not self._UNSET:
+            self._text_label = text_label  # type: ignore[assignment]
+        # Invalidate auto-label cache; the new override may be in
+        # effect on the next paint.
+        self._label_cache = None
+        self._save_settings()
+        self.update()
+
+    def apply_icon_scale_change(self, scale: float) -> None:
+        """Live-update the icon scale multiplier (0.25–2.0)."""
+        self._icon_scale = max(0.25, min(2.0, scale))
+        self._save_settings()
+        self.update()
+
+    def apply_label_opacity_change(self, opacity: float) -> None:
+        """Live-update the label opacity multiplier (0.20–1.00)."""
+        self._label_opacity = max(0.20, min(1.00, opacity))
+        self._save_settings()
         self.update()
 
     def apply_always_on_top_change(self, on: bool) -> None:
@@ -1693,18 +1988,29 @@ class CellWindow(QMainWindow):
             from PySide6.QtGui import QPixmap
             pix = QPixmap(self._icon_path)
             if not pix.isNull():
-                # Inscribed-circle diameter is roughly cell_size * 0.7.
-                target = max(16, int(size * 0.7))
+                # Inscribed-circle diameter is ~cell_size * 0.7.
+                # Multiply by ``_icon_scale`` so the user can grow or
+                # shrink the icon relative to the cell.  Because the
+                # base is ``size`` (the cell's current pixel
+                # dimension), this scale automatically tracks future
+                # cell-size changes — per user spec: "once accepted
+                # this scale will automatically adjust with the
+                # scaling of the cell shape."
+                target = max(8, int(size * 0.7 * self._icon_scale))
                 scaled = pix.scaled(
                     target, target,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
-                # Apply transparency multiplier so the icon visually
-                # matches the cell's overall translucency.
-                if self._transparency < 0.999:
+                # Apply (cell transparency × label opacity) so the
+                # icon visually matches the cell's translucency and
+                # the user's per-cell label-opacity override.
+                effective_op = max(
+                    0.0, min(1.0, self._transparency * self._label_opacity),
+                )
+                if effective_op < 0.999:
                     painter.save()
-                    painter.setOpacity(self._transparency)
+                    painter.setOpacity(effective_op)
                     painter.drawPixmap(
                         int(cx - scaled.width() / 2),
                         int(cy - scaled.height() / 2),
@@ -1818,11 +2124,14 @@ class CellWindow(QMainWindow):
                 break
             font_px = new_px
 
-        # Use the stroke colour at the cell's overall transparency.
+        # Use the stroke colour at (cell transparency × label opacity).
         # Stroke colour is already coordinated with the palette and
         # readable against the fill.
         col = QColor(self._compute_stroke_color())
-        col.setAlpha(round(255 * self._transparency))
+        effective_op = max(
+            0.0, min(1.0, self._transparency * self._label_opacity),
+        )
+        col.setAlpha(round(255 * effective_op))
         painter.setPen(col)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         rect = QRect(

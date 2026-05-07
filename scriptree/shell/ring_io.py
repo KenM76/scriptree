@@ -162,6 +162,15 @@ def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> 
     text_label = getattr(hex_win, "_text_label", None)
     if text_label:
         d["text_label"] = text_label
+    # Icon scale + label opacity — emit only when the user has
+    # changed them from the default 1.0 so legacy rings stay
+    # byte-identical when no overrides have been set.
+    icon_scale = getattr(hex_win, "_icon_scale", 1.0)
+    if icon_scale != 1.0:
+        d["icon_scale"] = float(icon_scale)
+    label_opacity = getattr(hex_win, "_label_opacity", 1.0)
+    if label_opacity != 1.0:
+        d["label_opacity"] = float(label_opacity)
     return d
 
 
@@ -381,6 +390,17 @@ def load_ring(
             master_win._icon_path = master_raw["icon_path"]
         if isinstance(master_raw.get("text_label"), str) and master_raw["text_label"]:
             master_win._text_label = master_raw["text_label"]
+        # Icon scale + label opacity (v0.2.6+).  Clamp to legal range.
+        try:
+            raw_scale = float(master_raw.get("icon_scale", 1.0))
+            master_win._icon_scale = max(0.25, min(2.0, raw_scale))
+        except (TypeError, ValueError):
+            pass
+        try:
+            raw_op = float(master_raw.get("label_opacity", 1.0))
+            master_win._label_opacity = max(0.20, min(1.00, raw_op))
+        except (TypeError, ValueError):
+            pass
         master_win.show()
         _log(
             f"load_ring: standalone hex {master_win._id[:8]} spawned at "
@@ -441,6 +461,17 @@ def load_ring(
             member_win._icon_path = m_raw["icon_path"]
         if isinstance(m_raw.get("text_label"), str) and m_raw["text_label"]:
             member_win._text_label = m_raw["text_label"]
+        # Icon scale + label opacity (v0.2.6+).
+        try:
+            raw_scale = float(m_raw.get("icon_scale", 1.0))
+            member_win._icon_scale = max(0.25, min(2.0, raw_scale))
+        except (TypeError, ValueError):
+            pass
+        try:
+            raw_op = float(m_raw.get("label_opacity", 1.0))
+            member_win._label_opacity = max(0.20, min(1.00, raw_op))
+        except (TypeError, ValueError):
+            pass
         member_win.show()
 
         # preferred_position â€” also clamp.

@@ -50,6 +50,18 @@ class TestDeriveLetters:
         # All caps → first two letters.
         assert _derive_letters("ABC") == "AB"
 
+    def test_camel_case_precedence_over_multi_word(self) -> None:
+        """User clarification (2026-05-07): 'SolidWorks toolkit
+        should show as SW as the first 2 capital letters rule takes
+        precidence.'  When ANY word in the input is CamelCase, that
+        rule wins over the multi-word first-letter rule."""
+        assert _derive_letters("SolidWorks toolkit") == "SW"
+        assert _derive_letters("the SolidWorks toolkit") == "SW"
+        assert _derive_letters("PowerShell scripts") == "PS"
+        # Plain multi-word (no CamelCase) keeps the multi-word rule.
+        assert _derive_letters("Show All Tools") == "SA"
+        assert _derive_letters("git status") == "GS"
+
     def test_multi_word_takes_first_letter_of_each(self) -> None:
         assert _derive_letters("git status") == "GS"
         assert _derive_letters("disk usage") == "DU"
@@ -320,4 +332,90 @@ class TestRingIconTextRoundTrip:
         d = _hex_to_dict(c)
         assert "icon_path" not in d
         assert "text_label" not in d
+        assert "icon_scale" not in d
+        assert "label_opacity" not in d
+        c.close()
+
+
+# ---------------------------------------------------------------------------
+# apply_label_change / apply_icon_scale_change / apply_label_opacity_change
+# ---------------------------------------------------------------------------
+
+class TestApplyLabelChanges:
+    def test_apply_label_change_sets_icon(self, tmp_path: Path) -> None:
+        c = _spawn_cell()
+        c.apply_label_change(icon_path=str(tmp_path / "x.png"))
+        assert c._icon_path == str(tmp_path / "x.png")
+        # text_label untouched (sentinel not passed).
+        assert c._text_label is None
+        c.close()
+
+    def test_apply_label_change_clears_with_none(self) -> None:
+        c = _spawn_cell()
+        c._icon_path = "C:/x.png"
+        c.apply_label_change(icon_path=None)
+        assert c._icon_path is None
+        c.close()
+
+    def test_apply_label_change_only_updates_passed_fields(self) -> None:
+        """Sentinel argument means 'do not change this field'."""
+        c = _spawn_cell()
+        c._icon_path = "C:/x.png"
+        c._text_label = "DXF"
+        c.apply_label_change(text_label="GIT")
+        # icon_path preserved (sentinel), text_label updated.
+        assert c._icon_path == "C:/x.png"
+        assert c._text_label == "GIT"
+        c.close()
+
+    def test_apply_icon_scale_clamps_to_legal_range(self) -> None:
+        c = _spawn_cell()
+        c.apply_icon_scale_change(0.05)  # below 0.25 floor
+        assert c._icon_scale == 0.25
+        c.apply_icon_scale_change(5.0)   # above 2.0 ceil
+        assert c._icon_scale == 2.0
+        c.apply_icon_scale_change(1.5)
+        assert c._icon_scale == 1.5
+        c.close()
+
+    def test_apply_label_opacity_clamps_to_legal_range(self) -> None:
+        c = _spawn_cell()
+        c.apply_label_opacity_change(0.0)  # below 0.20 floor
+        assert c._label_opacity == 0.20
+        c.apply_label_opacity_change(2.0)  # above 1.00 ceil
+        assert c._label_opacity == 1.00
+        c.apply_label_opacity_change(0.6)
+        assert c._label_opacity == 0.6
+        c.close()
+
+
+# ---------------------------------------------------------------------------
+# Ring round-trip for icon_scale + label_opacity
+# ---------------------------------------------------------------------------
+
+class TestRingScaleOpacityRoundTrip:
+    def test_icon_scale_round_trips(self) -> None:
+        from scriptree.shell.ring_io import _hex_to_dict
+        c = _spawn_cell()
+        c._icon_scale = 1.5
+        d = _hex_to_dict(c)
+        assert d.get("icon_scale") == 1.5
+        c.close()
+
+    def test_label_opacity_round_trips(self) -> None:
+        from scriptree.shell.ring_io import _hex_to_dict
+        c = _spawn_cell()
+        c._label_opacity = 0.6
+        d = _hex_to_dict(c)
+        assert d.get("label_opacity") == 0.6
+        c.close()
+
+    def test_default_values_omitted_from_ring(self) -> None:
+        from scriptree.shell.ring_io import _hex_to_dict
+        c = _spawn_cell()
+        d = _hex_to_dict(c)
+        # Defaults (1.0 each) are not emitted, so legacy rings stay
+        # byte-identical when no overrides were set.
+        assert "icon_scale" not in d
+        assert "label_opacity" not in d
         c.close()
