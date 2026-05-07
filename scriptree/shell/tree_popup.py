@@ -135,18 +135,41 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
     menu = QMenu(None)
 
     if role == "master":
-        members = list(getattr(hex_win, "_members", []) or [])
-        if not members:
+        # ``_members`` is a ``dict[member_id, QPoint]`` per
+        # HexagonWindow's data model — iterate keys, look each id up
+        # in the registry to get the actual window, then read its
+        # ``_catalog_path``.  Falling back to iterating the value
+        # directly when _members is something else (lists, tuples)
+        # keeps tests with synthetic data working.
+        from scriptree.shell.hexagon_registry import HexagonRegistry
+
+        members_dict = getattr(hex_win, "_members", None) or {}
+        if isinstance(members_dict, dict):
+            member_keys = list(members_dict.keys())
+        else:
+            member_keys = list(members_dict)
+
+        if not member_keys:
             menu.addAction("(no members)").setEnabled(False)
         else:
+            registry = HexagonRegistry.instance()
             populated_any = False
-            for member in members:
+            for mk in member_keys:
+                member = registry.get(mk) if isinstance(mk, str) else mk
+                if member is None:
+                    continue
                 cp = getattr(member, "_catalog_path", None)
                 if not cp:
+                    sub = menu.addMenu(
+                        f"Cell {getattr(member, '_id', '?')[:8]} "
+                        f"(no catalog bound)"
+                    )
+                    sub.setEnabled(False)
                     continue
                 src = Path(cp).resolve()
                 top_label = src.stem
-                # Try to read the .scriptreetree's display name for nicer label.
+                # Try to read the .scriptreetree's display name for
+                # nicer top-folder label.
                 try:
                     if src.suffix.lower() == ".scriptreetree":
                         from scriptree.core.io import load_tree
@@ -160,7 +183,9 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
                 if _build_menu_for_catalog(sub, src):
                     populated_any = True
             if not populated_any:
-                menu.addAction("(no member catalogs)").setEnabled(False)
+                menu.addAction(
+                    "(no member catalogs — right-click each cell to load one)"
+                ).setEnabled(False)
     else:
         # Standalone cell.
         catalog_path = getattr(hex_win, "_catalog_path", None)

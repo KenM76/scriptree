@@ -22,4 +22,9 @@ scriptree.ini.bak
 
 # OneDrive cruft
 desktop.ini
-.claude/
+# Ignore .claude/ generally (session metadata, worktrees, settings) but
+# track the project-specific agent definition so future sessions inherit
+# the working style captured during the V3 build-out.
+.claude/*
+!.claude/agents/
+!.claude/agents/**

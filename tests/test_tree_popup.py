@@ -143,6 +143,51 @@ def test_add_node_to_menu_uses_display_name(tmp_path: Path) -> None:
 # Action triggers → launch_tool
 # ---------------------------------------------------------------------------
 
+def test_master_popup_iterates_members_via_registry(tmp_path: Path) -> None:
+    """v0.2.3 contract: master cells iterate ``_members`` (a
+    ``dict[id, QPoint]``) via ``HexagonRegistry.get(id)`` to find
+    actual member windows.  This used to iterate dict keys directly,
+    treating string ids as windows — every member.``_catalog_path``
+    came back None and the popup was always empty."""
+    from unittest.mock import patch
+    from scriptree.shell.tree_popup import show_tree_popup_for
+
+    t1 = _save_tool(tmp_path, "alpha")
+    tree_a = _save_tree(tmp_path, "TreeA", [t1])
+
+    # Synthetic member window: just enough attributes that the popup
+    # builder can read.
+    class _FakeMember:
+        _id = "member-id-1234"
+        _catalog_path = str(tree_a)
+
+    class _FakeMaster:
+        role = "master"
+        _members = {_FakeMember._id: None}  # value is QPoint in real code
+        # Need width/height for mapToGlobal; defer that via patch.
+        def width(self): return 96
+        def height(self): return 96
+        def mapToGlobal(self, pt):
+            from PySide6.QtCore import QPoint
+            return QPoint(0, 0)
+
+    fake_member = _FakeMember()
+
+    # Patch HexagonRegistry.instance().get(...) to return our fake.
+    with patch(
+        "scriptree.shell.hexagon_registry.HexagonRegistry"
+    ) as MockRegistry:
+        mock_inst = MockRegistry.instance.return_value
+        mock_inst.get.return_value = fake_member
+        # Patch QMenu.exec so the popup doesn't actually block.
+        with patch.object(QMenu, "exec", return_value=None):
+            show_tree_popup_for(_FakeMaster())
+
+    # Verify the registry was queried with the member id (proves we're
+    # iterating dict KEYS now, not values).
+    mock_inst.get.assert_called_with("member-id-1234")
+
+
 def test_leaf_action_triggers_launch_tool(tmp_path: Path) -> None:
     """Clicking a leaf in the popup should call ``launch_tool`` with
     the leaf's resolved absolute path."""

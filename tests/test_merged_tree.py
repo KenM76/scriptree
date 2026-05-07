@@ -194,8 +194,39 @@ def test_build_merged_tree_for_master_caches_result(tmp_path: Path) -> None:
     assert out1 == out2
 
 
-def test_build_merged_tree_for_master_no_members_raises(tmp_path: Path) -> None:
-    import pytest
-    master = _FakeMaster([])
-    with pytest.raises(ValueError):
-        build_merged_tree_for_master(master)
+def test_build_merged_tree_for_master_no_members_returns_placeholder(
+    tmp_path: Path,
+) -> None:
+    """v0.2.3 contract change: when NO member has a catalog bound
+    (e.g. a fresh ring spawned from snap-dock with two unbound cells),
+    we no longer raise — we produce a placeholder ``.scriptreetree``
+    so V1's editor can open with a clear "no catalogs bound" hint.
+
+    Per the user's spec: "either way, scriptreering file or not, it
+    needs to be able to open this way."
+    """
+    master = _FakeMaster([])  # zero members → empty paths list
+    out = build_merged_tree_for_master(master)
+    assert out.is_file()
+    # Should be parseable as a regular .scriptreetree.
+    from scriptree.core.io import load_tree
+    tree = load_tree(str(out))
+    # Has at least one node so the editor doesn't show "(empty)".
+    assert len(tree.nodes) >= 1
+    # The placeholder folder name should hint at the empty-ring state.
+    assert "no" in tree.nodes[0].name.lower() or \
+           "ring" in tree.name.lower() or \
+           "no" in tree.name.lower()
+
+
+def test_build_merged_tree_for_master_unbound_member_returns_placeholder(
+    tmp_path: Path,
+) -> None:
+    """A master with one member that has NO catalog bound should still
+    produce a tree (placeholder), not raise."""
+    master = _FakeMaster([_FakeMember(None)])
+    out = build_merged_tree_for_master(master)
+    assert out.is_file()
+    from scriptree.core.io import load_tree
+    tree = load_tree(str(out))
+    assert len(tree.nodes) >= 1

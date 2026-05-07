@@ -178,27 +178,89 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
 # ---------------------------------------------------------------------------
 
 def build_merged_tree_for_master(master) -> Path:  # noqa: ANN001 — HexagonWindow
-    """Pull catalog paths from each member of ``master`` and merge."""
-    member_iter = getattr(master, "_members", None) or []
+    """Pull catalog paths from each member of ``master`` and merge.
+
+    ``master._members`` is a ``dict[member_id, QPoint]`` (id → home
+    position), NOT a list of HexagonWindow instances.  We have to look
+    up each id in the global ``HexagonRegistry`` to get the actual
+    window and read its ``_catalog_path``.
+
+    When NONE of the members have a catalog bound (e.g. fresh ring
+    where no Load Catalog… has been clicked yet), we still produce a
+    valid merged tree — one with a single placeholder folder so V1's
+    editor opens with something visible.  This is the user-facing
+    contract: "either way, scriptreering file or not, it needs to be
+    able to open this way".
+    """
+    from scriptree.shell.hexagon_registry import HexagonRegistry
+    from scriptree.core.io import save_tree
+    from scriptree.core.model import TreeDef, TreeNode
+
+    members_dict = getattr(master, "_members", None) or {}
+    # Iterate keys (member ids) and look up each window in the registry.
+    # When _members is unexpectedly a list/tuple, fall back to using
+    # entries directly (keeps tests with synthetic _members happy).
+    if isinstance(members_dict, dict):
+        member_ids = list(members_dict.keys())
+    else:
+        member_ids = list(members_dict)
+
+    registry = HexagonRegistry.instance()
     paths: list[str] = []
-    for m in member_iter:
-        cp = getattr(m, "_catalog_path", None)
+    unbound_count = 0
+    for mid in member_ids:
+        member = registry.get(mid) if isinstance(mid, str) else mid
+        if member is None:
+            continue
+        cp = getattr(member, "_catalog_path", None)
         if cp:
             paths.append(str(cp))
+        else:
+            unbound_count += 1
 
     # Cache: if the membership signature is unchanged from a previous
     # call, return the cached path so V1 doesn't have to re-parse the
     # file (and so QFileSystemWatcher stays attached to a single inode).
-    sig_key = "|".join(sorted(paths))
+    sig_key = "|".join(sorted(paths)) + f"|unbound={unbound_count}"
     cache_attr = "_merged_tree_cache"
     cache = getattr(master, cache_attr, None)
     if cache and cache[0] == sig_key and Path(cache[1]).is_file():
         return Path(cache[1])
 
-    if not paths:
-        raise ValueError(
-            "build_merged_tree_for_master: master has no member catalogs"
+    if paths:
+        out = build_merged_tree(paths)
+    else:
+        # No member has a catalog yet — produce a placeholder tree so
+        # the editor still has something to display, and so the
+        # caller (e.g. show_composite_for) doesn't have to fall back
+        # to launching a blank editor.
+        placeholder = TreeDef(
+            name="Ring (no member catalogs bound yet)",
+            nodes=[
+                TreeNode(
+                    type="folder",
+                    name="No catalogs bound",
+                    children=[],
+                    display_name=(
+                        "Right-click each cell → Load Catalog… "
+                        "to populate this ring."
+                    ),
+                ),
+            ],
         )
-    out = build_merged_tree(paths)
+        import tempfile, hashlib
+        # ``_id`` may be missing on synthetic test objects — use the
+        # object's repr as a fallback so the cache key still varies
+        # per master instance.
+        master_id = getattr(master, "_id", repr(master))
+        sig = hashlib.sha1(
+            f"empty:{master_id}".encode("utf-8")
+        ).hexdigest()[:12]
+        out = Path(tempfile.gettempdir()) / (
+            f"scriptreering_merged_{sig}.scriptreetree"
+        )
+        save_tree(placeholder, str(out))
+        _log(f"wrote placeholder merged tree at {out}")
+
     setattr(master, cache_attr, (sig_key, str(out)))
     return out

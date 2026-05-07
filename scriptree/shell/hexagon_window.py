@@ -1847,11 +1847,16 @@ class HexagonWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # ---- File operations (ported from v1 File menu) ----
-        load_scriptree_action = menu.addAction("Load ScripTreeâ€¦")
-        load_scriptreetree_action = menu.addAction("Load ScripTreeTreeâ€¦")
+        # ── Catalog submenu ────────────────────────────────────────
+        # Groups all "load / save / clear catalog" actions plus the
+        # Open recent sub-sub-menu.  Per user direction (2026-05-07):
+        # "the right click menu on the cells and rings should be
+        # logically organized with sub folders too."
+        catalog_menu = QMenu("Catalog", menu)
+        load_scriptree_action = catalog_menu.addAction("Load ScripTree…")
+        load_scriptreetree_action = catalog_menu.addAction("Load ScripTreeTree…")
 
-        # "Open recent" submenu â€” last 10 entries per type, merged and
+        # "Open recent" submenu — last 10 entries per type, merged and
         # sorted most-recent first.  Each entry shows filename + full path.
         recent_tool_paths = _rf.get_scriptree()
         recent_tree_paths = _rf.get_scriptreetree()
@@ -1874,48 +1879,48 @@ class HexagonWindow(QMainWindow):
             if not added:
                 break
 
-        recent_menu = QMenu("Open recent", menu)
-        recent_actions: dict = {}  # action â†’ path
+        recent_menu = QMenu("Open recent", catalog_menu)
+        recent_actions: dict = {}  # action → path
         if all_recent:
             for _rp in all_recent:
                 _rpath = _Path(_rp)
                 _ext_r = _rpath.suffix.lower()
                 _prefix = "ScripTreeTree" if _ext_r == ".scriptreetree" else "ScripTree"
                 _ra = recent_menu.addAction(
-                    f"{_prefix}: {_rpath.name}  â€”  {_rp}"
+                    f"{_prefix}: {_rpath.name}  —  {_rp}"
                 )
                 recent_actions[_ra] = _rp
         else:
             _none_act = recent_menu.addAction("(none)")
             _none_act.setEnabled(False)
-        menu.addMenu(recent_menu)
+        catalog_menu.addMenu(recent_menu)
+
+        catalog_menu.addSeparator()
+
+        # "Save as…" — save the currently-loaded catalog file under a new name.
+        # Only enabled when a file is loaded.
+        save_as_action = catalog_menu.addAction("Save catalog as…")
+        save_as_action.setEnabled(self._catalog_path is not None)
 
         clear_catalog_action = None
         if self._catalog_path is not None:
-            clear_catalog_action = menu.addAction("Clear loaded file")
+            clear_catalog_action = catalog_menu.addAction("Clear loaded file")
 
-        menu.addSeparator()
+        menu.addMenu(catalog_menu)
 
-        # "Save asâ€¦" â€” save the currently-loaded file under a new name.
-        # Only enabled when a file is loaded.
-        save_as_action = menu.addAction("Save asâ€¦")
-        save_as_action.setEnabled(self._catalog_path is not None)
-
-        # ---- Ring (group save/load) actions --------------------------------
-        # "Save group as ringâ€¦" / "Save as ringâ€¦" â€” all roles.
-        # Masters show "Save group as ringâ€¦" (saves master + members).
-        # Standalones show "Save as ringâ€¦" (saves a single-hex ring).
+        # ── Ring submenu ──────────────────────────────────────────
+        # Group ring save/load + autoload.  Visible on every role:
+        # standalones save a single-hex ring; masters save the whole
+        # group.
+        ring_menu = QMenu("Ring", menu)
         if self.role == "master":
-            save_ring_action = menu.addAction("Save group as ringâ€¦")
+            save_ring_action = ring_menu.addAction("Save group as ring…")
         else:
-            save_ring_action = menu.addAction("Save as ringâ€¦")
+            save_ring_action = ring_menu.addAction("Save as ring…")
+        load_ring_action = ring_menu.addAction("Load ring…")
 
-        # "Load ringâ€¦" â€” on both master and standalone hexagons.
-        load_ring_action = menu.addAction("Load ringâ€¦")
-
-        # "Auto-load on startup" submenu â€” all roles (masters and standalones).
-        # For standalones this saves a single-hex ring; same logic as masters.
-        autoload_menu = QMenu("Auto-load on startup", menu)
+        # "Auto-load on startup" sub-sub-menu.
+        autoload_menu = QMenu("Auto-load on startup", ring_menu)
         autoload_disabled_action = autoload_menu.addAction("Disabled")
         autoload_disabled_action.setCheckable(True)
         autoload_user_action = autoload_menu.addAction("For current user only")
@@ -1943,24 +1948,31 @@ class HexagonWindow(QMainWindow):
         autoload_system_action.setChecked(in_system)
         autoload_disabled_action.setChecked(not in_user and not in_system)
 
-        menu.addMenu(autoload_menu)
+        ring_menu.addMenu(autoload_menu)
+        menu.addMenu(ring_menu)
 
-        menu.addSeparator()
+        # ── Cell submenu ──────────────────────────────────────────
+        # Multi-instance actions + group membership controls.
+        cell_menu = QMenu("Cell", menu)
+        spawn_action = cell_menu.addAction("Spawn another hexagon")
 
-        # ---- Multi-instance actions ----
-        spawn_action = menu.addAction("Spawn another hexagon")
-
-        # "Leave group" â€” shown when this hex belongs to a master's group.
+        # "Leave group" — shown when this hex belongs to a master's
+        # group.  Masters show "Disband group" instead (releases all
+        # members).  Visible only when relevant — keeps the submenu
+        # tidy when not part of any group.
         leave_group_action = None
         if self._group_master_id is not None or (self.role == "master" and self._members):
-            menu.addSeparator()
+            cell_menu.addSeparator()
             if self.role == "master":
-                leave_group_action = menu.addAction("Disband group")
+                leave_group_action = cell_menu.addAction("Disband group")
             else:
-                leave_group_action = menu.addAction("Leave group")
+                leave_group_action = cell_menu.addAction("Leave group")
+
+        menu.addMenu(cell_menu)
 
         menu.addSeparator()
 
+        # ── Top-level: about / settings / preferences ────────────
         about_action = menu.addAction(f"About {brand}")
         settings_action = menu.addAction("Settings…")
         preferences_action = menu.addAction("Preferences…")
@@ -2871,18 +2883,46 @@ class HexagonWindow(QMainWindow):
                 self._pending_master_single_click_timer = None
                 _log(f"click(double) id={self._id[:8]} â€” cancelled pending master single-click")
 
-            # Master double-left-click â†’ open merged tree (lock-open path).
-            # Standalone double-left-click â†’ lock-open tree.
+            # Master double-LEFT-click  → in-process popup menu with each
+            #                              member's catalog as a sub-folder.
+            # Master double-RIGHT-click → V1 full editor with merged tree.
+            # Standalone double-LEFT-click → lock-open tree (V1 editor).
+            #
+            # Per user direction (2026-05-07): "A double left click
+            # should bring up a menu with each of the attached cell's
+            # menus each in its own sub-folder on the menu, and
+            # double-right click should bring them up in the full
+            # editor in the same sub-folder style."
             if not self._locked_open:
-                role_label = "merged" if self.role == "master" else "standalone"
-                _log(f"click(double) id={self._id} role={self.role} â€” entering lock-open ({role_label})")
-                self._locked_open = True
-                try:
-                    from scriptree.shell.v1_launcher import show_tree_for
-                    show_tree_for(self, mode="lock-open")
-                except Exception as exc:   # noqa: BLE001
-                    _log(f"click(double): menu import/show failed: {exc!r} â€” resetting lock")
-                    self._locked_open = False
+                if self.role == "master":
+                    # Popup-style menu — same builder as single-click,
+                    # already produces sub-folders per member.
+                    _log(
+                        f"click(double) master id={self._id[:8]} "
+                        f"— showing master popup with member sub-folders"
+                    )
+                    try:
+                        from scriptree.shell.tree_popup import show_tree_popup_for
+                        show_tree_popup_for(self)
+                    except Exception as exc:   # noqa: BLE001
+                        _log(
+                            f"click(double) master: popup failed: {exc!r}"
+                        )
+                else:
+                    _log(
+                        f"click(double) standalone id={self._id} "
+                        f"— entering lock-open"
+                    )
+                    self._locked_open = True
+                    try:
+                        from scriptree.shell.v1_launcher import show_tree_for
+                        show_tree_for(self, mode="lock-open")
+                    except Exception as exc:   # noqa: BLE001
+                        _log(
+                            f"click(double): menu import/show failed: "
+                            f"{exc!r} — resetting lock"
+                        )
+                        self._locked_open = False
             else:
                 # Second double-click: unlock â€” close the open menu and clear flag.
                 _log(f"click(double) id={self._id} â€” unlock; closing lock-open tree")
@@ -2919,16 +2959,21 @@ class HexagonWindow(QMainWindow):
             if not self._locked_open:
                 _log(
                     f"click(double-right) {self.role} {self._id[:8]} "
-                    "â€” opening composite editor"
+                    "— opening composite editor"
                 )
                 self._locked_open = True
                 try:
-                    from scriptree.shell.v1_launcher import show_main_window_for
-                    show_main_window_for(self)
+                    # Route via show_composite_for so master cells get
+                    # the **merged tree** (sub-folder per member) in
+                    # V1's editor, even when no .scriptreering file
+                    # has been saved yet.  show_composite_for handles
+                    # the masters-vs-standalones split itself.
+                    from scriptree.shell.v1_launcher import show_composite_for
+                    show_composite_for(self)
                 except Exception as exc:   # noqa: BLE001
                     _log(
                         f"click(double-right): menu import/show failed: {exc!r} "
-                        "â€” resetting lock"
+                        "— resetting lock"
                     )
                     self._locked_open = False
             else:
