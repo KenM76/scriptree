@@ -73,7 +73,7 @@ show up in stderr instead of vanishing.
 cells can't be docked together."
 
 **Root cause:** Each `.bat` invocation used to spawn its own Python
-process with its own `HexagonRegistry` / `SnapEngine`.  Cells across
+process with its own `CellRegistry` / `SnapEngine`.  Cells across
 processes can't see each other.
 
 **Resolution per user direction:** Implemented single-instance
@@ -91,7 +91,7 @@ primary by default; only `--new-process` opts into isolated processes.
   on a single connection, gets one ack per message, and exits 0.
 - Primary registers `PrimaryServer` after `QApplication` is built and
   routes `messageReceived` into `_handle_primary_message`, which
-  spawns a sibling `HexagonWindow` in the running process — fully
+  spawns a sibling `CellWindow` in the running process — fully
   dockable with existing cells.
 - `--new-process` flag bypasses both the handoff (don't be a
   secondary) AND the primary listen (don't accept handoffs) so a

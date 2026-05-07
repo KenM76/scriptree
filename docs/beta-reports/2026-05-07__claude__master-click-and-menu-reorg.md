@@ -29,7 +29,7 @@ verdict: SHIP after manual smoke
 
 ### Issue 1 — "double-right shows blank editor" (FIXED, root cause was iteration bug)
 
-**Root cause:** ``HexagonWindow._members`` is a
+**Root cause:** ``CellWindow._members`` is a
 ``dict[member_id, QPoint]``, but ``merged_tree.build_merged_tree_for_master``
 and ``tree_popup.show_tree_popup_for`` were both iterating that dict
 directly (``for m in master._members:``).  In Python that yields
@@ -40,8 +40,8 @@ raised, ``show_composite_for`` caught the exception and fell back
 to ``launch_editor_blank`` — exactly the "blank editor" the user saw.
 
 **Fix:** both call sites now iterate ``_members.keys()``, look each
-id up via ``HexagonRegistry.instance().get(id)`` to get the actual
-``HexagonWindow``, and read ``_catalog_path`` off that.  Both
+id up via ``CellRegistry.instance().get(id)`` to get the actual
+``CellWindow``, and read ``_catalog_path`` off that.  Both
 locations also support unbound members (no catalog) — the popup
 shows a disabled "(no catalog bound)" sub-menu for each, and the
 merged-tree builder produces a placeholder ``.scriptreetree`` so
@@ -133,7 +133,7 @@ style by reading that file.
   "always produce a tree, never raise" contract.
 * ``tests/test_tree_popup.py`` — added
   ``test_master_popup_iterates_members_via_registry`` — proves the
-  popup builder calls ``HexagonRegistry.get(member_id)`` (not just
+  popup builder calls ``CellRegistry.get(member_id)`` (not just
   iterates dict values directly).
 
 **750 tests passing.**  No regressions in V1's 668.
@@ -145,7 +145,7 @@ Already comprehensive from v0.2.1 / v0.2.2.  This pass added:
 * ``[merged_tree]`` log line when a placeholder is materialised
   (so we can tell from a log that a ring was opened with no member
   catalogs).
-* ``[HexagonWindow] click(double) master ... — showing master popup
+* ``[CellWindow] click(double) master ... — showing master popup
   with member sub-folders`` log line distinguishing the new
   master-double-LEFT path.
 

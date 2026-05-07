@@ -1,7 +1,7 @@
 """
-hexagon_registry.py â€” HexagonRegistry singleton.
+cell_registry.py â€” CellRegistry singleton.
 
-Owns all live HexagonWindow instances in this process. Acts as the
+Owns all live CellWindow instances in this process. Acts as the
 publish/subscribe bus for dock and lifecycle events.
 
 Architecture: ADR-001 Â§sub-decision-1 and Â§sub-decision-4.
@@ -17,24 +17,24 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, Signal
 
 if TYPE_CHECKING:
-    from scriptree.shell.hexagon_window import HexagonWindow
+    from scriptree.shell.cell_window import CellWindow
 
 
 def _log(msg: str) -> None:
-    print(f"[HexagonRegistry] {msg}", file=sys.stderr)
+    print(f"[CellRegistry] {msg}", file=sys.stderr)
 
 
-class HexagonRegistry(QObject):
+class CellRegistry(QObject):
     """Singleton registry of all live hexagon windows.
 
     Signals
     -------
     hexagonSpawned(hex_id)
-        Emitted when a new HexagonWindow registers itself.
+        Emitted when a new CellWindow registers itself.
     hexagonClosed(hex_id)
-        Emitted when a HexagonWindow unregisters itself (about to close).
+        Emitted when a CellWindow unregisters itself (about to close).
     hexagonMoved(hex_id)
-        Emitted from HexagonWindow.moveEvent so the SnapEngine can poll.
+        Emitted from CellWindow.moveEvent so the SnapEngine can poll.
     hexagonReshaped(hex_id)
         Emitted from apply_* methods so SnapEngine invalidates vertex caches.
     masterSpawned(master_id, source_a_id, source_b_id)
@@ -44,7 +44,7 @@ class HexagonRegistry(QObject):
     """
 
     # Singleton storage â€” attached to QApplication so it lives as long as the app.
-    _INSTANCE: "HexagonRegistry | None" = None
+    _INSTANCE: "CellRegistry | None" = None
 
     # ---- Signals -----------------------------------------------------------
     hexagonSpawned  = Signal(str)         # hex_id
@@ -57,24 +57,24 @@ class HexagonRegistry(QObject):
     def __init__(self) -> None:
         super().__init__()
         # Dict keyed by hex_id for O(1) lookup.
-        self._hexagons: dict[str, "HexagonWindow"] = {}
-        _log("HexagonRegistry created")
+        self._hexagons: dict[str, "CellWindow"] = {}
+        _log("CellRegistry created")
 
     # ---- Singleton access --------------------------------------------------
 
     @classmethod
-    def instance(cls) -> "HexagonRegistry":
+    def instance(cls) -> "CellRegistry":
         """Return (or create) the process-wide singleton."""
         if cls._INSTANCE is None:
-            cls._INSTANCE = HexagonRegistry()
+            cls._INSTANCE = CellRegistry()
         return cls._INSTANCE
 
     # ---- Registration ------------------------------------------------------
 
-    def register(self, hex_win: "HexagonWindow") -> None:
-        """Register a newly-created HexagonWindow.
+    def register(self, hex_win: "CellWindow") -> None:
+        """Register a newly-created CellWindow.
 
-        Called from HexagonWindow.__init__. Emits hexagonSpawned.
+        Called from CellWindow.__init__. Emits hexagonSpawned.
         """
         hid = hex_win._id
         if hid in self._hexagons:
@@ -85,9 +85,9 @@ class HexagonRegistry(QObject):
         self.hexagonSpawned.emit(hid)
 
     def unregister(self, hex_id: str) -> None:
-        """Unregister a closing HexagonWindow.
+        """Unregister a closing CellWindow.
 
-        Called from HexagonWindow.closeEvent. Emits hexagonClosed.
+        Called from CellWindow.closeEvent. Emits hexagonClosed.
         """
         if hex_id not in self._hexagons:
             _log(f"unregister: {hex_id} not found â€” no-op")
@@ -98,21 +98,21 @@ class HexagonRegistry(QObject):
 
     # ---- Lookup ------------------------------------------------------------
 
-    def get(self, hex_id: str) -> "HexagonWindow | None":
+    def get(self, hex_id: str) -> "CellWindow | None":
         return self._hexagons.get(hex_id)
 
-    def all(self) -> list["HexagonWindow"]:
+    def all(self) -> list["CellWindow"]:
         return list(self._hexagons.values())
 
-    def standalones(self) -> list["HexagonWindow"]:
+    def standalones(self) -> list["CellWindow"]:
         """Return only hexagons with role='standalone'."""
         return [h for h in self._hexagons.values() if h.role == "standalone"]
 
-    def masters(self) -> list["HexagonWindow"]:
+    def masters(self) -> list["CellWindow"]:
         """Return only hexagons with role='master'."""
         return [h for h in self._hexagons.values() if h.role == "master"]
 
-    def others(self, hex_id: str) -> list["HexagonWindow"]:
+    def others(self, hex_id: str) -> list["CellWindow"]:
         """Return all registered hexagons except the one with hex_id."""
         return [h for hid, h in self._hexagons.items() if hid != hex_id]
 

@@ -4,7 +4,7 @@ single_instance.py — single-instance ScripTreeRing via QLocalServer.
 The default user experience when launching ``run_scriptreering.bat`` a
 second time is **not** to start a new isolated process — that would
 produce two cells that can't dock with each other (different
-HexagonRegistry, different SnapEngine).  Instead the secondary
+CellRegistry, different SnapEngine).  Instead the secondary
 launch hands its argv to the already-running primary via a named
 pipe (``QLocalServer``/``QLocalSocket``) and then exits.  The primary
 spawns a sibling cell in its own process, so the new cell can snap

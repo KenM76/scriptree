@@ -45,8 +45,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, QPointF, QTimer, Signal
 
 if TYPE_CHECKING:
-    from scriptree.shell.hexagon_registry import HexagonRegistry
-    from scriptree.shell.hexagon_window import HexagonWindow
+    from scriptree.shell.cell_registry import CellRegistry
+    from scriptree.shell.cell_window import CellWindow
 
 
 def _log(msg: str) -> None:
@@ -204,7 +204,7 @@ class SnapEngine(QObject):
     snapPreview = Signal(str, str, str, dict)   # source_id, target_id, mode, geom
     snapCommit  = Signal(str, str, str, dict)   # source_id, target_id, mode, geom
 
-    def __init__(self, registry: "HexagonRegistry", snap_distance_px: int) -> None:
+    def __init__(self, registry: "CellRegistry", snap_distance_px: int) -> None:
         super().__init__()
         self._registry = registry
         self._snap_px  = snap_distance_px
@@ -253,7 +253,7 @@ class SnapEngine(QObject):
         if not self._dragging and self._timer.isActive():
             self._timer.stop()
 
-    def _get_pos(self, hex_win: "HexagonWindow") -> tuple[float, float, int, str, str]:
+    def _get_pos(self, hex_win: "CellWindow") -> tuple[float, float, int, str, str]:
         """Return (cx, cy, size_px, shape, orientation) from cache or fresh."""
         hid = hex_win._id
         if hid not in self._cache:

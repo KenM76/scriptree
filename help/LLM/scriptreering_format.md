@@ -140,7 +140,7 @@ All fields from §4 apply plus:
 ### 6.1 `shape`
 
 Valid values: `"hexagon"`, `"square"`. Unknown values MUST be replaced with `"hexagon"` at load
-time and a warning logged. The field maps directly to `HexagonWindow._shape`.
+time and a warning logged. The field maps directly to `CellWindow._shape`.
 
 ### 6.2 `orientation`
 

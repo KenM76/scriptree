@@ -122,7 +122,7 @@ def _build_menu_for_catalog(menu: QMenu, catalog_path: str | Path) -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
+def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     """Pop up a tree menu of the cell's catalog (or the master's
     merged catalog list).  Closes when the user picks an action or
     clicks elsewhere.
@@ -136,12 +136,12 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
 
     if role == "master":
         # ``_members`` is a ``dict[member_id, QPoint]`` per
-        # HexagonWindow's data model — iterate keys, look each id up
+        # CellWindow's data model — iterate keys, look each id up
         # in the registry to get the actual window, then read its
         # ``_catalog_path``.  Falling back to iterating the value
         # directly when _members is something else (lists, tuples)
         # keeps tests with synthetic data working.
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
 
         members_dict = getattr(hex_win, "_members", None) or {}
         if isinstance(members_dict, dict):
@@ -152,7 +152,7 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
         if not member_keys:
             menu.addAction("(no members)").setEnabled(False)
         else:
-            registry = HexagonRegistry.instance()
+            registry = CellRegistry.instance()
             populated_any = False
             for mk in member_keys:
                 member = registry.get(mk) if isinstance(mk, str) else mk
@@ -202,5 +202,21 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — HexagonWindow
     except Exception:  # noqa: BLE001
         cursor_pos = QApplication.instance().primaryScreen().geometry().center()
         global_pt = cursor_pos
+
+    # Stash the menu on the cell + record close time so click handlers
+    # can implement second-click-toggle ("click cell again hides menu").
+    # Without this, Qt's outside-click-dismisses-popup behaviour would
+    # close the menu AND dispatch the click to the cell, which would
+    # re-open the menu instantly. Giving the cell a "menu just closed"
+    # window short-circuits the re-open.
+    import time as _time
+    hex_win._tree_popup_menu = menu
+    def _on_about_to_hide(_h=hex_win, _now=_time.monotonic):
+        try:
+            _h._tree_popup_closed_at = _now()
+            _h._tree_popup_menu = None
+        except Exception:  # noqa: BLE001
+            pass
+    menu.aboutToHide.connect(_on_about_to_hide)
 
     menu.exec(global_pt)

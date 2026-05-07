@@ -1,5 +1,5 @@
 """
-recent_files.py — QSettings-backed recent-files list for HexagonWindow.
+recent_files.py — QSettings-backed recent-files list for CellWindow.
 
 Tracks the last N files opened via the hex right-click menu, separated into
 two typed lists:
@@ -7,7 +7,7 @@ two typed lists:
   - recent_scriptreetree: *.scriptreetree  (multi-tool catalogs)
 
 Storage key: "hex_shell/recent_files" (QSettings, no app/org qualifier —
-inherits whatever QApplication set, same as the rest of HexagonWindow).
+inherits whatever QApplication set, same as the rest of CellWindow).
 
 Public API
 ----------

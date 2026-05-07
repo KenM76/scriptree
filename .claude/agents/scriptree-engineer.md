@@ -65,7 +65,7 @@ sibling.  See the global `C:\Users\Ken\.claude\CLAUDE.md`.
    Catches typos and indentation mishaps in seconds.
 5. **Add diagnostics liberally.**  Every nontrivial code path gets a
    tagged stderr `_log()` line: `[v1_launcher]`, `[single_instance]`,
-   `[HexagonWindow]`, etc.  When something silently fails, the diagnostic
+   `[CellWindow]`, etc.  When something silently fails, the diagnostic
    is what tells you where.
 6. **Tests before commit.**  Targeted file first
    (`pytest tests/test_X.py -q`), then the full suite via PowerShell
@@ -121,8 +121,8 @@ sibling.  See the global `C:\Users\Ken\.claude\CLAUDE.md`.
 - **PowerShell `-Encoding utf8` writes a BOM.**  Use
   `[System.IO.File]::WriteAllText($f, $text, (New-Object System.Text.UTF8Encoding $false))`
   to write UTF-8 without BOM.
-- **`HexagonWindow._members` is `dict[member_id, QPoint]`**, not a list
-  of windows.  Iterate keys, look up via `HexagonRegistry.instance().get(id)`.
+- **`CellWindow._members` is `dict[member_id, QPoint]`**, not a list
+  of windows.  Iterate keys, look up via `CellRegistry.instance().get(id)`.
 - **Single-instance via QLocalServer** uses a per-user pipe name.  For
   tests, set `SCRIPTREERING_PIPE_NAME` env var to a unique value so
   the test driver doesn't collide with the user's live cell shell.

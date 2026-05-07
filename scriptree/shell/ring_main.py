@@ -9,7 +9,7 @@ Or import and call:
 
 Subsystems wired here
 ---------------------
-- HexagonRegistry: singleton, owns all live HexagonWindow instances.
+- CellRegistry: singleton, owns all live CellWindow instances.
 - SnapEngine: 60 Hz timer, snap detection, preview and commit signals.
 - MasterHexagon spawn: triggered by SnapEngine.snapCommit(mode='edge').
 - Undock detection: triggered by SnapEngine.snapPreview / hexagonMoved.
@@ -24,13 +24,13 @@ import math
 from PySide6.QtWidgets import QApplication
 
 from scriptree.shell.branding_loader import load_branding
-from scriptree.shell.hexagon_window import (
-    HexagonWindow,
+from scriptree.shell.cell_window import (
+    CellWindow,
     _try_spawn_master,
     _check_undock,
     _GROUP_MOVE_IN_PROGRESS,
 )
-from scriptree.shell.hexagon_registry import HexagonRegistry
+from scriptree.shell.cell_registry import CellRegistry
 from scriptree.shell.snap_engine import SnapEngine
 
 
@@ -179,7 +179,7 @@ def _maybe_start_harness(app: QApplication) -> None:
 
 # ---------------------------------------------------------------------------
 # Process-level SnapEngine reference
-# We expose this via a module-level getter so HexagonWindow can reach it
+# We expose this via a module-level getter so CellWindow can reach it
 # without importing main at module load time (which would be circular).
 # ---------------------------------------------------------------------------
 
@@ -206,13 +206,13 @@ def _get_snap_engine() -> SnapEngine | None:
     return _SNAP_ENGINE
 
 
-def _wire_hex_to_snap(hex_win: HexagonWindow) -> None:
-    """Connect a new HexagonWindow to the process-wide SnapEngine."""
+def _wire_hex_to_snap(hex_win: CellWindow) -> None:
+    """Connect a new CellWindow to the process-wide SnapEngine."""
     if _SNAP_ENGINE is None:
         return
     # The SnapEngine receives hexagonMoved via the registry signal (already wired
     # in SnapEngine.__init__).  The drag attach/detach is called from
-    # HexagonWindow._start_drag / _end_drag.  No additional per-hex wiring needed.
+    # CellWindow._start_drag / _end_drag.  No additional per-hex wiring needed.
     # Wire snapPreview â†’ show_snap_preview on this hex.
     _SNAP_ENGINE.snapPreview.connect(
         lambda src, tgt, mode, geom, h=hex_win: _on_snap_preview(src, tgt, mode, geom, h)
@@ -225,7 +225,7 @@ def _on_snap_preview(
     target_id: str,
     mode: str,
     geom: dict,
-    listening_hex: HexagonWindow,
+    listening_hex: CellWindow,
 ) -> None:
     """Route snapPreview signals to the dragging hex's overlay."""
     if listening_hex._id != source_id:
@@ -251,7 +251,7 @@ def _on_snap_commit(
         f"_on_snap_commit src={source_id[:8]} tgt={target_id[:8]} "
         f"mode={mode} geom={snap_geom}"
     )
-    registry = HexagonRegistry.instance()
+    registry = CellRegistry.instance()
     src = registry.get(source_id)
     tgt = registry.get(target_id)
 
@@ -288,7 +288,7 @@ def _on_hexagon_moved(hex_id: str) -> None:
         # A group move is in progress; relative positions are unchanged.
         # Do not trigger undock.
         return
-    registry = HexagonRegistry.instance()
+    registry = CellRegistry.instance()
     hex_win = registry.get(hex_id)
     # Amendment 2: use _docked_to (positional cluster) rather than _dock_partners (shim).
     if hex_win is not None and hex_win._docked_to:
@@ -316,7 +316,7 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
         # so it doesn't land on top of an existing one.
         n_existing = len(registry.hexagons())
         offset = 32 * n_existing
-        hexagon = HexagonWindow(branding)
+        hexagon = CellWindow(branding)
         hexagon.move(100 + offset, 100 + offset)
         _wire_hex_to_snap(hexagon)
         hexagon.show()
@@ -330,7 +330,7 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
             return
         n_existing = len(registry.hexagons())
         offset = 32 * n_existing
-        hexagon = HexagonWindow(branding, catalog_path=str(path))
+        hexagon = CellWindow(branding, catalog_path=str(path))
         hexagon.move(100 + offset, 100 + offset)
         _wire_hex_to_snap(hexagon)
         hexagon.show()
@@ -357,7 +357,7 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
 
 
 def main() -> int:
-    """Create the QApplication, wire subsystems, show one HexagonWindow, run event loop."""
+    """Create the QApplication, wire subsystems, show one CellWindow, run event loop."""
     global _SNAP_ENGINE
 
     # Handle early exit flags (no QApplication needed).
@@ -374,7 +374,7 @@ def main() -> int:
     # running for this user, hand our argv off to it (one cell-spawn
     # request per positional argument, or a single "spawn_cell" if
     # no positional args).  That existing process spawns the new
-    # cell(s) in its own HexagonRegistry, so they can dock with the
+    # cell(s) in its own CellRegistry, so they can dock with the
     # already-visible cells.
     #
     # Opt out with the ``--new-process`` flag — useful for diagnostics
@@ -406,7 +406,7 @@ def main() -> int:
     # QFileDialog / OutputDialog dismisses, Qt's default
     # quitOnLastWindowClosed=True would invoke QApplication.quit() â€”
     # taking the entire shell with it and making every hex disappear.
-    # The shell's lifecycle is owned by HexagonRegistry, not by Qt's
+    # The shell's lifecycle is owned by CellRegistry, not by Qt's
     # window-counting heuristic.  See lesson
     # `shell-engineer__qt-tool-vs-qmainwindow-quitonclose.md` for the
     # related WA_QuitOnClose pattern; this is the application-level
@@ -423,11 +423,11 @@ def main() -> int:
     _log(f"Starting {branding.get('appNameLong', app_name)} â€” phase-1 demo")
 
     # ---- Test-harness (two-gate check â€” ADR-002) ------------------------
-    # Must run after QApplication is constructed but before any HexagonWindow.
+    # Must run after QApplication is constructed but before any CellWindow.
     _maybe_start_harness(app)
 
-    # ---- HexagonRegistry ------------------------------------------------
-    registry = HexagonRegistry.instance()
+    # ---- CellRegistry ------------------------------------------------
+    registry = CellRegistry.instance()
 
     # ---- SnapEngine -----------------------------------------------------
     hex_cfg = branding.get("hexagon", {})
@@ -556,9 +556,9 @@ def main() -> int:
         # Default single-hex behaviour (unchanged).
         initial_specs = [{"x": 100, "y": 100}]
 
-    spawned: list[HexagonWindow] = []
+    spawned: list[CellWindow] = []
     for spec in initial_specs:
-        hexagon = HexagonWindow(branding)
+        hexagon = CellWindow(branding)
         # Apply shape/orientation override if requested (uses the same
         # apply_*_change path the Settings popover uses, so the persistence
         # and re-mask sequence are identical).

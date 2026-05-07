@@ -1,5 +1,5 @@
 """Tests for the role-aware right-click close/exit menu actions on
-``HexagonWindow``.
+``CellWindow``.
 
 UX contract:
 
@@ -7,7 +7,7 @@ UX contract:
 * Master / ring cell: "Close ring (undock all members)" +
   "Close all related (master + members)" + "Exit all"
 
-These tests build minimal ``HexagonWindow`` instances and exercise
+These tests build minimal ``CellWindow`` instances and exercise
 ``_close_this`` / ``_close_ring_undock_all`` / ``_close_all_related`` /
 ``_exit_all`` directly, mocking ``QApplication.quit`` so the test
 process doesn't actually terminate.
@@ -30,13 +30,13 @@ QMessageBox.question = staticmethod(  # type: ignore[assignment]
 
 
 from scriptree.shell.branding_loader import load_branding  # noqa: E402
-from scriptree.shell.hexagon_registry import HexagonRegistry  # noqa: E402
-from scriptree.shell.hexagon_window import HexagonWindow  # noqa: E402
+from scriptree.shell.cell_registry import CellRegistry  # noqa: E402
+from scriptree.shell.cell_window import CellWindow  # noqa: E402
 
 
-def _fresh_registry() -> HexagonRegistry:
+def _fresh_registry() -> CellRegistry:
     """Reset the singleton so tests don't share state."""
-    reg = HexagonRegistry.instance()
+    reg = CellRegistry.instance()
     # Best-effort: close every hex registered from a prior test.
     try:
         for h in list(reg.standalones()) + list(reg.masters()):
@@ -49,9 +49,9 @@ def _fresh_registry() -> HexagonRegistry:
     return reg
 
 
-def _spawn_standalone() -> HexagonWindow:
+def _spawn_standalone() -> CellWindow:
     branding = load_branding()
-    return HexagonWindow(branding)
+    return CellWindow(branding)
 
 
 # ---------------------------------------------------------------------------

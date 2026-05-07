@@ -175,10 +175,10 @@ def launch_editor_blank() -> None:
 # V2-menu-engine polyfill — drop-in replacement for `apps.menu.main`
 # ---------------------------------------------------------------------------
 #
-# These three names were imported by V2's hexagon_window.py from
+# These three names were imported by V2's cell_window.py from
 # `apps.menu.main`.  Rather than rewrite every call site, we expose
 # the same names here.  Each routes to the appropriate V1 launcher.
-# Because they take a HexagonWindow instance, they can read the cell's
+# Because they take a CellWindow instance, they can read the cell's
 # `_catalog_path` and dispatch correctly.
 
 def show_tree_for(hex_win, mode: str = "standalone") -> None:  # noqa: ANN001

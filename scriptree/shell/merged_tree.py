@@ -177,12 +177,12 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
 # Convenience for masters
 # ---------------------------------------------------------------------------
 
-def build_merged_tree_for_master(master) -> Path:  # noqa: ANN001 — HexagonWindow
+def build_merged_tree_for_master(master) -> Path:  # noqa: ANN001 — CellWindow
     """Pull catalog paths from each member of ``master`` and merge.
 
     ``master._members`` is a ``dict[member_id, QPoint]`` (id → home
-    position), NOT a list of HexagonWindow instances.  We have to look
-    up each id in the global ``HexagonRegistry`` to get the actual
+    position), NOT a list of CellWindow instances.  We have to look
+    up each id in the global ``CellRegistry`` to get the actual
     window and read its ``_catalog_path``.
 
     When NONE of the members have a catalog bound (e.g. fresh ring
@@ -192,7 +192,7 @@ def build_merged_tree_for_master(master) -> Path:  # noqa: ANN001 — HexagonWin
     contract: "either way, scriptreering file or not, it needs to be
     able to open this way".
     """
-    from scriptree.shell.hexagon_registry import HexagonRegistry
+    from scriptree.shell.cell_registry import CellRegistry
     from scriptree.core.io import save_tree
     from scriptree.core.model import TreeDef, TreeNode
 
@@ -205,7 +205,7 @@ def build_merged_tree_for_master(master) -> Path:  # noqa: ANN001 — HexagonWin
     else:
         member_ids = list(members_dict)
 
-    registry = HexagonRegistry.instance()
+    registry = CellRegistry.instance()
     paths: list[str] = []
     unbound_count = 0
     for mid in member_ids:

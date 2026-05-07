@@ -1,5 +1,5 @@
 """
-hexagon_window.py â€” HexagonWindow, the branded floating hexagonal launcher.
+cell_window.py â€” CellWindow, the branded floating hexagonal launcher.
 
 Architecture: see docs/architecture/ADR-001-overlay-and-docking.md
 Platform target: Win11 (Phase 0/1 demo). Mac/Linux behaviour: see ADR-001 Â§cross-platform.
@@ -69,7 +69,7 @@ from PySide6.QtWidgets import (
 # ---------------------------------------------------------------------------
 
 def _log(msg: str) -> None:
-    print(f"[HexagonWindow] {msg}", file=sys.stderr)
+    print(f"[CellWindow] {msg}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +256,9 @@ class SettingsDialog(QDialog):
     _ORIENT_DISPLAY = {"Flat-top": "flat-top", "Pointy-top": "pointy-top"}
     _ORIENT_INTERNAL = {v: k for k, v in _ORIENT_DISPLAY.items()}
 
-    def __init__(self, hexagon: "HexagonWindow") -> None:
+    def __init__(self, hexagon: "CellWindow") -> None:
         # Pass None as parent so the dialog inherits OS chrome (Win11 palette)
-        # rather than the HexagonWindow's translucent/dark palette.  The hex
+        # rather than the CellWindow's translucent/dark palette.  The hex
         # reference is kept in self._hex for data access; Qt.Tool keeps the
         # dialog out of the taskbar and always-on-top relative to the hex.
         super().__init__(None, Qt.Tool | Qt.WindowStaysOnTopHint)
@@ -484,7 +484,7 @@ class PreferencesDialog(QDialog):
     from branding.config.json["hexagon"] are used as the Reset fallback.
 
     New hexagons spawned after a change pick up the new app/* defaults because
-    HexagonWindow._load_settings() checks app/* when no per-hex key exists.
+    CellWindow._load_settings() checks app/* when no per-hex key exists.
     Existing hexes keep their individual per-hex settings.
     """
 
@@ -495,7 +495,7 @@ class PreferencesDialog(QDialog):
 
     def __init__(self, branding: dict, parent: QWidget | None = None) -> None:
         # Always pass None so the dialog inherits the OS system palette
-        # rather than any translucent/dark palette set on a HexagonWindow parent.
+        # rather than any translucent/dark palette set on a CellWindow parent.
         super().__init__(None, Qt.Dialog)
         self._branding = branding
         brand = branding.get("appName", "App")
@@ -531,7 +531,7 @@ class PreferencesDialog(QDialog):
         outer.setSpacing(10)
 
         # ---- 1. Defaults for new hexagons ----------------------------------------
-        grp_hex = QGroupBox("Defaults for new hexagons")
+        grp_hex = QGroupBox("Defaults for new cells")
         grp_hex_layout = QVBoxLayout(grp_hex)
         grp_hex_layout.setSpacing(6)
 
@@ -1001,10 +1001,10 @@ _GROUP_MOVE_IN_PROGRESS: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
-# HexagonWindow
+# CellWindow
 # ---------------------------------------------------------------------------
 
-class HexagonWindow(QMainWindow):
+class CellWindow(QMainWindow):
     """Frameless, transparent, always-on-top hexagonal launcher window.
 
     Per ADR-001 Â§sub-decision-2, the constructor receives a branding dict
@@ -1285,14 +1285,14 @@ class HexagonWindow(QMainWindow):
         self.move(100, 100)
 
         # ----------------------------------------------------------------
-        # Register with the singleton HexagonRegistry.
+        # Register with the singleton CellRegistry.
         # Import here to avoid a circular import at module level.
         # ----------------------------------------------------------------
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        HexagonRegistry.instance().register(self)
+        from scriptree.shell.cell_registry import CellRegistry
+        CellRegistry.instance().register(self)
 
         _log(
-            f"HexagonWindow created id={self._id} role={self.role} "
+            f"CellWindow created id={self._id} role={self.role} "
             f"size={self._size_px}px shape={self._shape} orient={self._orientation} "
             f"transparency={self._transparency:.2f} aot={self._always_on_top}"
         )
@@ -1308,13 +1308,13 @@ class HexagonWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
         _log(f"closeEvent id={self._id}")
         # Close the snap overlay if present.
         if self._snap_overlay is not None:
             self._snap_overlay.hide()
         # Unregister from registry (emits hexagonClosed).
-        HexagonRegistry.instance().unregister(self._id)
+        CellRegistry.instance().unregister(self._id)
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -1410,8 +1410,8 @@ class HexagonWindow(QMainWindow):
         self.update()
         self.reshaped.emit(self._id)
         # Notify registry so SnapEngine cache is invalidated.
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        HexagonRegistry.instance().hexagonReshaped.emit(self._id)
+        from scriptree.shell.cell_registry import CellRegistry
+        CellRegistry.instance().hexagonReshaped.emit(self._id)
 
     def apply_size_change(self, size_px: int) -> None:
         """Live-update widget size without recreating the widget."""
@@ -1421,8 +1421,8 @@ class HexagonWindow(QMainWindow):
         self.setMask(QRegion(self._geom.polygon))
         self.update()
         self.reshaped.emit(self._id)
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        HexagonRegistry.instance().hexagonReshaped.emit(self._id)
+        from scriptree.shell.cell_registry import CellRegistry
+        CellRegistry.instance().hexagonReshaped.emit(self._id)
 
     def apply_transparency_change(self, alpha: float) -> None:
         """Live-update fill transparency (0.30â€“1.00 alpha multiplier on fill colour)."""
@@ -1728,8 +1728,8 @@ class HexagonWindow(QMainWindow):
 
     def moveEvent(self, event) -> None:
         import time as _time
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
         _now = _time.monotonic()
         if _now - self._last_move_log_time >= 0.1:
             _log(
@@ -1825,7 +1825,7 @@ class HexagonWindow(QMainWindow):
         tagline = self._branding.get("tagline", "")
 
         # Use None parent so the menu gets Win11 system chrome rather than
-        # inheriting the HexagonWindow's translucent/dark palette.
+        # inheriting the CellWindow's translucent/dark palette.
         menu = QMenu(None)
 
         # ---- File type display (read-only, at top) ----
@@ -1847,12 +1847,11 @@ class HexagonWindow(QMainWindow):
 
         menu.addSeparator()
 
-        # ── Catalog submenu ────────────────────────────────────────
-        # Groups all "load / save / clear catalog" actions plus the
+        # ── ScripTree submenu ─────────────────────────────────────
+        # Groups all load / save / clear catalog actions plus the
         # Open recent sub-sub-menu.  Per user direction (2026-05-07):
-        # "the right click menu on the cells and rings should be
-        # logically organized with sub folders too."
-        catalog_menu = QMenu("Catalog", menu)
+        # "Catalogue should say ScripTree instead."
+        catalog_menu = QMenu("ScripTree", menu)
         load_scriptree_action = catalog_menu.addAction("Load ScripTree…")
         load_scriptreetree_action = catalog_menu.addAction("Load ScripTreeTree…")
 
@@ -1899,25 +1898,41 @@ class HexagonWindow(QMainWindow):
 
         # "Save as…" — save the currently-loaded catalog file under a new name.
         # Only enabled when a file is loaded.
-        save_as_action = catalog_menu.addAction("Save catalog as…")
+        save_as_action = catalog_menu.addAction("Save ScripTree as…")
         save_as_action.setEnabled(self._catalog_path is not None)
 
         clear_catalog_action = None
         if self._catalog_path is not None:
-            clear_catalog_action = catalog_menu.addAction("Clear loaded file")
+            clear_catalog_action = catalog_menu.addAction("Clear loaded ScripTree")
 
         menu.addMenu(catalog_menu)
 
-        # ── Ring submenu ──────────────────────────────────────────
-        # Group ring save/load + autoload.  Visible on every role:
-        # standalones save a single-hex ring; masters save the whole
-        # group.
-        ring_menu = QMenu("Ring", menu)
+        # ── Tree Ring submenu ─────────────────────────────────────
+        # Save/load + autoload of the current cell or the whole ring.
+        # When a ring has already been saved (``_saved_ring_path``
+        # populated), offer both "Save" (overwrite) and "Save as…"
+        # (fork to a new file).  Otherwise only "Save as…" — there's
+        # no remembered path to overwrite.
+        ring_menu = QMenu("Tree Ring", menu)
+        already_saved = getattr(self, "_saved_ring_path", None) is not None
+
+        save_ring_action = None
+        if already_saved:
+            label = (
+                "Save Tree Ring" if self.role != "master"
+                else "Save group as Tree Ring"
+            )
+            save_ring_action = ring_menu.addAction(label)
+
         if self.role == "master":
-            save_ring_action = ring_menu.addAction("Save group as ring…")
+            save_ring_as_action = ring_menu.addAction(
+                "Save group as Tree Ring as…"
+            )
         else:
-            save_ring_action = ring_menu.addAction("Save as ring…")
-        load_ring_action = ring_menu.addAction("Load ring…")
+            save_ring_as_action = ring_menu.addAction(
+                "Save as Tree Ring…"
+            )
+        load_ring_action = ring_menu.addAction("Load Tree Ring…")
 
         # "Auto-load on startup" sub-sub-menu.
         autoload_menu = QMenu("Auto-load on startup", ring_menu)
@@ -1954,7 +1969,7 @@ class HexagonWindow(QMainWindow):
         # ── Cell submenu ──────────────────────────────────────────
         # Multi-instance actions + group membership controls.
         cell_menu = QMenu("Cell", menu)
-        spawn_action = cell_menu.addAction("Spawn another hexagon")
+        spawn_action = cell_menu.addAction("Spawn another cell")
 
         # "Leave group" — shown when this hex belongs to a master's
         # group.  Masters show "Disband group" instead (releases all
@@ -2012,8 +2027,10 @@ class HexagonWindow(QMainWindow):
             _log(f"Catalog cleared for id={self._id[:8]}")
         elif chosen == save_as_action:
             self._save_catalog_as_dialog()
-        elif chosen == save_ring_action:
+        elif save_ring_action is not None and chosen == save_ring_action:
             self._save_ring_dialog()
+        elif chosen == save_ring_as_action:
+            self._save_ring_as_dialog()
         elif chosen == load_ring_action:
             self._load_ring_dialog()
         elif chosen == autoload_disabled_action:
@@ -2056,36 +2073,60 @@ class HexagonWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _save_ring_dialog(self) -> None:
-        """Open a save dialog and call save_ring() on confirm.
+        """Save the ring to its remembered path, prompting only on
+        first save.
 
-        Works for both master hexagons (saves master + members) and standalone
-        hexagons (saves a single-hex ring with empty members list).
-        After save, self._saved_ring_path is set so autoload can use it.
+        After a successful save, ``self._saved_ring_path`` is set so
+        subsequent calls write back to the same file (V1 editor pattern:
+        Save vs Save As).  ``_save_ring_as_dialog`` always prompts.
         """
+        path = getattr(self, "_saved_ring_path", None)
+        if path is None:
+            self._save_ring_as_dialog()
+            return
+        self._write_ring_to_path(path)
+
+    def _save_ring_as_dialog(self) -> None:
+        """Always prompt for a destination path, then save the ring."""
         from pathlib import Path as _Path
         from PySide6.QtWidgets import QFileDialog
-        from scriptree.shell.ring_io import save_ring, _default_rings_dir
+        from scriptree.shell.ring_io import _default_rings_dir
 
         brand = self._branding.get("appName", "App")
         default_dir = _default_rings_dir(brand)
+        # If already saved once, default to that path so "Save As" can
+        # quickly fork to a new name.
+        prior = getattr(self, "_saved_ring_path", None)
+        if prior is not None:
+            start = str(prior)
+        else:
+            start = str(default_dir)
 
         chosen, _ = QFileDialog.getSaveFileName(
             None,
-            "Save hexagon ring",
-            str(default_dir),
-            "Hexagon Rings (*.scriptreering);;All files (*)",
+            "Save Tree Ring as",
+            start,
+            "Tree Rings (*.scriptreering);;All files (*)",
         )
         if not chosen:
             return
-
         path = _Path(chosen)
+        if path.suffix.lower() != ".scriptreering":
+            path = path.with_suffix(".scriptreering")
+        self._write_ring_to_path(path)
+
+    def _write_ring_to_path(self, path) -> None:  # noqa: ANN001
+        """Write the current cell/ring to ``path`` via ``save_ring``."""
+        from scriptree.shell.ring_io import save_ring
         try:
             save_ring(self, path)
             self._saved_ring_path = path
             _log(f"Ring saved to {path} by id={self._id[:8]}")
-        except Exception as exc:
-            _log(f"_save_ring_dialog: save_ring failed: {exc!r}")
-            QMessageBox.warning(None, "Save failed", f"Could not save ring:\n{exc}")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_write_ring_to_path: save_ring failed: {exc!r}")
+            QMessageBox.warning(
+                None, "Save failed", f"Could not save ring:\n{exc}"
+            )
 
     def _load_ring_dialog(self) -> None:
         """Open a load dialog and call load_ring() on confirm.
@@ -2101,18 +2142,18 @@ class HexagonWindow(QMainWindow):
 
         chosen, _ = QFileDialog.getOpenFileName(
             None,
-            "Load hexagon ring",
+            "Load Tree Ring",
             str(default_dir),
-            "Hexagon Rings (*.scriptreering);;All files (*)",
+            "Tree Rings (*.scriptreering);;All files (*)",
         )
         if not chosen:
             return
 
         path = _Path(chosen)
         try:
-            from scriptree.shell.hexagon_registry import HexagonRegistry
+            from scriptree.shell.cell_registry import CellRegistry
             from scriptree.shell.ring_main import _get_snap_engine
-            registry = HexagonRegistry.instance()
+            registry = CellRegistry.instance()
             snap = _get_snap_engine()
             master = load_ring(path, self._branding, registry, snap)
             master._saved_ring_path = path
@@ -2325,8 +2366,8 @@ class HexagonWindow(QMainWindow):
         For the MASTER itself: removes all members from the group, closes master.
         Does NOT move any window.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         if self.role == "master":
             # Disband: clear group membership for all members, then close.
@@ -2384,10 +2425,10 @@ class HexagonWindow(QMainWindow):
         5. Call update() so _compute_stroke_color() picks up the new state
            and the green outline starts rendering immediately.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
         from PySide6.QtCore import QTimer as _QTimer
 
-        registry = HexagonRegistry.instance()
+        registry = CellRegistry.instance()
 
         mid = self._group_master_id
         if mid is None:
@@ -2440,8 +2481,8 @@ class HexagonWindow(QMainWindow):
         4. Clear self._docked_to.
         5. _group_master_id is PRESERVED â€” still a group member.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         # Remove self from all adjacent peers' _docked_to sets.
         for peer_id in list(self._docked_to):
@@ -2468,12 +2509,12 @@ class HexagonWindow(QMainWindow):
         )
 
     def _spawn_another(self) -> None:
-        """Spawn a new standalone HexagonWindow offset from this one.
+        """Spawn a new standalone CellWindow offset from this one.
 
         The new hex starts from branding defaults (fresh UUID, no persisted
         settings). Position is clamped to the primary screen's available area.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
 
         # Offset: +120 logical px horizontally from this window's top-left.
         offset_x = 120
@@ -2488,7 +2529,7 @@ class HexagonWindow(QMainWindow):
             new_x = max(avail.left(), min(new_x, avail.right() - self._size_px))
             new_y = max(avail.top(), min(new_y, avail.bottom() - self._size_px))
 
-        new_hex = HexagonWindow(self._branding, catalog_path=self._catalog_path)
+        new_hex = CellWindow(self._branding, catalog_path=self._catalog_path)
         new_hex.move_to(new_x, new_y)
         new_hex.show()
         _log(
@@ -2514,8 +2555,8 @@ class HexagonWindow(QMainWindow):
 
         If this hex is a source of a master, close the master too.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         # Close any master that has this hex as a source.
         masters_to_close = [
@@ -2549,12 +2590,12 @@ class HexagonWindow(QMainWindow):
         gone, plus the dock relationship.  Equivalent to "Disband
         group" but framed in user-facing language: "close ring".
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
         if self.role != "master":
             _log("_close_ring_undock_all on non-master — falling back to _close_this")
             self._close_this()
             return
-        registry = HexagonRegistry.instance()
+        registry = CellRegistry.instance()
         # Iterate a copy of member ids so we can release relationships
         # without mutating during iteration.
         member_ids = list((self._members or {}).keys())
@@ -2580,12 +2621,12 @@ class HexagonWindow(QMainWindow):
         all go away."  After this, only cells that weren't members of
         the ring remain.  If the entire desktop becomes empty, quit.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
         if self.role != "master":
             _log("_close_all_related on non-master — falling back to _close_this")
             self._close_this()
             return
-        registry = HexagonRegistry.instance()
+        registry = CellRegistry.instance()
         member_ids = list((self._members or {}).keys())
         _log(
             f"Closing ring + members: master={self._id[:8]} "
@@ -2614,8 +2655,8 @@ class HexagonWindow(QMainWindow):
         This is the "fire and exit" option — the same effect as
         clicking the X on each cell in turn, but in one click.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
         all_cells = list(registry.standalones()) + list(registry.masters())
         _log(f"Exit all: closing {len(all_cells)} cell(s)")
         for cell in all_cells:
@@ -2667,10 +2708,10 @@ class HexagonWindow(QMainWindow):
         if self.role != "master" or not self._positioned:
             return
 
-        from scriptree.shell.hexagon_registry import HexagonRegistry
+        from scriptree.shell.cell_registry import CellRegistry
         from PySide6.QtGui import QGuiApplication
 
-        registry = HexagonRegistry.instance()
+        registry = CellRegistry.instance()
         app_inst = QGuiApplication.instance()
         if app_inst is None:
             return
@@ -2785,7 +2826,7 @@ class HexagonWindow(QMainWindow):
         """Move the window to logical screen coordinates (x, y).
 
         Identical effect to a user drag-end at that position.
-        Fires HexagonRegistry.hexagonMoved (via moveEvent).
+        Fires CellRegistry.hexagonMoved (via moveEvent).
         """
         self.move(x, y)
 
@@ -2857,19 +2898,45 @@ class HexagonWindow(QMainWindow):
                 )
                 return
 
-            # Standalone path (unchanged).
+            # Standalone path: toggle popup menu on/off.
+            #
+            # User contract (2026-05-07): "a single click brings up
+            # their tool menu, clicking on the cell again hides it,
+            # clicking on another cell current behaviour good."
+            #
+            # Implementation: when the popup is dismissed by an
+            # outside-click on this cell, Qt's QMenu mechanism closes
+            # the menu AND dispatches the click to this widget — which
+            # would re-open the popup unless we suppress it.  We record
+            # the close time on `_tree_popup_closed_at` (set inside
+            # tree_popup.show_tree_popup_for via aboutToHide) and skip
+            # the re-open if the click arrives within a short window.
             if self._locked_open:
                 _log(
-                    f"click(single) id={self._id} â€” lock-open active; "
+                    f"click(single) id={self._id} — lock-open active; "
                     "ignoring single-click per click-mode contract"
                 )
                 return
-            _log(f"click(single) id={self._id} â€” opening tree standalone")
+
+            import time as _time
+            last_close = getattr(self, "_tree_popup_closed_at", 0.0)
+            if _time.monotonic() - last_close < 0.25:
+                # Menu just closed because user clicked this cell to
+                # dismiss it.  Don't re-open.  The next click will
+                # be after the 250 ms window and will open the menu
+                # again as expected.
+                _log(
+                    f"click(single) id={self._id[:8]} — popup just "
+                    f"closed; treating second click as toggle-hide"
+                )
+                return
+
+            _log(f"click(single) id={self._id} — opening tree standalone")
             try:
                 from scriptree.shell.v1_launcher import show_tree_for
                 show_tree_for(self, mode="standalone")
             except Exception as exc:   # noqa: BLE001
-                _log(f"click(single): menu import/show failed: {exc!r} â€” continuing")
+                _log(f"click(single): menu import/show failed: {exc!r} — continuing")
 
         elif mode == "double":
             # Cancel any pending master single-click before acting on double.
@@ -3049,8 +3116,8 @@ class HexagonWindow(QMainWindow):
         Iterates self._members regardless of positioned/separated status.
         Members animate from their current visible position to master.pos().
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         # Build list of live member windows.
         members = [
@@ -3105,8 +3172,8 @@ class HexagonWindow(QMainWindow):
           whose preferred positions are still off-screen will be immediately
           re-hidden; those with room will stay visible.
         """
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         members = [
             registry.get(mid) for mid in self._members
@@ -3150,8 +3217,8 @@ class HexagonWindow(QMainWindow):
 
         _log(f"_start_expand {self._id}: animating {len(members)} member(s) to stored positions")
 
-    def _get_source_windows(self, registry) -> list["HexagonWindow"]:
-        """Return ALL member HexagonWindow objects for this master.
+    def _get_source_windows(self, registry) -> list["CellWindow"]:
+        """Return ALL member CellWindow objects for this master.
 
         Uses _members keys (Amendment 2 authoritative set). Kept for any
         residual callers; _start_collapse/_start_expand now iterate _members
@@ -3192,7 +3259,7 @@ class HexagonWindow(QMainWindow):
             if hid in self._members
         })
 
-    def dock_with(self, other: "HexagonWindow") -> None:
+    def dock_with(self, other: "CellWindow") -> None:
         """Programmatically edge-dock this hex with `other`.
 
         Uses the honeycomb-strict snap model (Rule 2): places `self` at the
@@ -3388,7 +3455,7 @@ def _honeycomb_master_pos(
     return (cand_x, cand_y)
 
 
-def _try_spawn_master(a: HexagonWindow, b: HexagonWindow) -> None:
+def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     """Snap-commit handler: wire a and b into the group-association model.
 
     Amendment 2 decision tree (4 cases):
@@ -3420,10 +3487,10 @@ def _try_spawn_master(a: HexagonWindow, b: HexagonWindow) -> None:
     Rule: NEVER reposition an existing master (it stays where it is).
     Rule: a._docked_to and b._docked_to are updated to record adjacency.
     """
-    from scriptree.shell.hexagon_registry import HexagonRegistry
+    from scriptree.shell.cell_registry import CellRegistry
     from PySide6.QtGui import QGuiApplication
 
-    registry = HexagonRegistry.instance()
+    registry = CellRegistry.instance()
 
     # Defensive guard: masters are not honeycomb cells and cannot be wired as
     # group members.  SnapEngine._tick now filters them out at source, but if
@@ -3519,7 +3586,7 @@ def _try_spawn_master(a: HexagonWindow, b: HexagonWindow) -> None:
     _log(f"Case 1 (fresh master): spawning for {a._id[:8]} + {b._id[:8]}")
 
     # Deterministic pairwise master_id (stable across dock/undock/re-dock).
-    master_id = HexagonRegistry.master_id(a._id, b._id)
+    master_id = CellRegistry.master_id(a._id, b._id)
 
     # Compute master position: honeycomb cell adjacent to BOTH a and b.
     from scriptree.shell.snap_engine import _neighbour_slot_centres as _nsc
@@ -3578,7 +3645,7 @@ def _try_spawn_master(a: HexagonWindow, b: HexagonWindow) -> None:
         cand_x, cand_y = _honeycomb_master_pos({a._id, b._id}, hex_size, registry, avail)
 
     # Create the master.
-    master = HexagonWindow(
+    master = CellWindow(
         a._branding,
         role="master",
         source_a_id=a._id,
@@ -3616,7 +3683,7 @@ def _try_spawn_master(a: HexagonWindow, b: HexagonWindow) -> None:
     registry.masterSpawned.emit(master_id, a._id, b._id)
 
 
-def _update_docked_to(a: HexagonWindow, b: HexagonWindow, registry) -> None:
+def _update_docked_to(a: CellWindow, b: CellWindow, registry) -> None:
     """Record the bidirectional positional adjacency between a and b.
 
     Both a._docked_to and b._docked_to get each other's id added.
@@ -3625,7 +3692,7 @@ def _update_docked_to(a: HexagonWindow, b: HexagonWindow, registry) -> None:
     b._docked_to.add(a._id)
 
 
-def _check_undock(moved_hex: HexagonWindow) -> None:
+def _check_undock(moved_hex: CellWindow) -> None:
     """Called when a hex moves; checks if it has drifted far enough to leave cluster.
 
     Amendment 2: uses _docked_to (positional adjacency) rather than _dock_partners.
@@ -3635,9 +3702,9 @@ def _check_undock(moved_hex: HexagonWindow) -> None:
     The master is closed only when len(master._members) < 2 via
     _check_master_validity (not here â€” drift just breaks position, not membership).
     """
-    from scriptree.shell.hexagon_registry import HexagonRegistry
+    from scriptree.shell.cell_registry import CellRegistry
 
-    registry = HexagonRegistry.instance()
+    registry = CellRegistry.instance()
     hex_cfg = moved_hex._branding.get("hexagon", {})
     snap_dist = hex_cfg.get("snapDistancePx", 18)
     undock_threshold = snap_dist * 2 + moved_hex._size_px
@@ -3683,7 +3750,7 @@ def _check_undock(moved_hex: HexagonWindow) -> None:
         )
 
 
-def _check_master_validity(master: HexagonWindow, registry) -> None:
+def _check_master_validity(master: CellWindow, registry) -> None:
     """Close the master if fewer than 2 members remain in its group (Amendment 2).
 
     Uses len(master._members) â€” not dock_partners, not home_positions count.
@@ -3702,8 +3769,8 @@ def _check_master_validity(master: HexagonWindow, registry) -> None:
 
     if member_count < 2:
         # Clear group membership for any remaining members.
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        reg = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        reg = CellRegistry.instance()
         for member_id in list(master._members.keys()):
             member = reg.get(member_id)
             if member is not None:

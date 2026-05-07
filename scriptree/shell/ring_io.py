@@ -4,7 +4,7 @@ ring_io.py â€” Save / load master-hexagon groups as .scriptreering files.
 Public API
 ----------
     save_ring(master, path)                          â†’ None
-    load_ring(path, branding, registry, snap_engine) â†’ HexagonWindow (master)
+    load_ring(path, branding, registry, snap_engine) â†’ CellWindow (master)
     list_autoload_rings(scope)                       â†’ list[Path]
     add_autoload_ring(path, scope)                   â†’ None
     remove_autoload_ring(path, scope)                â†’ None
@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from scriptree.shell.hexagon_window import HexagonWindow
-    from scriptree.shell.hexagon_registry import HexagonRegistry
+    from scriptree.shell.cell_window import CellWindow
+    from scriptree.shell.cell_registry import CellRegistry
     from scriptree.shell.snap_engine import SnapEngine
 
 
@@ -137,8 +137,8 @@ _FORMAT = "scriptreering"
 _VERSION = 1
 
 
-def _hex_to_dict(hex_win: "HexagonWindow", include_member_fields: bool = False) -> dict:
-    """Serialise a single HexagonWindow to a plain dict.
+def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> dict:
+    """Serialise a single CellWindow to a plain dict.
 
     include_member_fields â€” add preferred_position, catalog_path, is_positioned
     (only meaningful for member hexes within a master's _members set).
@@ -219,7 +219,7 @@ def _load_hex_fields(d: dict, size_px: int | None = None) -> dict:
 # Public API: save_ring
 # ---------------------------------------------------------------------------
 
-def save_ring(hex_window: "HexagonWindow", path: Path) -> None:
+def save_ring(hex_window: "CellWindow", path: Path) -> None:
     """Serialise a hexagon group (or single standalone hex) to a .scriptreering file.
 
     Accepts either a master hexagon (role == 'master') or a standalone hexagon
@@ -257,8 +257,8 @@ def save_ring(hex_window: "HexagonWindow", path: Path) -> None:
         )
     else:
         # Master case (original behaviour).
-        from scriptree.shell.hexagon_registry import HexagonRegistry
-        registry = HexagonRegistry.instance()
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         master_dict = _hex_to_dict(hex_window)
         members_list = []
@@ -306,17 +306,17 @@ def save_ring(hex_window: "HexagonWindow", path: Path) -> None:
 def load_ring(
     path: Path,
     branding: dict,
-    registry: "HexagonRegistry",
+    registry: "CellRegistry",
     snap_engine: "SnapEngine | None",
-) -> "HexagonWindow":
+) -> "CellWindow":
     """Deserialise a .scriptreering file and spawn master + members.
 
-    Returns the newly-created master HexagonWindow.
+    Returns the newly-created master CellWindow.
 
     Raises FileNotFoundError if `path` does not exist.
     Raises ValueError on schema errors (wrong format/version).
     """
-    from scriptree.shell.hexagon_window import HexagonWindow
+    from scriptree.shell.cell_window import CellWindow
     from PySide6.QtCore import QPoint
 
     path = Path(path)
@@ -353,7 +353,7 @@ def load_ring(
         cat_path_raw: str | None = master_raw.get("catalog_path")
         resolved_catalog = _resolve_catalog_path(cat_path_raw, branding)
 
-        master_win = HexagonWindow(
+        master_win = CellWindow(
             branding,
             role="standalone",
             catalog_path=resolved_catalog,
@@ -371,7 +371,7 @@ def load_ring(
         return master_win
 
     # Spawn master hex (normal multi-hex ring case).
-    master_win = HexagonWindow(
+    master_win = CellWindow(
         branding,
         role="master",
     )
@@ -407,7 +407,7 @@ def load_ring(
         cat_path_raw: str | None = m_raw.get("catalog_path")
         resolved_catalog: str | None = _resolve_catalog_path(cat_path_raw, branding)
 
-        member_win = HexagonWindow(
+        member_win = CellWindow(
             branding,
             role="standalone",
             catalog_path=resolved_catalog,

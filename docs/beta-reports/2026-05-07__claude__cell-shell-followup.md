@@ -50,10 +50,10 @@ assertion in `test_launch_tool_passes_path_to_subprocess`.
 `apps/shell/main.py` to `scriptree/shell/ring_main.py`, five
 references inside the ported files were missed:
 
-* `hexagon_window.py:1649`  `_get_snap_engine`  (drag-start path)
-* `hexagon_window.py:1700`  `_get_snap_engine`  (mouseRelease — drag-end!)
-* `hexagon_window.py:2079`  `_get_snap_engine`  (master-drag translate)
-* `hexagon_window.py:_spawn_another` `_wire_hex_to_snap` (already fixed in v0.2.1)
+* `cell_window.py:1649`  `_get_snap_engine`  (drag-start path)
+* `cell_window.py:1700`  `_get_snap_engine`  (mouseRelease — drag-end!)
+* `cell_window.py:2079`  `_get_snap_engine`  (master-drag translate)
+* `cell_window.py:_spawn_another` `_wire_hex_to_snap` (already fixed in v0.2.1)
 * `ring_io.py:392, 446`     `_on_snap_preview` (autoload path)
 
 Every one of these was wrapped in `except Exception: pass` so the
@@ -75,7 +75,7 @@ User wanted role-aware close/exit options.  Implemented:
 * **Master / ring cell** → "Close ring (undock all members)" +
   "Close all related (master + members)" + "Exit all"
 
-**New methods on HexagonWindow:**
+**New methods on CellWindow:**
 
 * `_close_ring_undock_all()` — destroys the master, members revert
   to standalones (keep their position + catalog).
