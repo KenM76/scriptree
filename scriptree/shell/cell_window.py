@@ -3298,14 +3298,20 @@ class CellWindow(QMainWindow):
                 _log(f"_autoload_disable: remove_autoload_ring({scope}) failed: {exc!r}")
 
     def _load_catalog_dialog(self, prefer_ext: str = "") -> None:
-        """Open a file dialog to assign a catalog to this hexagon.
+        """Open a file dialog to load a catalog into a NEW sibling cell.
 
-        prefer_ext â€” if ".scriptree" or ".scriptreetree", that filter is
-        selected by default in the dialog.  The user can still switch filters
-        to pick the other type.
+        Per user direction (2026-05-07): "when I go to a cell or ring
+        and click to load a scriptree, scriptreetree, or ring it should
+        open a new cell or ring and leave the existing one open."
+
+        This cell stays untouched.  We spawn a fresh standalone
+        ``CellWindow`` next to this one, bound to the chosen catalog.
+
+        prefer_ext — if ".scriptree" or ".scriptreetree", that filter is
+        selected by default in the dialog.  The user can still switch
+        filters to pick the other type.
         """
         from pathlib import Path as _Path
-        from scriptree.shell import recent_files as _rf
 
         # Start in the sample-catalog directory if it exists.
         project_root = _Path(__file__).resolve().parent.parent.parent
@@ -3319,13 +3325,13 @@ class CellWindow(QMainWindow):
 
         if prefer_ext == ".scriptreetree":
             default_filter = _FILTER_TREE
-            caption = "Load ScripTreeTree"
+            caption = "Load ScripTreeTree (opens in a new cell)"
         elif prefer_ext == ".scriptree":
             default_filter = _FILTER_TOOL
-            caption = "Load ScripTree"
+            caption = "Load ScripTree (opens in a new cell)"
         else:
             default_filter = _FILTER_ALL
-            caption = "Load ScripTree or ScripTreeTree"
+            caption = "Load ScripTree or ScripTreeTree (opens in a new cell)"
 
         chosen, _ = QFileDialog.getOpenFileName(
             None,
@@ -3335,15 +3341,11 @@ class CellWindow(QMainWindow):
             default_filter,
         )
         if chosen:
-            self._catalog_path = chosen
-            self._save_settings()
-            _rf.add(chosen)
-            self._refresh_label_from_catalog()
-            self.update()
-            _log(f"Catalog set to {chosen!r} for id={self._id[:8]}")
+            self._spawn_sibling_with_catalog(chosen)
 
     def _open_recent_catalog(self, path: str) -> None:
-        """Load a catalog from the recent-files list, handling missing files."""
+        """Load a recent catalog into a NEW sibling cell (this cell
+        stays untouched).  Per V3 v0.2.8 user direction."""
         from pathlib import Path as _Path
         from scriptree.shell import recent_files as _rf
 
@@ -3369,12 +3371,71 @@ class CellWindow(QMainWindow):
                 s.setValue(key, _json.dumps(items))
                 s.sync()
             return
-        self._catalog_path = path
-        self._save_settings()
-        _rf.add(path)
-        self._refresh_label_from_catalog()
-        self.update()
-        _log(f"Catalog set from recent: {path!r} for id={self._id[:8]}")
+        self._spawn_sibling_with_catalog(path)
+
+    def _spawn_sibling_with_catalog(self, catalog_path: str) -> None:
+        """Spawn a fresh standalone cell next to this one, bound to
+        ``catalog_path``.  This cell stays untouched.
+
+        The new cell is wired into the SnapEngine so it can dock with
+        existing cells.  Position: offset by one cell width to the
+        right of this cell, clamped to the screen.  Used by both
+        Load… dialogs and Open recent.
+        """
+        from pathlib import Path as _Path
+        from scriptree.shell import recent_files as _rf
+
+        try:
+            new_cell = CellWindow(
+                self._branding,
+                catalog_path=str(_Path(catalog_path).resolve()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_spawn_sibling_with_catalog: CellWindow ctor failed "
+                f"for {catalog_path!r}: {exc!r}"
+            )
+            QMessageBox.warning(
+                None, "Could not load catalog",
+                f"Failed to create cell for {catalog_path}:\n\n{exc}",
+            )
+            return
+
+        # Position offset to the right of this cell; clamp to screen.
+        offset = self.width() + 12
+        new_x = self.pos().x() + offset
+        new_y = self.pos().y()
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            new_x = max(
+                avail.left(),
+                min(new_x, avail.right() - new_cell._size_px),
+            )
+            new_y = max(
+                avail.top(),
+                min(new_y, avail.bottom() - new_cell._size_px),
+            )
+        new_cell.move(new_x, new_y)
+
+        # Wire to the snap engine so the new cell can dock with
+        # existing cells (and rings).
+        try:
+            from scriptree.shell.ring_main import _wire_hex_to_snap
+            _wire_hex_to_snap(new_cell)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_spawn_sibling_with_catalog: snap-engine wire failed: "
+                f"{exc!r} — drag-snap will not engage for the new cell"
+            )
+
+        new_cell.show()
+        _rf.add(catalog_path)
+        _log(
+            f"Spawned sibling cell {new_cell._id[:8]} bound to "
+            f"{_Path(catalog_path).name!r}; this cell ({self._id[:8]}) "
+            f"stays untouched."
+        )
 
     def _save_catalog_as_dialog(self) -> None:
         """Save the currently-loaded catalog file under a new name.

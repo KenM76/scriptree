@@ -276,6 +276,60 @@ class TestDropDispatch:
 # _drop_paths — extension filter
 # ---------------------------------------------------------------------------
 
+class TestLoadCatalogSpawnsSibling:
+    """v0.2.8 contract: clicking Load ScripTree / ScripTreeTree from
+    the right-click menu must spawn a NEW cell, not replace the
+    current cell's catalog.  Per user spec: 'when I go to a cell or
+    ring and click to load a scriptree, scriptreetree, or ring it
+    should open a new cell or ring and leave the existing one open.'"""
+
+    def test_spawn_sibling_creates_new_cell_with_catalog(
+        self, tmp_path: Path,
+    ) -> None:
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.branding_loader import load_branding
+
+        # Build a real .scriptreetree on disk.
+        tool = ToolDef(
+            name="alpha", executable="/bin/echo",
+            argument_template=["{x}"],
+            params=[ParamDef(id="x", label="X", default="hi")],
+        )
+        leaf = tmp_path / "alpha.scriptree"
+        save_tool(tool, leaf)
+        tree_path = tmp_path / "cat.scriptreetree"
+        save_tree(
+            TreeDef(name="cat", nodes=[
+                TreeNode(type="leaf", name="alpha", path=leaf.name)
+            ]),
+            tree_path,
+        )
+
+        # Spawn the original cell with NO catalog.
+        original = CellWindow(load_branding())
+        assert original._catalog_path is None
+
+        # Patch CellWindow.show so spawned siblings don't actually pop
+        # up on the desktop during the test.
+        spawned: list = []
+        with patch.object(
+            CellWindow, "show", lambda self: spawned.append(self),
+        ):
+            original._spawn_sibling_with_catalog(str(tree_path))
+
+        # Original is UNTOUCHED.
+        assert original._catalog_path is None
+        # Exactly one new cell, bound to the chosen catalog.
+        assert len(spawned) == 1
+        new_cell = spawned[0]
+        assert new_cell is not original
+        assert Path(new_cell._catalog_path) == tree_path.resolve()
+
+        # Cleanup.
+        original.close()
+        new_cell.close()
+
+
 class TestDropPathsFilter:
     def test_filters_to_supported_extensions_only(self) -> None:
         from PySide6.QtCore import QMimeData, QUrl
