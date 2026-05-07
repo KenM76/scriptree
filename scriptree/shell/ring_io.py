@@ -519,13 +519,20 @@ def load_ring(
         second_id = list(master_win._members.keys())[1] if len(master_win._members) >= 2 else first_id
         registry.masterSpawned.emit(master_win._id, first_id, second_id)
 
-    # Edge-fold: evaluate immediately after all members are placed.
-    # The master's position from the file might already push some members
-    # off-screen at the user's current screen size/DPI configuration.
+    # Repack: hand-edited or cross-DPI ring files may have member
+    # positions that overlap, sit off-slot, or fall off-screen at the
+    # current resolution.  A single repack canonicalises every
+    # member's position to a free, on-screen first/outer-ring slot,
+    # then runs edge-fold to update visibility for any member that
+    # still has nowhere to go.
     try:
-        master_win._check_edge_fold()
-    except Exception as _efe:
-        _log(f"load_ring: _check_edge_fold raised {_efe!r} â€” continuing")
+        master_win._repack_members()
+    except Exception as _re:
+        _log(f"load_ring: _repack_members raised {_re!r} - falling back to edge-fold only")
+        try:
+            master_win._check_edge_fold()
+        except Exception as _efe:
+            _log(f"load_ring: _check_edge_fold raised {_efe!r} - continuing")
 
     _log(
         f"load_ring: complete â€” master {master_win._id[:8]} "

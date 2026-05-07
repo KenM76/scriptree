@@ -104,3 +104,8 @@ gives the per-topic slice.
   `self._tree_file` (and refresh `_tree_read_only`) *before*
   delegating to the existing save method.
   → `rags/lessons/save_as_rebinds_path.md`
+- [v3-architecture] **group_uniform_size_and_repack**: cells in a
+  master group share `size_px` / `shape` / `orientation`; settings
+  broadcast through `_apply_group_geometry` and a pure-logic
+  `group_layout.repack` keeps members edge-touching, non-overlapping,
+  and on-screen.  → `rags/lessons/group_uniform_size_and_repack.md`

@@ -44,6 +44,16 @@ dock with each other).
 
 When two compatible cells dock (same shape, same orientation, full-edge share), a third cell appears at the midpoint of their shared edge, displaced one hexagon-width *opposite* the centre of mass. That third cell is the **master**. Its menu = the union of every member cell's catalog. Its identity is deterministic: `master:<sorted member id pair>` — so re-docking the same two cells brings back the same master at the same remembered position.
 
+### Group uniformity (v0.2.10)
+
+Every cell in a master+members group shares the same **size**, **shape**, and **orientation**. The user-visible consequences:
+
+- When a cell joins a group (via drag-snap or drag-drop), it adopts the group's size and shape on the spot. If the docking cell was 40px and the group is at 56px, it grows to 56px the moment the snap commits.
+- Opening the right-click → **Settings** dialog on **any** cell of a group treats every change as a group-level edit: changing the size on one member resizes the master and every other member; changing the shape from hexagon to square switches the whole ring.
+- Standalone cells (no group) still have per-cell size/shape — those settings only propagate once the cell docks.
+- After any geometry change, the ring is **repacked** so members stay edge-touching the master with no overlap. Members that would land off-screen at the new geometry are reassigned to a free, on-screen direction.
+- When you drag a master so part of the ring would slide off-screen, the off-edge members reattach to a different direction on release. They never end up clipped, hidden behind the taskbar, or stacked on top of each other.
+
 ---
 
 ## Drag-drop file support (v0.2.5)

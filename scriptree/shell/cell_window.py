@@ -1916,8 +1916,14 @@ class CellWindow(QMainWindow):
     # Each of these emits reshaped(self._id) so SnapEngine invalidates cache.
     # ------------------------------------------------------------------
 
-    def apply_shape_change(self, shape: str, orientation: str) -> None:
-        """Live-update shape and orientation without recreating the widget."""
+    def _apply_shape_self(self, shape: str, orientation: str) -> None:
+        """Per-cell shape/orientation update — does not propagate to a group.
+
+        Internal helper used by both the public ``apply_shape_change``
+        (which broadcasts to the cell's group, if any) and the dock-
+        adoption code path that needs to set one cell's geometry to
+        match a master's without triggering a recursive broadcast.
+        """
         self._shape = shape
         self._orientation = orientation
         self._geom = compute_polygon(shape, self._size_px, orientation)
@@ -1928,8 +1934,11 @@ class CellWindow(QMainWindow):
         from scriptree.shell.cell_registry import CellRegistry
         CellRegistry.instance().hexagonReshaped.emit(self._id)
 
-    def apply_size_change(self, size_px: int) -> None:
-        """Live-update widget size without recreating the widget."""
+    def _apply_size_self(self, size_px: int) -> None:
+        """Per-cell size update — does not propagate to a group.
+
+        Internal helper — see ``_apply_shape_self`` rationale.
+        """
         self._size_px = size_px
         self.resize(size_px, size_px)
         self._geom = compute_polygon(self._shape, size_px, self._orientation)
@@ -1938,6 +1947,210 @@ class CellWindow(QMainWindow):
         self.reshaped.emit(self._id)
         from scriptree.shell.cell_registry import CellRegistry
         CellRegistry.instance().hexagonReshaped.emit(self._id)
+
+    def apply_shape_change(self, shape: str, orientation: str) -> None:
+        """Live-update shape (and orientation).
+
+        Group-aware: if this cell is part of a master+members group,
+        the master and every member adopt the new shape and the ring
+        is repacked so all cells stay edge-touching with no overlap.
+        """
+        self._apply_group_geometry(shape=shape, orientation=orientation)
+
+    def apply_size_change(self, size_px: int) -> None:
+        """Live-update cell size.
+
+        Group-aware: if this cell is part of a master+members group,
+        the master and every member adopt the new size and the ring
+        is repacked so all cells stay edge-touching with no overlap.
+        """
+        self._apply_group_geometry(size_px=size_px)
+
+    def _apply_group_geometry(
+        self,
+        *,
+        size_px: int | None = None,
+        shape: str | None = None,
+        orientation: str | None = None,
+    ) -> None:
+        """Apply size / shape / orientation to this cell's whole group.
+
+        Resolution rules:
+
+        * **Standalone** (no group) — applies only to ``self``.
+        * **Member** — forwards to the master cell so master + every
+          member update together, then triggers a repack.
+        * **Master** — applies to ``self`` and every member, then
+          repacks the ring around the new master geometry.
+
+        Repacking guarantees: cells remain edge-touching where
+        possible, no two cells share a slot, and members that would
+        land off-screen are reassigned to the nearest valid on-screen
+        slot.
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+
+        registry = CellRegistry.instance()
+
+        # ---- Member case — defer to master --------------------------
+        if self.role != "master" and self._group_master_id is not None:
+            master = registry.get(self._group_master_id)
+            if master is not None:
+                master._apply_group_geometry(
+                    size_px=size_px, shape=shape, orientation=orientation,
+                )
+                return
+            # Master vanished — fall through to standalone update.
+
+        # ---- Apply to self ------------------------------------------
+        if shape is not None or orientation is not None:
+            self._apply_shape_self(
+                shape if shape is not None else self._shape,
+                orientation if orientation is not None else self._orientation,
+            )
+        if size_px is not None:
+            self._apply_size_self(size_px)
+
+        # ---- Master case — propagate then repack --------------------
+        if self.role == "master" and self._members:
+            for mid in list(self._members.keys()):
+                member = registry.get(mid)
+                if member is None:
+                    continue
+                if shape is not None or orientation is not None:
+                    member._apply_shape_self(
+                        shape if shape is not None else member._shape,
+                        orientation if orientation is not None else member._orientation,
+                    )
+                if size_px is not None:
+                    member._apply_size_self(size_px)
+            self._repack_members()
+
+    def _reflow_members_after_master_move(self) -> None:
+        """Re-evaluate every member's slot after the master has moved.
+
+        During a master drag, members are translated rigidly with the
+        master (cheap — no math).  When the drag ends, some members
+        may have been pushed past the screen edge.  This routine runs
+        a full repack so off-screen members reattach to a valid free
+        slot in a still-on-screen direction, while members already
+        sitting on canonical slots are left undisturbed (the repack
+        is a no-op for them).
+        """
+        if self.role != "master" or not self._members:
+            return
+        from scriptree.shell.group_layout import (
+            members_at_canonical_slots,
+            screen_rect_for_master,
+        )
+        master_tl = (self.pos().x(), self.pos().y())
+        screen_rect = screen_rect_for_master(master_tl, self._size_px)
+        # Cheap pre-check: are all members already on free, on-screen
+        # slots?  When yes (the common no-op case after a clean drag),
+        # skip the full repack and just refresh edge-fold visibility.
+        positions = {
+            mid: (qp.x(), qp.y()) for mid, qp in self._members.items()
+        }
+        on_screen_and_canonical = (
+            members_at_canonical_slots(
+                master_tl, self._size_px, self._shape, self._orientation,
+                positions,
+            )
+            and all(
+                self._slot_on_screen(qp.x(), qp.y(), screen_rect)
+                for qp in self._members.values()
+            )
+        )
+        if on_screen_and_canonical:
+            self._check_edge_fold()
+            return
+        self._repack_members()
+
+    @staticmethod
+    def _slot_on_screen(
+        tl_x: int, tl_y: int,
+        screen_rect: tuple[int, int, int, int] | None,
+    ) -> bool:
+        """Helper for ``_reflow_members_after_master_move``."""
+        if screen_rect is None:
+            return True
+        left, top, right, bottom = screen_rect
+        return (
+            tl_x >= left and tl_y >= top
+            # The size component is checked in repack via slot_fits_on_screen;
+            # here the test is conservative — top-left in-bounds.
+            and tl_x < right and tl_y < bottom
+        )
+
+    def _repack_members(self) -> None:
+        """Recompute and apply on-screen positions for every member.
+
+        Uses ``group_layout.repack`` to:
+
+        * Place each member on its nearest free first-ring slot whose
+          top-left fits on the master's screen.
+        * Spill into the outer ring when the inner ring is full.
+        * Auto-hide members for which no on-screen slot is available.
+
+        Updates ``self._members`` (the authoritative dict of preferred
+        positions) and re-runs ``_check_edge_fold`` so the badge count
+        reflects the new visibility state.
+        """
+        if self.role != "master" or not self._members:
+            return
+
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.group_layout import (
+            repack,
+            screen_rect_for_master,
+        )
+
+        registry = CellRegistry.instance()
+        master_tl = (self.pos().x(), self.pos().y())
+        screen_rect = screen_rect_for_master(master_tl, self._size_px)
+
+        member_positions: dict[str, tuple[int, int]] = {}
+        for mid in self._members.keys():
+            member = registry.get(mid)
+            if member is None:
+                # Use the stored preferred position as the input.
+                stored = self._members[mid]
+                member_positions[mid] = (stored.x(), stored.y())
+            else:
+                pos = member.pos()
+                member_positions[mid] = (pos.x(), pos.y())
+
+        new_positions = repack(
+            master_top_left=master_tl,
+            size_px=self._size_px,
+            shape=self._shape,
+            orientation=self._orientation,
+            members=member_positions,
+            screen_rect=screen_rect,
+        )
+
+        # Apply the new positions to each member widget + update _members.
+        for mid, new_tl in new_positions.items():
+            member = registry.get(mid)
+            if new_tl is None:
+                # No on-screen slot — keep stored position, hide via
+                # _check_edge_fold below.
+                if member is not None:
+                    self._auto_hidden.add(mid)
+                    member.setVisible(False)
+                continue
+            new_x, new_y = new_tl
+            self._members[mid] = QPoint(new_x, new_y)
+            if member is not None:
+                # Move to new position and ensure visible.
+                member.move(new_x, new_y)
+                if mid in self._auto_hidden:
+                    self._auto_hidden.discard(mid)
+                    member.setVisible(True)
+
+        # Refresh badge / visibility for any members that changed state.
+        self._check_edge_fold()
+        self.update()
 
     def apply_transparency_change(self, alpha: float) -> None:
         """Live-update fill transparency (0.30–1.00 alpha multiplier on fill colour)."""
@@ -2750,8 +2963,9 @@ class CellWindow(QMainWindow):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             _log(f"release drag_started={self._drag_started} id={self._id[:8]}")
-            if self._drag_started:
-                # End the drag â€” notify SnapEngine so it can commit a snap.
+            was_dragging = self._drag_started
+            if was_dragging:
+                # End the drag — notify SnapEngine so it can commit a snap.
                 self._drag_started = False
                 if self._snap_overlay is not None:
                     self._snap_overlay.hide()
@@ -2761,13 +2975,26 @@ class CellWindow(QMainWindow):
                     if snap is not None:
                         snap.detach_drag(self._id)
                     else:
-                        _log(f"mouseReleaseEvent: snap engine is None â€” detach skipped id={self._id[:8]}")
+                        _log(f"mouseReleaseEvent: snap engine is None - detach skipped id={self._id[:8]}")
                 except Exception as exc:
                     _log(f"mouseReleaseEvent: detach_drag exception: {exc!r} id={self._id[:8]}")
             else:
-                # No drag threshold crossed â€” pure click.
+                # No drag threshold crossed — pure click.
                 self.click("single")
         super().mouseReleaseEvent(event)
+        # Master-drag end: reflow members onto valid on-screen slots.
+        # During the drag, members translate rigidly with the master
+        # (see moveEvent).  When the master settles, any member that
+        # would now be off-screen gets reattached to a still-free slot
+        # whose top-left fits the screen.  This is the user's
+        # ring-falls-off-edge requirement.
+        if (
+            event.button() == Qt.LeftButton
+            and was_dragging
+            and self.role == "master"
+            and self._members
+        ):
+            self._reflow_members_after_master_move()
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -4643,9 +4870,11 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     ):
         master = registry.get(tgt_master_id)
         if master is not None:
+            _adopt_member_geometry(a, master)
             master._members[a._id] = QPoint(a.pos())
             master._positioned.add(a._id)
             _update_docked_to(a, b, registry)
+            master._repack_members()
         _log(f"Case 5 (same group): {a._id[:8]} repositioned within group {tgt_master_id[:8]}")
         return
 
@@ -4658,6 +4887,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             old_master._positioned.discard(a._id)
             old_master._dock_partners.discard(a._id)
         if new_master is not None:
+            _adopt_member_geometry(a, new_master)
             new_master._members[a._id] = QPoint(a.pos())
             new_master._positioned.add(a._id)
             new_master._dock_partners.add(a._id)
@@ -4672,12 +4902,16 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         # Close old master if it now has fewer than 2 members.
         if old_master is not None:
             _check_master_validity(old_master, registry)
+            old_master._repack_members()
+        if new_master is not None:
+            new_master._repack_members()
         return
 
     # ---- Case 2: tgt in group, src standalone ------------------------------
     if tgt_master_id is not None and src_master_id is None:
         master = registry.get(tgt_master_id)
         if master is not None:
+            _adopt_member_geometry(a, master)
             master._members[a._id] = QPoint(a.pos())
             master._positioned.add(a._id)
             master._dock_partners.add(a._id)
@@ -4687,13 +4921,15 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             a.update()  # Bug 5: refresh outline colour (now associated)
             if not master.isVisible():
                 master.show()
-        _log(f"Case 2 (src joins tgt group): {a._id[:8]} â†’ group {tgt_master_id[:8]}")
+            master._repack_members()
+        _log(f"Case 2 (src joins tgt group): {a._id[:8]} -> group {tgt_master_id[:8]}")
         return
 
     # ---- Case 3: src in group, tgt standalone ------------------------------
     if src_master_id is not None and tgt_master_id is None:
         master = registry.get(src_master_id)
         if master is not None:
+            _adopt_member_geometry(b, master)
             master._members[b._id] = QPoint(b.pos())
             master._positioned.add(b._id)
             master._dock_partners.add(b._id)
@@ -4703,7 +4939,8 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             b.update()  # Bug 5: refresh outline colour (now associated)
             if not master.isVisible():
                 master.show()
-        _log(f"Case 3 (tgt joins src group): {b._id[:8]} â†’ group {src_master_id[:8]}")
+            master._repack_members()
+        _log(f"Case 3 (tgt joins src group): {b._id[:8]} -> group {src_master_id[:8]}")
         return
 
     # ---- Case 1: both standalone â€” fresh master -----------------------------
@@ -4776,6 +5013,18 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         source_b_id=b._id,
         hexagon_id=master_id,
     )
+    # Master inherits the source cells' shape, orientation, and size so the
+    # whole group renders identically.  ``a`` and ``b`` already share these
+    # values (Rule 3 in SnapEngine rejects cross-shape pairs), but their
+    # ``size_px`` may differ — pick the larger so neither source is forced
+    # to shrink at the moment of docking.
+    group_size_px = max(a._size_px, b._size_px)
+    master._apply_shape_self(a._shape, a._orientation)
+    master._apply_size_self(group_size_px)
+    if a._size_px != group_size_px:
+        a._apply_size_self(group_size_px)
+    if b._size_px != group_size_px:
+        b._apply_size_self(group_size_px)
     master.move_to(cand_x, cand_y)
 
     # Wire group membership.
@@ -4803,8 +5052,35 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     b._dock_partners.add(master_id)
 
     master.show()
+    # Canonicalise positions: both sources adopt their nearest free
+    # honeycomb slots around the master so a non-canonical drag-release
+    # (e.g. dropped slightly off-slot) snaps to a clean ring layout.
+    master._repack_members()
     _log(f"Master spawned: {master_id[:20]} at ({cand_x},{cand_y})")
     registry.masterSpawned.emit(master_id, a._id, b._id)
+
+
+def _adopt_member_geometry(member: CellWindow, master: CellWindow) -> None:
+    """Force ``member`` to take on ``master``'s shape / orientation / size.
+
+    Called from every dock case (Cases 2/3/4/5) before the member is
+    wired into the master's ``_members`` dict.  Repack runs afterwards
+    so the position is recomputed at the now-uniform size.
+
+    Rule 3 in SnapEngine already guarantees matching shape and
+    orientation at snap-commit time, but a future relaxation
+    (cross-shape grouping) would land this routine on a real cross-
+    shape adoption — the helper does the right thing either way.
+    """
+    if member is master:
+        return  # Defensive — masters never adopt from themselves.
+    if (
+        member._shape != master._shape
+        or member._orientation != master._orientation
+    ):
+        member._apply_shape_self(master._shape, master._orientation)
+    if member._size_px != master._size_px:
+        member._apply_size_self(master._size_px)
 
 
 def _update_docked_to(a: CellWindow, b: CellWindow, registry) -> None:
