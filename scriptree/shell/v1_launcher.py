@@ -57,46 +57,83 @@ def _project_root() -> Path:
 def _v1_launcher_cmd() -> list[str]:
     """Return the argv prefix used to launch V1.
 
-    Windows: ``["<root>/run_scriptree.bat"]`` (cmd dispatches it).
-    Other:   ``["bash", "<root>/run_scriptree.sh"]``.
+    Both platforms: invoke ``run_scriptree.py`` directly via the
+    interpreter the cell shell is currently running.  This bypasses
+    the ``.bat`` / ``.sh`` shim and avoids two real bugs:
+
+    1. **DETACHED_PROCESS + .bat is broken on Windows.**  Spawning a
+       ``.bat`` with ``DETACHED_PROCESS`` means cmd.exe runs without
+       any console attached.  Inside the .bat the line ``start ""
+       pythonw.exe ...`` then fails silently — what the user sees is
+       a console flashing and disappearing with no editor window
+       appearing.  Calling Python directly skips cmd.exe entirely.
+
+    2. **The cell shell already knows where Python lives.**  We're
+       running inside the same Python the cell shell launched with;
+       ``sys.executable`` is the windowed (``pythonw.exe``) variant
+       on Windows when launched via ``start "" pythonw.exe …``.
+       Reusing it guarantees the same interpreter, the same vendored
+       ``lib/pypi``, and (importantly) no console flash for the
+       editor window.
     """
     root = _project_root()
-    if sys.platform == "win32":
-        bat = root / "run_scriptree.bat"
-        if bat.is_file():
-            return [str(bat)]
-        # Last-resort: invoke the python entry point directly so the cell
-        # still works in a dev tree without the .bat present.
-        py = sys.executable
-        script = root / "run_scriptree.py"
-        if script.is_file():
-            return [py, str(script)]
+    script = root / "run_scriptree.py"
+    if not script.is_file():
         raise FileNotFoundError(
-            f"Cannot locate run_scriptree.bat or run_scriptree.py in {root}"
+            f"Cannot locate run_scriptree.py in {root}"
         )
-    sh = root / "run_scriptree.sh"
-    if sh.is_file():
-        return ["bash", str(sh)]
-    raise FileNotFoundError(
-        f"Cannot locate run_scriptree.sh in {root}"
-    )
+    py = sys.executable
+    if not py:
+        # Extreme fallback — no interpreter detected.  Try the .bat /
+        # .sh as a last resort so the user at least sees the missing-
+        # Python diagnostic from the launcher.
+        if sys.platform == "win32":
+            bat = root / "run_scriptree.bat"
+            if bat.is_file():
+                return [str(bat)]
+        else:
+            sh = root / "run_scriptree.sh"
+            if sh.is_file():
+                return ["bash", str(sh)]
+        raise FileNotFoundError(
+            f"sys.executable is empty and no fallback launcher "
+            f"available in {root}"
+        )
+    return [py, str(script)]
 
 
 # ---------------------------------------------------------------------------
 # Public launchers — primary API
 # ---------------------------------------------------------------------------
 
+def _log(msg: str) -> None:
+    """Print a diagnostic line to stderr (visible in the cell shell's
+    console / log file).  Tagged with [v1_launcher] so a `tail` filter
+    can isolate launcher activity from the rest of the shell."""
+    print(f"[v1_launcher] {msg}", file=sys.stderr, flush=True)
+
+
 def launch_tool(scriptree_path: str | Path, configuration: str | None = None) -> None:
     """Spawn V1 with a single ``.scriptree`` file in standalone mode.
 
     Used when a user clicks a tool inside a cell's menu.  V1's existing
-    CLI accepts ``run_scriptree.bat path/to/tool.scriptree
+    CLI accepts ``python run_scriptree.py path/to/tool.scriptree
     [-configuration <name>]`` and opens the standalone runner.
     Fire-and-forget — we do not wait for V1 to exit.
     """
-    cmd = _v1_launcher_cmd() + [str(scriptree_path)]
+    p = Path(scriptree_path)
+    cmd = _v1_launcher_cmd() + [str(p)]
     if configuration:
         cmd.extend(["-configuration", configuration])
+    _log(
+        f"launch_tool: leaf={p.name!r}  exists={p.is_file()}  "
+        f"configuration={configuration!r}"
+    )
+    if not p.is_file():
+        _log(
+            f"  WARNING: leaf path does not exist on disk; V1 will "
+            f"likely show its missing-executable recovery dialog."
+        )
     _spawn(cmd)
 
 
@@ -108,7 +145,11 @@ def launch_editor_with_tree(scriptreetree_path: str | Path) -> None:
     CLI accepts the path positionally; the launcher routes to the main
     window with the tree loaded into the launcher dock.
     """
-    cmd = _v1_launcher_cmd() + [str(scriptreetree_path)]
+    p = Path(scriptreetree_path)
+    cmd = _v1_launcher_cmd() + [str(p)]
+    _log(
+        f"launch_editor_with_tree: tree={p.name!r}  exists={p.is_file()}"
+    )
     _spawn(cmd)
 
 
@@ -119,6 +160,7 @@ def launch_editor_blank() -> None:
     selected yet).  V1 opens its blank-launcher state.
     """
     cmd = _v1_launcher_cmd()
+    _log("launch_editor_blank")
     _spawn(cmd)
 
 
@@ -213,26 +255,35 @@ def show_composite_for(hex_win) -> None:  # noqa: ANN001
 # ---------------------------------------------------------------------------
 
 def _spawn(cmd: list[str]) -> None:
-    """Fire-and-forget Popen.  No shell, no wait, fully detached.
+    """Fire-and-forget Popen.  No shell, no wait, hidden console.
 
-    On Windows we use CREATE_NEW_PROCESS_GROUP so a Ctrl-C in the cell
-    shell's parent console doesn't propagate to the spawned editor.
-    On other platforms we use start_new_session for the equivalent
-    effect.
+    On Windows we use ``CREATE_NO_WINDOW`` (0x08000000) instead of the
+    older ``DETACHED_PROCESS``.  Why:
+
+    * ``DETACHED_PROCESS`` strips the console entirely — that breaks
+      ``.bat`` shims because cmd.exe needs a console to run.  (We've
+      already moved away from .bat to ``sys.executable + .py`` in
+      ``_v1_launcher_cmd``, so this is belt-and-braces, but
+      ``CREATE_NO_WINDOW`` is the right flag for "GUI launching a
+      GUI" anyway.)
+    * ``CREATE_NEW_PROCESS_GROUP`` keeps the spawned editor immune to
+      Ctrl-C in the cell shell's parent console.
+
+    On other platforms we use ``start_new_session`` for the same
+    decoupling.
     """
     kwargs: dict = {"shell": False}
     if sys.platform == "win32":
-        # DETACHED_PROCESS = 0x00000008 — child has no console at all.
+        # CREATE_NO_WINDOW = 0x08000000 — no console window flashes.
         # CREATE_NEW_PROCESS_GROUP = 0x00000200 — independent CTRL group.
-        kwargs["creationflags"] = 0x00000008 | 0x00000200
-        # Inherit stdin/out/err = None so the child opens its own.
+        kwargs["creationflags"] = 0x08000000 | 0x00000200
     else:
         kwargs["start_new_session"] = True
+
+    _log(f"  Popen: {cmd!r}")
     try:
-        subprocess.Popen(cmd, **kwargs)
+        proc = subprocess.Popen(cmd, **kwargs)
+        _log(f"  spawned pid={proc.pid}")
     except Exception as exc:  # noqa: BLE001
-        print(
-            f"[v1_launcher] Popen failed for {cmd!r}: {exc!r}",
-            file=sys.stderr,
-        )
+        _log(f"  Popen FAILED: {exc!r}")
         raise

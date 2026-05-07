@@ -2461,12 +2461,18 @@ class HexagonWindow(QMainWindow):
             f"catalog={self._catalog_path!r}"
         )
 
-        # Wire it to the SnapEngine if one is running.
+        # Wire it to the SnapEngine if one is running.  V3 renamed the
+        # entry-point module from main.py to ring_main.py, so import
+        # from scriptree.shell.ring_main (V2 used scriptree.shell.main).
         try:
-            from scriptree.shell.main import _wire_hex_to_snap
+            from scriptree.shell.ring_main import _wire_hex_to_snap
             _wire_hex_to_snap(new_hex)
-        except Exception:
-            pass
+            _log(f"Wired new hex {new_hex._id[:8]} to SnapEngine")
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"Could not wire new hex {new_hex._id[:8]} to SnapEngine: "
+                f"{exc!r} — drag-snap will not engage for this cell"
+            )
 
     def _close_this(self) -> None:
         """Close this hexagon. If it's the last one, quit the app.

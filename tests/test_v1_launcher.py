@@ -25,15 +25,17 @@ def test_project_root_finds_install_root() -> None:
            (root / "run_scriptree.sh").is_file()
 
 
-def test_v1_launcher_cmd_returns_bat_on_windows(tmp_path) -> None:
-    """On Windows, ``_v1_launcher_cmd`` should return a single-element
-    list pointing at run_scriptree.bat in the install root."""
-    if sys.platform != "win32":
-        return  # skip on non-Windows test runners
+def test_v1_launcher_cmd_uses_python_directly() -> None:
+    """``_v1_launcher_cmd`` should bypass the .bat / .sh shim and call
+    ``run_scriptree.py`` via ``sys.executable`` — that's what guarantees
+    the editor uses the same Python (and the same vendored ``lib/pypi``)
+    as the cell shell, and avoids the DETACHED_PROCESS-vs-batch bug
+    where the cmd.exe console flashes and exits without spawning V1."""
     cmd = v1_launcher._v1_launcher_cmd()
-    assert len(cmd) == 1
-    assert cmd[0].endswith("run_scriptree.bat")
-    assert Path(cmd[0]).is_file()
+    assert len(cmd) == 2
+    assert cmd[0] == sys.executable
+    assert cmd[1].endswith("run_scriptree.py")
+    assert Path(cmd[1]).is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -41,14 +43,17 @@ def test_v1_launcher_cmd_returns_bat_on_windows(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_launch_tool_passes_path_to_subprocess() -> None:
-    """``launch_tool(path)`` should Popen(["run_scriptree.bat", path])
-    fire-and-forget."""
+    """``launch_tool(path)`` should Popen([sys.executable,
+    run_scriptree.py, path]) fire-and-forget.  Path may be normalised
+    to native separators (``Path(...)``) en route to argv, so we
+    compare on the resolved path."""
     with patch.object(v1_launcher, "subprocess") as mock_sub:
         v1_launcher.launch_tool("C:/tmp/foo.scriptree")
     mock_sub.Popen.assert_called_once()
     args, kwargs = mock_sub.Popen.call_args
     cmd = args[0]
-    assert cmd[-1] == "C:/tmp/foo.scriptree"
+    # Normalise both sides for cross-platform separator differences.
+    assert Path(cmd[-1]) == Path("C:/tmp/foo.scriptree")
     assert kwargs.get("shell") is False
 
 
@@ -67,7 +72,8 @@ def test_launch_editor_with_tree_builds_argv() -> None:
     with patch.object(v1_launcher, "subprocess") as mock_sub:
         v1_launcher.launch_editor_with_tree("/tmp/x.scriptreetree")
     cmd = mock_sub.Popen.call_args[0][0]
-    assert cmd[-1] == "/tmp/x.scriptreetree"
+    # Path may be normalised to native separators.
+    assert Path(cmd[-1]) == Path("/tmp/x.scriptreetree")
 
 
 def test_launch_editor_blank_no_args_after_launcher() -> None:
@@ -79,18 +85,29 @@ def test_launch_editor_blank_no_args_after_launcher() -> None:
     assert cmd == expected
 
 
-def test_spawn_uses_detached_creationflags_on_windows() -> None:
-    """Popen kwargs should detach the child so a Ctrl-C in the cell
-    shell doesn't propagate."""
+def test_spawn_uses_no_window_creationflags_on_windows() -> None:
+    """Popen kwargs should hide the console (CREATE_NO_WINDOW =
+    0x08000000) and create a new process group so a Ctrl-C in the
+    cell shell doesn't propagate.  Crucially we do NOT use
+    DETACHED_PROCESS — that breaks .bat shims and was the cause of
+    the v0.2.0 'console flashes and editor never appears' bug."""
     if sys.platform != "win32":
         return
     with patch.object(v1_launcher, "subprocess") as mock_sub:
         v1_launcher.launch_editor_blank()
     kwargs = mock_sub.Popen.call_args[1]
     flags = kwargs.get("creationflags", 0)
-    # DETACHED_PROCESS = 0x8, CREATE_NEW_PROCESS_GROUP = 0x200
-    assert flags & 0x8
-    assert flags & 0x200
+    # CREATE_NO_WINDOW = 0x08000000, CREATE_NEW_PROCESS_GROUP = 0x200.
+    assert flags & 0x08000000, (
+        f"missing CREATE_NO_WINDOW: flags=0x{flags:08X}"
+    )
+    assert flags & 0x200, (
+        f"missing CREATE_NEW_PROCESS_GROUP: flags=0x{flags:08X}"
+    )
+    # And NOT DETACHED_PROCESS.
+    assert not (flags & 0x8), (
+        f"DETACHED_PROCESS set; that breaks .bat shims: flags=0x{flags:08X}"
+    )
 
 
 # ---------------------------------------------------------------------------

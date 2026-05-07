@@ -295,6 +295,67 @@ def _on_hexagon_moved(hex_id: str) -> None:
         _check_undock(hex_win)
 
 
+def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noqa: ANN001
+    """Dispatch a single-instance hand-off message inside the primary.
+
+    Schema (see ``scriptree.shell.single_instance``):
+
+      * ``{"command": "spawn_cell"}`` — spawn a fresh standalone hex.
+      * ``{"command": "load_catalog", "path": "..."}`` — spawn a hex
+        bound to the given ``.scriptreetree`` / ``.scriptree`` catalog.
+      * ``{"command": "load_ring", "path": "..."}`` — call
+        ``load_ring`` from ``ring_io`` to materialise the saved layout.
+    """
+    from pathlib import Path
+
+    cmd = msg.get("command")
+    _log(f"_handle_primary_message: {msg!r}")
+
+    if cmd == "spawn_cell":
+        # Position the new cell off-screen-center, slightly offset
+        # so it doesn't land on top of an existing one.
+        n_existing = len(registry.hexagons())
+        offset = 32 * n_existing
+        hexagon = HexagonWindow(branding)
+        hexagon.move(100 + offset, 100 + offset)
+        _wire_hex_to_snap(hexagon)
+        hexagon.show()
+        _log(f"  spawn_cell → new hex {hexagon._id[:8]}")
+        return
+
+    if cmd == "load_catalog":
+        path = msg.get("path")
+        if not path:
+            _log("  load_catalog: missing 'path'")
+            return
+        n_existing = len(registry.hexagons())
+        offset = 32 * n_existing
+        hexagon = HexagonWindow(branding, catalog_path=str(path))
+        hexagon.move(100 + offset, 100 + offset)
+        _wire_hex_to_snap(hexagon)
+        hexagon.show()
+        _log(f"  load_catalog → new hex {hexagon._id[:8]} bound to {path}")
+        return
+
+    if cmd == "load_ring":
+        path = msg.get("path")
+        if not path:
+            _log("  load_ring: missing 'path'")
+            return
+        try:
+            from scriptree.shell.ring_io import load_ring
+            master = load_ring(
+                Path(path), branding, registry, _SNAP_ENGINE
+            )
+            master._saved_ring_path = Path(path)
+            _log(f"  load_ring → master {master._id[:8]} from {path}")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"  load_ring failed for {path}: {exc!r}")
+        return
+
+    _log(f"  unknown command: {cmd!r}")
+
+
 def main() -> int:
     """Create the QApplication, wire subsystems, show one HexagonWindow, run event loop."""
     global _SNAP_ENGINE
@@ -306,6 +367,38 @@ def main() -> int:
     branding = load_branding()
 
     app = QApplication.instance() or QApplication(sys.argv)
+
+    # ---- Single-instance handoff ---------------------------------------
+    #
+    # Default behaviour: if another ScripTreeRing process is already
+    # running for this user, hand our argv off to it (one cell-spawn
+    # request per positional argument, or a single "spawn_cell" if
+    # no positional args).  That existing process spawns the new
+    # cell(s) in its own HexagonRegistry, so they can dock with the
+    # already-visible cells.
+    #
+    # Opt out with the ``--new-process`` flag — useful for diagnostics
+    # or when you intentionally want isolated processes (e.g. testing
+    # autoload without disturbing your live cells).
+    if "--new-process" not in sys.argv:
+        try:
+            from scriptree.shell.single_instance import (
+                try_handoff,
+                messages_from_argv,
+            )
+            messages = messages_from_argv(sys.argv)
+            if try_handoff(messages):
+                _log(
+                    f"handed off {len(messages)} message(s) to running "
+                    f"primary; this process will exit"
+                )
+                return 0
+            _log("no primary running; this process will become primary")
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"single-instance handoff errored: {exc!r}; "
+                f"falling through to start a primary anyway"
+            )
 
     # CRITICAL: never quit just because some QDialog was the last
     # visible non-tool window.  Hexagons are Qt.Tool (excluded from
@@ -355,6 +448,31 @@ def main() -> int:
     registry.masterDespawned.connect(
         lambda mid: _log(f"masterDespawned: {mid}")
     )
+
+    # ---- Single-instance primary server ---------------------------------
+    # Listen for handoff messages from secondary launches.  Each message
+    # spawns a new sibling cell / loads a ring / loads a catalog into a
+    # new cell, all in this process so they can dock with the live ones.
+    _primary_server = None
+    if "--new-process" not in sys.argv:
+        try:
+            from scriptree.shell.single_instance import PrimaryServer
+            _primary_server = PrimaryServer(app)
+            if _primary_server.listen():
+                _primary_server.messageReceived.connect(
+                    lambda msg: _handle_primary_message(
+                        msg, branding, registry
+                    )
+                )
+            else:
+                _log(
+                    "primary server listen() failed; subsequent "
+                    "run_scriptreering invocations will be isolated"
+                )
+                _primary_server = None
+        except Exception as exc:  # noqa: BLE001
+            _log(f"primary server setup errored: {exc!r}")
+            _primary_server = None
 
     # ---- Ring auto-load / explicit load (CLI flags) ---------------------
     # These run after registry + snap engine are wired so load_ring() can
