@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+"""ScripTree launcher.
+
+This is the top-level entry point. It adds the ScripTree package
+directory to ``sys.path`` so ``scriptree`` is importable, then
+delegates to ``scriptree.main.main()``.
+
+**Vendored dependencies:** If ``lib/pypi/`` contains packages (run
+``python lib/update_lib.py`` once to populate it), they are preferred
+over any system-installed versions. This makes the whole folder
+self-contained and portable. Set ``SCRIPTREE_USE_SYSTEM_DEPS=1`` to
+disable this and fall back to the system Python environment.
+
+Environment variables:
+
+    SCRIPTREE_PYTHON
+        Path to an alternate Python executable (e.g. a PortableApps
+        Python). When set, ScripTree offers to install dependencies
+        into that Python environment as well as the current one.
+
+    SCRIPTREE_USE_SYSTEM_DEPS
+        When set to ``1``, skip the vendored ``lib/pypi/`` directory
+        and use whatever the system Python provides.
+
+Usage::
+
+    python run_scriptree.py
+    python run_scriptree.py path/to/tool.scriptree
+    python run_scriptree.py path/to/tree.scriptreetree -configuration standalone
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# ── Pre-flight checks ──────────────────────────────────────────────────
+
+def _check_python_version():
+    """Ensure Python >= 3.11."""
+    if sys.version_info < (3, 11):
+        msg = (
+            f"ScripTree requires Python 3.11 or later.\n"
+            f"You are running Python {sys.version_info.major}"
+            f".{sys.version_info.minor}.{sys.version_info.micro}.\n"
+            f"\n"
+            f"Download the latest Python from https://www.python.org/downloads/"
+        )
+        print(msg, file=sys.stderr)
+        _msgbox(msg, "ScripTree \u2014 Python Version")
+        sys.exit(1)
+
+
+def _msgbox(text: str, title: str, *, style: int = 0x10) -> None:
+    """Show a native Windows MessageBox (no-op on other platforms)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, title, style)
+    except Exception:
+        pass
+
+
+def _yesno_box(text: str, title: str) -> bool:
+    """Show a Yes/No MessageBox on Windows. Returns True for Yes.
+    On non-Windows, falls back to terminal input."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_YESNO = 0x04
+            MB_ICONQUESTION = 0x20
+            IDYES = 6
+            result = ctypes.windll.user32.MessageBoxW(
+                0, text, title, MB_YESNO | MB_ICONQUESTION
+            )
+            return result == IDYES
+        except Exception:
+            pass
+    # Terminal fallback.
+    try:
+        answer = input(f"{text}\n\nInstall now? [y/N] ").strip().lower()
+        return answer in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+def _pick_python_target(missing_names: str) -> str | None:
+    """If SCRIPTREE_PYTHON is set, ask the user which Python to install
+    into. Returns the chosen Python executable path, or None to cancel.
+
+    When SCRIPTREE_PYTHON is not set, returns sys.executable (the
+    current Python) without prompting.
+    """
+    alt_python = os.environ.get("SCRIPTREE_PYTHON", "").strip()
+    current = sys.executable
+
+    if not alt_python or not Path(alt_python).exists():
+        # No alternate — just use current Python.
+        return current
+
+    if alt_python == current:
+        return current
+
+    # Two Pythons available — ask which one.
+    current_label = f"Current Python ({current})"
+    alt_label = f"SCRIPTREE_PYTHON ({alt_python})"
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_YESNOCANCEL = 0x03
+            MB_ICONQUESTION = 0x20
+            IDYES = 6
+            IDNO = 7
+            # Yes = current, No = alternate, Cancel = abort
+            result = ctypes.windll.user32.MessageBoxW(
+                0,
+                f"ScripTree needs to install: {missing_names}\n\n"
+                f"Two Python installations were found:\n\n"
+                f"  Yes  \u2192  {current_label}\n"
+                f"  No   \u2192  {alt_label}\n"
+                f"  Cancel \u2192  Don't install\n\n"
+                f"Which Python should the packages be installed into?",
+                "ScripTree \u2014 Choose Python",
+                MB_YESNOCANCEL | MB_ICONQUESTION,
+            )
+            if result == IDYES:
+                return current
+            elif result == IDNO:
+                return alt_python
+            else:
+                return None
+        except Exception:
+            pass
+
+    # Terminal fallback.
+    print(f"\nScripTree needs to install: {missing_names}")
+    print(f"\nTwo Python installations found:")
+    print(f"  [1] {current_label}")
+    print(f"  [2] {alt_label}")
+    print(f"  [0] Cancel")
+    try:
+        choice = input("\nInstall into which Python? [1/2/0] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if choice == "1":
+        return current
+    elif choice == "2":
+        return alt_python
+    return None
+
+
+def _install_packages(python_exe: str, packages: list[str]) -> bool:
+    """Run pip install for the given packages. Returns True on success."""
+    cmd = [python_exe, "-m", "pip", "install"] + packages
+    print(f"\nInstalling: {' '.join(packages)}")
+    print(f"Running: {' '.join(cmd)}\n")
+    try:
+        result = subprocess.run(cmd, timeout=300)
+        return result.returncode == 0
+    except FileNotFoundError:
+        print(f"Error: Could not find Python at {python_exe}", file=sys.stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        print("Error: Installation timed out after 5 minutes.", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"Error during installation: {e}", file=sys.stderr)
+        return False
+
+
+def _inject_vendored_libs():
+    """Prepend ``lib/pypi/`` to ``sys.path`` so vendored deps win, and
+    isolate the process from user site-packages that could pull in
+    incompatible binaries (e.g. a globally-installed PySide6 whose DLLs
+    mix with our vendored ones, or numpy 1.x/2.x mismatches from
+    unrelated global packages).
+
+    When ``SCRIPTREE_USE_SYSTEM_DEPS=1`` is set, this is a no-op and
+    the system Python environment provides everything.
+    """
+    if os.environ.get("SCRIPTREE_USE_SYSTEM_DEPS", "").strip() == "1":
+        return
+    here = Path(__file__).resolve().parent
+    pypi = here / "lib" / "pypi"
+    if not pypi.is_dir():
+        return
+    # Only inject if there's something in there besides .gitkeep,
+    # so an empty lib/pypi/ doesn't mask the dep-missing check.
+    entries = [p for p in pypi.iterdir() if p.name != ".gitkeep"]
+    if not entries:
+        return
+
+    pypi_str = str(pypi)
+
+    # 1. Strip user site-packages from sys.path. Leaving them in means
+    #    `import somepackage` can pick up a globally-installed copy that
+    #    was compiled against a different numpy/Qt/etc, causing the
+    #    classic "module compiled using NumPy 1.x cannot be run in
+    #    NumPy 2.x" crash at import time.
+    try:
+        import site
+        bad = set()
+        usersite = getattr(site, "getusersitepackages", lambda: None)()
+        if usersite:
+            bad.add(os.path.normcase(os.path.abspath(usersite)))
+        for p in getattr(site, "getsitepackages", lambda: [])():
+            bad.add(os.path.normcase(os.path.abspath(p)))
+        sys.path[:] = [
+            p for p in sys.path
+            if os.path.normcase(os.path.abspath(p or ".")) not in bad
+        ]
+    except Exception:
+        pass
+
+    # 2. Prepend the vendored folder so our copies win.
+    sys.path.insert(0, pypi_str)
+
+    # 3. Prevent any child Python processes from re-enabling user site.
+    os.environ["PYTHONNOUSERSITE"] = "1"
+
+    # 4. Point Qt at the vendored plugins explicitly so it doesn't try
+    #    to auto-discover a system PySide6's plugins folder and mix DLLs.
+    qt_plugin_dir = pypi / "PySide6" / "plugins"
+    if qt_plugin_dir.is_dir():
+        os.environ["QT_PLUGIN_PATH"] = str(qt_plugin_dir)
+        platforms_dir = qt_plugin_dir / "platforms"
+        if platforms_dir.is_dir():
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platforms_dir)
+
+    # 5. On Windows, add the PySide6 folder as a DLL search path so
+    #    Qt6Core.dll etc. resolve to the vendored copies, not whatever
+    #    is on PATH.
+    if sys.platform == "win32":
+        pyside_dir = pypi / "PySide6"
+        if pyside_dir.is_dir() and hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(str(pyside_dir))
+            except (OSError, FileNotFoundError):
+                pass
+
+
+def _check_dependencies():
+    """Check that required packages are installed. If any are missing,
+    offer to install them automatically."""
+    missing = []
+
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        missing.append("PySide6")
+
+    if not missing:
+        return
+
+    names = ", ".join(missing)
+
+    # Ask the user if they want to auto-install.
+    # Prefer the vendored workflow (lib/update_lib.py) if this project
+    # has the lib/ folder — it keeps the install self-contained.
+    here = Path(__file__).resolve().parent
+    have_vendor_workflow = (here / "lib" / "update_lib.py").is_file()
+    vendor_hint = (
+        "\n\nTip: this project has a vendored-deps workflow. You can\n"
+        "also run:\n\n    python lib/update_lib.py\n\n"
+        "to install into lib/pypi/ instead of your system Python."
+        if have_vendor_workflow else ""
+    )
+
+    want_install = _yesno_box(
+        f"ScripTree is missing required dependencies:\n\n"
+        f"    {names}\n\n"
+        f"Would you like ScripTree to download and install them now?\n\n"
+        f"(Requires an internet connection. This may take a minute.)"
+        + vendor_hint,
+        "ScripTree \u2014 Missing Dependencies",
+    )
+
+    if not want_install:
+        msg = (
+            f"ScripTree cannot run without: {names}\n"
+            f"To install manually, run:  pip install {' '.join(missing)}"
+        )
+        if have_vendor_workflow:
+            msg += (
+                "\nOr use the vendored workflow:  "
+                "python lib/update_lib.py"
+            )
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+    # Pick which Python to install into.
+    target = _pick_python_target(names)
+    if target is None:
+        print("Installation cancelled.", file=sys.stderr)
+        sys.exit(1)
+
+    success = _install_packages(target, missing)
+    if not success:
+        _msgbox(
+            f"Failed to install {names}.\n\n"
+            f"Try installing manually:\n\n"
+            f"    {target} -m pip install {' '.join(missing)}",
+            "ScripTree \u2014 Installation Failed",
+        )
+        sys.exit(1)
+
+    # If we installed into an alternate Python, we need to tell the
+    # user to re-run with that Python.
+    if target != sys.executable:
+        msg = (
+            f"Dependencies installed into:\n    {target}\n\n"
+            f"Please re-run ScripTree using that Python:\n\n"
+            f"    \"{target}\" \"{__file__}\""
+        )
+        print(msg)
+        _msgbox(msg, "ScripTree \u2014 Installed Successfully", style=0x40)
+        sys.exit(0)
+
+    # Installed into current Python — verify the import now works.
+    try:
+        import PySide6  # noqa: F401, F811
+    except ImportError:
+        _msgbox(
+            f"Installation appeared to succeed but PySide6 still "
+            f"cannot be imported.\n\n"
+            f"Try restarting your terminal and running ScripTree again.",
+            "ScripTree \u2014 Import Error",
+        )
+        sys.exit(1)
+
+    print("Dependencies installed successfully. Starting ScripTree...\n")
+
+
+# ── Launch ─────────────────────────────────────────────────────────────
+
+_check_python_version()
+_inject_vendored_libs()
+_check_dependencies()
+
+# The ``scriptree`` package normally lives directly at the repo
+# root, so adding the launcher's own directory to ``sys.path`` is
+# enough for imports to resolve. The discovery walk below is
+# defensive — it survives:
+#   - Source-zip extractions where GitHub wrapped everything in an
+#     extra ``<repo>-<branch>/`` folder.
+#   - Windows zip tools that double-nest the layout (extracting
+#     into a folder of the same name produces ScripTree/ScripTree/...).
+#   - Case-folding by extractors that normalize the inner package's
+#     casing to ``ScripTree`` instead of ``scriptree``.
+def _find_package_dir(start: Path, max_depth: int = 4) -> Path | None:
+    """Locate the directory to add to ``sys.path`` so
+    ``import scriptree.main`` resolves.
+
+    The package is identified by the presence of a ``main.py`` inside
+    a folder named ``scriptree`` (case-insensitive). Returns the
+    PARENT directory of that ``scriptree/`` folder — that's what goes
+    on ``sys.path``.
+
+    Searches ``start`` itself plus up to ``max_depth`` levels of
+    descendants. Returns ``None`` if no candidate is found, leaving
+    the launcher to print a diagnostic instead of failing inside the
+    Python import machinery.
+    """
+    needle = "scriptree"
+
+    def _walk(parent: Path, depth: int):
+        # Skip lib/, .git/, __pycache__/, etc. to avoid scanning vendored
+        # site-packages or version-control internals (would otherwise
+        # match `lib/pypi/scriptree/...` if anyone ever vendored us).
+        if parent.name.lower() in {
+            "lib", ".git", "__pycache__", ".pytest_cache",
+            ".mypy_cache", ".ruff_cache", ".tox", "node_modules",
+            "site-packages", "venv", ".venv", "env",
+        }:
+            return None
+        try:
+            children = list(parent.iterdir())
+        except (PermissionError, OSError):
+            return None
+        # First, check direct children — does parent contain a
+        # `scriptree` folder with main.py?
+        for entry in children:
+            if (
+                entry.is_dir()
+                and entry.name.lower() == needle
+                and (entry / "main.py").is_file()
+            ):
+                return parent
+        # Otherwise descend.
+        if depth <= 0:
+            return None
+        for entry in children:
+            if not entry.is_dir():
+                continue
+            hit = _walk(entry, depth - 1)
+            if hit is not None:
+                return hit
+        return None
+
+    if not start.is_dir():
+        return None
+    return _walk(start, max_depth)
+
+
+def _abort_with_layout_error(start: Path) -> None:
+    """Print a diagnostic explaining what we tried and exit.
+
+    Hit when ``_find_package_dir`` returns ``None`` — usually a
+    misplaced or partial extraction of the portable zip. The
+    message lists the launcher's location and the first few
+    direct children it saw, so a remote user can paste it back
+    and get an actionable answer.
+    """
+    msg_lines = [
+        "ScripTree could not find its `scriptree` package on disk.",
+        "",
+        f"  Launcher location: {start}",
+    ]
+    if start.is_dir():
+        msg_lines.append("  Direct children of that folder:")
+        try:
+            kids = sorted(p.name for p in start.iterdir())[:20]
+            for k in kids:
+                msg_lines.append(f"    {k}")
+            if len(kids) == 20:
+                msg_lines.append("    ... (more truncated)")
+        except OSError as e:
+            msg_lines.append(f"    (could not list directory: {e})")
+    msg_lines.extend([
+        "",
+        "Most common cause: the portable zip was extracted into a folder",
+        "that already had a `ScripTree` subfolder, producing a nested",
+        "layout the launcher can't navigate. The launcher expects a",
+        "layout like:",
+        "",
+        "    <run_scriptree.py>",
+        "    scriptree/",
+        "        main.py",
+        "        ...",
+        "",
+        "If you see ScripTree/ScripTree/scriptree/ instead, move the",
+        "inner ScripTree/* contents up one level so they sit next to",
+        "run_scriptree.py.",
+        "",
+        "If you got the zip from a GitHub source archive (not a release",
+        "asset), it may extract as `<repo>-<branch>/...` — re-run from",
+        "INSIDE that folder, not above it.",
+    ])
+    full = "\n".join(msg_lines)
+    print(full, file=sys.stderr)
+    _msgbox(full, "ScripTree \u2014 layout error")
+    sys.exit(1)
+
+
+_HERE = Path(__file__).resolve().parent
+_PKG_DIR = _find_package_dir(_HERE)
+if _PKG_DIR is None:
+    _abort_with_layout_error(_HERE)
+sys.path.insert(0, str(_PKG_DIR))
+
+
+def _publish_scriptree_env() -> None:
+    """Set SCRIPTREE_HOME and friends on ``os.environ`` so every
+    subprocess launched by ScripTree (and every tool's .scriptree
+    file) can reference the install root by name.
+
+    Tools can use ``%SCRIPTREE_LIB_PYTHON%/python.exe`` etc. as
+    their ``executable`` / ``working_directory`` / ``path_prepend``
+    values, and they Just Work no matter where ScripTree was
+    deployed (``C:\\Prod\\ScripTree``, an OneDrive sync folder, a
+    USB stick, etc.).
+
+    Variables published:
+        SCRIPTREE_HOME       — the launcher's directory
+        SCRIPTREE_LIB        — <HOME>/lib
+        SCRIPTREE_LIB_PYPI   — <LIB>/pypi (only if it exists)
+        SCRIPTREE_LIB_PYTHON — <LIB>/python (only if it exists)
+        SCRIPTREE_APPS       — <HOME>/ScripTreeApps (only if it exists)
+    """
+    os.environ["SCRIPTREE_HOME"] = str(_HERE)
+    lib = _HERE / "lib"
+    if lib.is_dir():
+        os.environ["SCRIPTREE_LIB"] = str(lib)
+        pypi = lib / "pypi"
+        if pypi.is_dir():
+            os.environ["SCRIPTREE_LIB_PYPI"] = str(pypi)
+        py = lib / "python"
+        if py.is_dir():
+            os.environ["SCRIPTREE_LIB_PYTHON"] = str(py)
+    apps = _HERE / "ScripTreeApps"
+    if apps.is_dir():
+        os.environ["SCRIPTREE_APPS"] = str(apps)
+
+    # Tell well-behaved CLIs to skip ANSI color output. ScripTree's
+    # output pane is a plain QPlainTextEdit — it shows escape codes
+    # as literal text (e.g. "@[31m") instead of rendering them as
+    # color, which makes tool output hard to read. Most modern CLIs
+    # (dust, bat, fd, ripgrep, eza, hyperfine, gh, ls --color=auto,
+    # python --color=...) honor at least one of these:
+    #
+    #   NO_COLOR    — https://no-color.org/ (de facto standard)
+    #   TERM=dumb   — POSIX-y opt-out; some tools key off this
+    #   CLICOLOR=0  — BSD ls / fish convention
+    #   FORCE_COLOR=0 — Node.js / chalk convention
+    #
+    # We only set them if not already present, so a user's explicit
+    # FORCE_COLOR=1 (or NO_COLOR= override) still wins.
+    os.environ.setdefault("NO_COLOR", "1")
+    os.environ.setdefault("TERM", "dumb")
+    os.environ.setdefault("CLICOLOR", "0")
+    os.environ.setdefault("FORCE_COLOR", "0")
+
+
+_publish_scriptree_env()
+
+from scriptree.main import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

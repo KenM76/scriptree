@@ -1,0 +1,200 @@
+"""Round-trip tests for scriptree.core.io."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from scriptree.core.io import (
+    load_tool,
+    load_tree,
+    save_tool,
+    save_tree,
+    tool_from_dict,
+    tool_to_dict,
+    tree_from_dict,
+    tree_to_dict,
+)
+from scriptree.core.model import (
+    ParamDef,
+    ParamType,
+    ParseSource,
+    ToolDef,
+    TreeDef,
+    TreeNode,
+    Widget,
+)
+
+
+def _sample_tool() -> ToolDef:
+    return ToolDef(
+        name="sw_bridge list-components",
+        executable="C:/sw_bridge/bin/sw_bridge.exe",
+        description="List all components in a SolidWorks assembly.",
+        argument_template=["list-components", "{title}", "{output}"],
+        params=[
+            ParamDef(
+                id="title",
+                label="Assembly title fragment",
+                type=ParamType.STRING,
+                widget=Widget.TEXT,
+                required=True,
+            ),
+            ParamDef(
+                id="output",
+                label="Output file",
+                type=ParamType.PATH,
+                widget=Widget.FILE_SAVE,
+                required=True,
+                file_filter="Text (*.txt);;All (*)",
+            ),
+        ],
+        source=ParseSource(mode="manual"),
+    )
+
+
+class TestToolRoundTrip:
+    def test_dict_round_trip(self) -> None:
+        original = _sample_tool()
+        restored = tool_from_dict(tool_to_dict(original))
+        assert restored.name == original.name
+        assert restored.executable == original.executable
+        assert len(restored.params) == 2
+        assert restored.params[1].file_filter == "Text (*.txt);;All (*)"
+        assert restored.argument_template == original.argument_template
+        assert restored.source.mode == "manual"
+
+    def test_file_round_trip(self, tmp_path: Path) -> None:
+        original = _sample_tool()
+        path = tmp_path / "sample.scriptree"
+        save_tool(original, path)
+        restored = load_tool(path)
+        assert tool_to_dict(restored) == tool_to_dict(original)
+
+    def test_preserves_help_text_cache(self) -> None:
+        tool = _sample_tool()
+        tool.source = ParseSource(mode="argparse", help_text_cached="usage: foo")
+        restored = tool_from_dict(tool_to_dict(tool))
+        assert restored.source.mode == "argparse"
+        assert restored.source.help_text_cached == "usage: foo"
+
+    def test_no_split_round_trip(self) -> None:
+        """The per-param no_split flag survives serialization."""
+        from scriptree.core.model import ParamDef, ParamType, ToolDef
+
+        tool = ToolDef(
+            name="t",
+            executable="t.exe",
+            params=[
+                ParamDef(id="a", type=ParamType.STRING, no_split=False),
+                ParamDef(id="b", type=ParamType.STRING, no_split=True),
+            ],
+        )
+        d = tool_to_dict(tool)
+        # Default-False is omitted from the on-disk form (matches the
+        # convention used for other boolean flags like required /
+        # no_persist) — only True writes a key.
+        assert "no_split" not in d["params"][0]
+        assert d["params"][1]["no_split"] is True
+        restored = tool_from_dict(d)
+        assert restored.params[0].no_split is False
+        assert restored.params[1].no_split is True
+
+
+class TestTreeRoundTrip:
+    def _sample_tree(self) -> TreeDef:
+        return TreeDef(
+            name="SolidWorks toolkit",
+            nodes=[
+                TreeNode(
+                    type="folder",
+                    name="sw_bridge",
+                    children=[
+                        TreeNode(type="leaf", path="./sw_bridge/list-components.scriptree"),
+                        TreeNode(type="leaf", path="./sw_bridge/compare-hardware.scriptree"),
+                    ],
+                ),
+                TreeNode(type="leaf", path="./SwApiTrainingGen.scriptree"),
+            ],
+        )
+
+    def test_dict_round_trip(self) -> None:
+        original = self._sample_tree()
+        restored = tree_from_dict(tree_to_dict(original))
+        assert restored.name == original.name
+        assert len(restored.nodes) == 2
+        assert restored.nodes[0].type == "folder"
+        assert len(restored.nodes[0].children) == 2
+        assert restored.nodes[1].type == "leaf"
+
+    def test_file_round_trip(self, tmp_path: Path) -> None:
+        original = self._sample_tree()
+        path = tmp_path / "toolkit.scriptreetree"
+        save_tree(original, path)
+        restored = load_tree(path)
+        assert tree_to_dict(restored) == tree_to_dict(original)
+
+    def test_leaf_configuration_round_trips(self) -> None:
+        tree = TreeDef(
+            name="test",
+            nodes=[
+                TreeNode(
+                    type="leaf",
+                    path="./tool.scriptree",
+                    configuration="standalone",
+                ),
+                TreeNode(type="leaf", path="./other.scriptree"),
+            ],
+        )
+        d = tree_to_dict(tree)
+        # Only the first leaf should have a configuration key.
+        assert d["nodes"][0]["configuration"] == "standalone"
+        assert "configuration" not in d["nodes"][1]
+        # Round-trip.
+        restored = tree_from_dict(d)
+        assert restored.nodes[0].configuration == "standalone"
+        assert restored.nodes[1].configuration is None
+
+    def test_folder_layout_default_omitted(self) -> None:
+        """folder_layout=='flat' (the default) is omitted from the
+        on-disk form so existing trees stay byte-identical on save."""
+        tree = self._sample_tree()
+        # Default value:
+        assert tree.folder_layout == "flat"
+        d = tree_to_dict(tree)
+        assert "folder_layout" not in d
+
+    def test_folder_layout_tabs_round_trips(self) -> None:
+        """folder_layout=='tabs' survives serialize/deserialize."""
+        tree = self._sample_tree()
+        tree.folder_layout = "tabs"
+        d = tree_to_dict(tree)
+        assert d["folder_layout"] == "tabs"
+        restored = tree_from_dict(d)
+        assert restored.folder_layout == "tabs"
+
+    def test_tree_path_prepend_round_trips(self) -> None:
+        """TreeDef.path_prepend serializes when non-empty, omits when
+        empty, and round-trips."""
+        tree = self._sample_tree()
+        # Default value is empty:
+        assert tree.path_prepend == []
+        d = tree_to_dict(tree)
+        assert "path_prepend" not in d  # omitted when empty
+
+        tree.path_prepend = ["C:/Tools/gh", "./local_bin"]
+        d = tree_to_dict(tree)
+        assert d["path_prepend"] == ["C:/Tools/gh", "./local_bin"]
+        restored = tree_from_dict(d)
+        assert restored.path_prepend == ["C:/Tools/gh", "./local_bin"]
+
+    def test_unknown_folder_layout_falls_back_to_flat(self) -> None:
+        """Loader is permissive — unknown values pass through, the
+        runtime branch falls back to 'flat' rendering. Keeps old
+        clients happy when newer ones write a not-yet-standardized
+        value."""
+        tree = tree_from_dict({
+            "schema_version": 2,
+            "name": "t",
+            "nodes": [],
+            "folder_layout": "horizontal_carousel",
+        })
+        assert tree.folder_layout == "horizontal_carousel"

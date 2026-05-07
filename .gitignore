@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.vscode/
+.idea/
+*.zip
+*.bak
+*.bak-*
+*.log
+*.tmp
+
+# Vendored / portable Python — repopulated by lib/install_python.ps1
+lib/python/
+lib/pypi/
+
+# Per-user state
+*.configs.json
+*.treeconfigs.json
+user_configs/
+scriptree.ini.bak
+
+# OneDrive cruft
+desktop.ini
+.claude/

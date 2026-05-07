@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "Audit vendored dependencies (per-app report)",
+  "description": "Walks ScripTreeApps/ and produces VENDORED_DEPS.md — a Markdown report listing every per-tool lib/ folder, its pinned packages, what's actually installed, and where drift exists. Exit code is 1 if any drift is detected (pinned != installed or missing). Good for periodic audits.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "ScripTreeApps/audit_vendored.py",
+    "{print_report?--stdout}"
+  ],
+  "params": [
+    {
+      "id": "print_report",
+      "label": "Also print report to output",
+      "description": "Equivalent to --stdout. In addition to writing ScripTreeApps/VENDORED_DEPS.md, echo the full report to ScripTree's output pane so you can read it without opening the file.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": true
+    }
+  ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  }
+}

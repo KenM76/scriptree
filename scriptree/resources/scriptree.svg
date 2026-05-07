@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#163642"/>
+      <stop offset="1" stop-color="#09161E"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.28" r="0.36">
+      <stop offset="0" stop-color="#FFD282" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFD282" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="0" y="0" width="1024" height="1024" rx="225.28" ry="225.28"/>
+    </clipPath>
+    <filter id="winShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="6"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <!-- Background -->
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#halo)"/>
+
+    <!-- Trunk -->
+    <polygon points="486.40,675.84 537.60,675.84 578.56,952.32 445.44,952.32" fill="#8A5C2E"/>
+    <polygon points="491.52,675.84 506.88,675.84 481.28,952.32 460.80,952.32" fill="#BE864A"/>
+    <path d="M435.20,952.32 L435.20,896.00 A56.32,56.32 0 0 0 378.88,952.32 Z" fill="#8A5C2E"/>
+<path d="M588.80,952.32 L645.12,952.32 A56.32,56.32 0 0 0 588.80,896.00 Z" fill="#8A5C2E"/>
+
+    <!-- ">_" prompt on trunk -->
+    <polyline points="471.04,786.43 503.81,819.20 471.04,851.97"
+              fill="none" stroke="#FFD666" stroke-width="17.41"
+              stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="514.05" y="843.26" width="56.32" height="17.41"
+          rx="8.70" ry="8.70" fill="#FFD666"/>
+
+    <!-- Branch skeleton (mint) -->
+    <g stroke="#56D6A8" stroke-width="28.67" stroke-linecap="butt">
+      <line x1="225.28" y1="675.84" x2="798.72" y2="675.84"/>
+      <line x1="225.28" y1="675.84" x2="225.28" y2="389.12"/>
+      <line x1="798.72" y1="675.84" x2="798.72" y2="389.12"/>
+      <line x1="512.00" y1="675.84" x2="512.00" y2="389.12"/>
+      <line x1="368.64" y1="389.12" x2="655.36" y2="389.12"/>
+      <line x1="368.64" y1="389.12" x2="368.64" y2="184.32"/>
+      <line x1="655.36" y1="389.12" x2="655.36" y2="184.32"/>
+    </g>
+
+    <!-- Junction dots -->
+    <g fill="#B0F6D6">
+      <circle cx="225.28" cy="675.84" r="20.48"/>
+      <circle cx="512.00" cy="675.84" r="20.48"/>
+      <circle cx="798.72" cy="675.84" r="20.48"/>
+      <circle cx="368.64" cy="389.12" r="20.48"/>
+      <circle cx="512.00" cy="389.12" r="20.48"/>
+      <circle cx="655.36" cy="389.12" r="20.48"/>
+    </g>
+
+    <!-- Window-leaves -->
+    <g transform="translate(225.28,307.20) rotate(-8)" filter="url(#winShadow)"><rect x="-122.88" y="-102.40" width="245.76" height="204.80" rx="36.86" ry="36.86" fill="#F4F8FC"/><rect x="-122.88" y="-102.40" width="245.76" height="53.25" rx="36.86" ry="36.86" fill="#D2DCE8"/><rect x="-122.88" y="-86.02" width="245.76" height="36.86" fill="#D2DCE8"/><circle cx="-93.59" cy="-75.78" r="14.91" fill="#E85C56"/><circle cx="-48.87" cy="-75.78" r="14.91" fill="#F6C04E"/><circle cx="-4.14" cy="-75.78" r="14.91" fill="#56CC8A"/><rect x="-98.30" y="-28.67" width="141.56" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/><rect x="-98.30" y="8.19" width="97.32" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/><rect x="-98.30" y="45.06" width="159.25" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/></g>
+    <g transform="translate(798.72,307.20) rotate(8)" filter="url(#winShadow)"><rect x="-122.88" y="-102.40" width="245.76" height="204.80" rx="36.86" ry="36.86" fill="#F4F8FC"/><rect x="-122.88" y="-102.40" width="245.76" height="53.25" rx="36.86" ry="36.86" fill="#D2DCE8"/><rect x="-122.88" y="-86.02" width="245.76" height="36.86" fill="#D2DCE8"/><circle cx="-93.59" cy="-75.78" r="14.91" fill="#E85C56"/><circle cx="-48.87" cy="-75.78" r="14.91" fill="#F6C04E"/><circle cx="-4.14" cy="-75.78" r="14.91" fill="#56CC8A"/><rect x="-98.30" y="-28.67" width="141.56" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/><rect x="-98.30" y="8.19" width="97.32" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/><rect x="-98.30" y="45.06" width="159.25" height="16.38" rx="8.19" ry="8.19" fill="#788CA2"/></g>
+    <g transform="translate(368.64,112.64) rotate(-5)" filter="url(#winShadow)"><rect x="-97.28" y="-87.04" width="194.56" height="174.08" rx="31.33" ry="31.33" fill="#F4F8FC"/><rect x="-97.28" y="-87.04" width="194.56" height="45.26" rx="31.33" ry="31.33" fill="#D2DCE8"/><rect x="-97.28" y="-73.11" width="194.56" height="31.33" fill="#D2DCE8"/><circle cx="-72.39" cy="-64.41" r="12.67" fill="#E85C56"/><circle cx="-34.37" cy="-64.41" r="12.67" fill="#F6C04E"/><circle cx="3.65" cy="-64.41" r="12.67" fill="#56CC8A"/><rect x="-77.82" y="-24.37" width="112.07" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/><rect x="-77.82" y="6.96" width="77.05" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/><rect x="-77.82" y="38.30" width="126.07" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/></g>
+    <g transform="translate(655.36,112.64) rotate(5)" filter="url(#winShadow)"><rect x="-97.28" y="-87.04" width="194.56" height="174.08" rx="31.33" ry="31.33" fill="#F4F8FC"/><rect x="-97.28" y="-87.04" width="194.56" height="45.26" rx="31.33" ry="31.33" fill="#D2DCE8"/><rect x="-97.28" y="-73.11" width="194.56" height="31.33" fill="#D2DCE8"/><circle cx="-72.39" cy="-64.41" r="12.67" fill="#E85C56"/><circle cx="-34.37" cy="-64.41" r="12.67" fill="#F6C04E"/><circle cx="3.65" cy="-64.41" r="12.67" fill="#56CC8A"/><rect x="-77.82" y="-24.37" width="112.07" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/><rect x="-77.82" y="6.96" width="77.05" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/><rect x="-77.82" y="38.30" width="126.07" height="13.93" rx="6.96" ry="6.96" fill="#788CA2"/></g>
+  </g>
+</svg>

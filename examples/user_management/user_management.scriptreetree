@@ -1,0 +1,84 @@
+{
+  "schema_version": 2,
+  "name": "Windows User Management",
+  "nodes": [
+    {
+      "type": "folder",
+      "name": "Users",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./new_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./set_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./rename_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./enable_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./disable_localuser.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localuser.scriptree"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Groups",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localgroup.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./new_localgroup.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./set_localgroup.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./rename_localgroup.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localgroup.scriptree"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Group Membership",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./get_localgroupmember.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./add_localgroupmember.scriptree"
+        },
+        {
+          "type": "leaf",
+          "path": "./remove_localgroupmember.scriptree"
+        }
+      ]
+    }
+  ]
+}
