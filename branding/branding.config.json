@@ -1,0 +1,44 @@
+{
+  "$comment": "Brand-rename surface for ScripTree v2. A rename = edit this file + swap assets in ./assets/. Code stays untouched. Per CLAUDE.md hard rule 6.",
+
+  "appName": "ScripTree",
+  "appNameLong": "ScripTree v2",
+  "tagline": "A hexagon for every tool.",
+  "legalEntity": "ScripTree (private dev build)",
+  "supportEmail": "support@example.invalid",
+  "websiteUrl": "https://example.invalid",
+
+  "palette": {
+    "$comment": "RGBA hex (without leading #); CSS-variable injection at runtime so a palette swap is hot, not a recompile.",
+    "hexFill": "1f2937e6",
+    "hexStroke": "9ca3afff",
+    "hexHighlight": "60a5faff",
+    "menuBg": "0f172af0",
+    "menuFg": "e5e7ebff",
+    "accent": "f59e0bff",
+    "unassociatedStroke": "10b981ff"
+  },
+
+  "hexagon": {
+    "$comment_size": "Slightly larger than a Win11 desktop icon (48 px). 56 px chosen so the hex outline has enough room for crisp antialiasing at standard 100% DPI.",
+    "defaultSizePx": 56,
+    "defaultTransparency": 0.85,
+    "defaultAlwaysOnTop": true,
+    "snapDistancePx": 18,
+
+    "$comment_shape": "Geometry is parameterised so the shape can change without rewriting the widget. Today: hexagon. Later candidates: square, octagon, rounded-square. The 'shape' name is the dispatch key in apps/shell/hexagon_window.py::compute_polygon().",
+    "shape": "hexagon",
+
+    "$comment_orientation": "Per-shape orientation flag. For 'hexagon' the choices are 'flat-top' (horizontal top/bottom edges; vertical sides — current default) and 'pointy-top' (rotated 90°; vertical top/bottom vertices; horizontal flats on left/right). Flat-top docks naturally on the vertical axis; pointy-top docks naturally on the horizontal axis. For 'square' the value is ignored.",
+    "orientation": "flat-top"
+  },
+
+  "assets": {
+    "$comment": "Paths are repo-relative. Resolve via ${CLAUDE_PROJECT_DIR} or runtime equivalent.",
+    "iconHexagon": "branding/assets/hexagon.svg",
+    "iconHexagonMaster": "branding/assets/hexagon-master.svg",
+    "iconAppWindows": "branding/assets/app.ico",
+    "iconAppMacOs": "branding/assets/app.icns",
+    "iconAppLinux": "branding/assets/app.png"
+  }
+}

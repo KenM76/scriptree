@@ -267,6 +267,47 @@ class MainWindow(QMainWindow):
         self._act_save_tree.setEnabled(False)
         m_file.addAction(self._act_save_tree)
 
+        # ── Cell Layout (.scriptreering) ─────────────────────────────
+        # The cell shell (run_scriptreering.bat) saves multi-cell
+        # layouts; the editor only knows about the single tree it has
+        # loaded, so its "Save Cell Layout" entries write a single-hex
+        # ring referencing the active .scriptreetree (or .scriptree).
+        # "Open Cell Layout" shells out to ScripTreeRing — V1 itself
+        # never renders cells.
+        m_file.addSeparator()
+
+        self._act_save_cell_layout = QAction(
+            "Save Cell &Layout", self
+        )
+        self._act_save_cell_layout.setToolTip(
+            "Save the current tree as a single-hex .scriptreering layout "
+            "that ScripTreeRing can re-open as a cell."
+        )
+        self._act_save_cell_layout.triggered.connect(
+            self._save_cell_layout
+        )
+        m_file.addAction(self._act_save_cell_layout)
+
+        self._act_save_cell_layout_as = QAction(
+            "Save Cell Layout &As...", self
+        )
+        self._act_save_cell_layout_as.triggered.connect(
+            self._save_cell_layout_as
+        )
+        m_file.addAction(self._act_save_cell_layout_as)
+
+        act_open_cell_layout = QAction(
+            "Open Cell Layout...", self
+        )
+        act_open_cell_layout.setToolTip(
+            "Open a .scriptreering layout in the cell shell "
+            "(launches ScripTreeRing as a separate process)."
+        )
+        act_open_cell_layout.triggered.connect(
+            self._open_cell_layout
+        )
+        m_file.addAction(act_open_cell_layout)
+
         m_file.addSeparator()
 
         # Recent files live directly on the File menu as two separate
@@ -715,6 +756,157 @@ class MainWindow(QMainWindow):
     def _save_tree(self) -> None:
         if self._launcher.save():
             self.statusBar().showMessage("Tree saved.")
+
+    # ── Cell Layout (.scriptreering) handlers ─────────────────────────
+    #
+    # The editor only knows about the catalog it has loaded, so these
+    # produce / consume *single-hex* rings (master.role = "standalone").
+    # The cell shell (ScripTreeRing) is what saves multi-cell layouts;
+    # V1's role here is just to give users a one-click way to convert
+    # a loaded tree into a launcher-ready ring file.
+
+    def _save_cell_layout(self) -> None:
+        """Save the current tree as a single-hex layout, prompting only
+        if no path has been associated yet (Save vs Save As)."""
+        path = getattr(self, "_cell_layout_path", None)
+        if path is None:
+            self._save_cell_layout_as()
+            return
+        self._write_single_hex_ring(path)
+
+    def _save_cell_layout_as(self) -> None:
+        """Prompt for a destination path, then save."""
+        from PySide6.QtWidgets import QFileDialog
+
+        # Default name: <tree-name>.scriptreering next to the tree.
+        tree_file = self._launcher.tree_file()
+        default_dir = (
+            str(tree_file.parent) if tree_file is not None else ""
+        )
+        default_name = (
+            tree_file.stem + ".scriptreering" if tree_file is not None
+            else "untitled.scriptreering"
+        )
+        suggested = (
+            str(Path(default_dir) / default_name) if default_dir
+            else default_name
+        )
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Cell Layout As",
+            suggested,
+            "Cell Layout (*.scriptreering);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".scriptreering":
+            path = path.with_suffix(".scriptreering")
+        self._write_single_hex_ring(path)
+        self._cell_layout_path = path
+
+    def _write_single_hex_ring(self, path: Path) -> None:
+        """Serialise a single-hex ``.scriptreering`` whose catalog_path
+        is the editor's currently-loaded tree (or None when no tree is
+        loaded — produces a "blank starter" cell)."""
+        import json
+        from datetime import datetime, timezone
+
+        tree_file = self._launcher.tree_file()
+        catalog_path = str(tree_file.resolve()) if tree_file is not None else None
+
+        # Construct the ring document by hand (no need to pull in the
+        # full ring_io module just to write a 5-line JSON).
+        doc = {
+            "format": "scriptreering",
+            "version": 1,
+            "saved_at": datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "saved_by_brand": "ScripTree (editor)",
+            "master": {
+                "role": "standalone",
+                "shape": "hexagon",
+                "orientation": "flat-top",
+                "size_px": 56,
+                "transparency": 0.85,
+                "always_on_top": True,
+                "position": {"x": 200, "y": 200},
+                "catalog_path": catalog_path,
+            },
+            "members": [],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(doc, f, indent=2)
+                f.write("\n")
+            self.statusBar().showMessage(f"Cell layout saved to {path.name}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Save failed",
+                f"Could not write the cell layout file:\n\n{exc}",
+            )
+
+    def _open_cell_layout(self) -> None:
+        """Pick a .scriptreering file and hand it off to ScripTreeRing.
+
+        V1 itself doesn't render cells — opening a layout simply
+        launches the ring shell as a sibling process and lets it take
+        over.  This window stays open; the user can close it manually.
+        """
+        from PySide6.QtWidgets import QFileDialog
+        import subprocess
+        import sys
+
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Cell Layout",
+            "",
+            "Cell Layout (*.scriptreering);;All files (*)",
+        )
+        if not path_str:
+            return
+
+        # Locate run_scriptreering.bat / .py next to V1's launcher.
+        launcher_dir = Path(__file__).resolve().parent.parent.parent
+        bat = launcher_dir / "run_scriptreering.bat"
+        sh = launcher_dir / "run_scriptreering.sh"
+        py = launcher_dir / "run_scriptreering.py"
+
+        cmd: list[str]
+        if sys.platform == "win32" and bat.is_file():
+            cmd = [str(bat), path_str]
+        elif sh.is_file() and sys.platform != "win32":
+            cmd = ["bash", str(sh), path_str]
+        elif py.is_file():
+            cmd = [sys.executable, str(py), path_str]
+        else:
+            QMessageBox.warning(
+                self, "ScripTreeRing not found",
+                "Could not locate run_scriptreering.bat / .sh / .py "
+                f"next to the editor at:\n  {launcher_dir}\n\n"
+                "Make sure the cell shell is installed alongside the "
+                "editor.",
+            )
+            return
+
+        kwargs: dict = {"shell": False}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            kwargs["start_new_session"] = True
+        try:
+            subprocess.Popen(cmd, **kwargs)
+            self.statusBar().showMessage(
+                f"Launched ScripTreeRing with {Path(path_str).name}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Launch failed",
+                f"Could not launch ScripTreeRing:\n\n{exc}",
+            )
 
     def _on_tree_modified(self, dirty: bool) -> None:
         self._act_save_tree.setEnabled(

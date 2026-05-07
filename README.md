@@ -1,18 +1,30 @@
-# ScripTree
+# ScripTree V3
 
 A universal GUI generator for command-line tools. Define a tool once — by pointing ScripTree at an executable or building a form from scratch — and run it through a clean GUI with labeled fields, dropdowns, file pickers, and checkboxes.
 
+V3 ships with **two launchers in one installation**:
+
+| Launcher | What it does |
+|---|---|
+| **`run_scriptreering.bat`** | The **cell + ring shell**: floating hexagonal launchers on your desktop. Single-click pops up the cell's tool menu; double-click opens the full editor on the cell's catalog. Drag two cells close together to dock them into a *ring* whose menu merges their tools. Save layouts as `.scriptreering` files. See [`help/cell_shell.md`](help/cell_shell.md). |
+| **`run_scriptree.bat`** | The classic **V1 editor**: tool runner, configurations, parser, save/load. Identical behaviour to v0.1.x. The cell shell shells out to this whenever you click a tool — V1 stays the editor; the cell shell is just a launcher. |
+
 ## Installing the portable zip
 
-Download `ScripTree-vX.Y.Z-windows-x64.zip` from the [Releases page](https://github.com/KenM76/scriptree/releases) and extract it. The launcher expects this layout:
+Download the V3 zip from the Releases page and extract it. The launcher expects this layout:
 
 ```
 <some-folder>/
-├── run_scriptree.bat       ← double-click this
+├── run_scriptreering.bat   ← cell + ring shell (the usual entry point)
+├── run_scriptreering.py
+├── run_scriptree.bat       ← V1 editor (called as subprocess from the shell)
 ├── run_scriptree.py
 ├── scriptree/              ← Python package
 │   ├── main.py
+│   ├── shell/              ← cell + ring shell (NEW in V3)
 │   └── ...
+├── branding/
+│   └── branding.config.json
 ├── lib/
 └── ...
 ```
@@ -28,14 +40,16 @@ If the launcher still can't find the package, it prints a diagnostic listing exa
 
 # Option A: vendor into the project, trimmed to the ~65 MB minimum (recommended)
 python lib/update_lib.py --trim
-python run_scriptree.py
+python run_scriptreering.py     # cell shell (preferred entry point)
+# or:
+python run_scriptree.py         # V1 editor directly
 
 # Option B: use your system Python environment
 pip install PySide6
-python run_scriptree.py
+python run_scriptreering.py
 ```
 
-Or on Windows, double-click `run_scriptree.bat`. If PySide6 is missing, the launcher will offer to install it.
+Or on Windows, double-click **`run_scriptreering.bat`** for the cell shell, or `run_scriptree.bat` for the editor directly. Either launcher will offer to fetch a portable Python if none is found.
 
 **Option A makes the folder portable** — after `update_lib.py --trim` runs once, you can zip the entire project folder and drop it on any other machine with the same OS/architecture and Python 3.11+. No pip, no network, no admin rights required. The `--trim` flag strips unused Qt modules (WebEngine, QML, Quick/3D, Multimedia, PDF, Charts, translations, dev tools) — ScripTree only uses `QtCore`/`QtGui`/`QtWidgets`, so you save ~400 MB.
 
