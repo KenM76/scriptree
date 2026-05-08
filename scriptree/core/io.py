@@ -83,6 +83,10 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         cell_d["label_opacity"] = float(tool.cell_label_opacity)
     if cell_d:
         d["cell"] = cell_d
+    # Interactive stdin (V3 v0.3.0) — emitted only when True so legacy
+    # tools round-trip byte-identical.
+    if tool.interactive:
+        d["interactive"] = True
     return d
 
 
@@ -190,6 +194,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         cell_text_label=str(cell_d.get("text_label", "")),
         cell_icon_scale=_cell_float("icon_scale", 1.0),
         cell_label_opacity=_cell_float("label_opacity", 1.0),
+        interactive=bool(data.get("interactive", False)),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

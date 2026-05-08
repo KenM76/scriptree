@@ -281,6 +281,17 @@ class ToolDef:
     cell_text_label: str = ""
     cell_icon_scale: float = 1.0
     cell_label_opacity: float = 1.0
+    # Interactive stdin (V3 v0.3.0) — when True the runner exposes a
+    # send-line widget below the output pane, so the tool can read
+    # user input from stdin while running.  Used by tools that
+    # implement query-replace-style prompt loops (Emacs M-%) — pick a
+    # match, type ``y``/``n``/``!``/``q``, hit Enter.  The runner
+    # ALSO requires the ``interactive_stdin`` capability to be
+    # granted by the permission system; when missing or read-only the
+    # tool runs in normal one-shot mode and a one-line warning is
+    # appended to the output pane.  Default ``False`` preserves the
+    # one-shot contract for every existing tool.
+    interactive: bool = False
     schema_version: int = SCHEMA_VERSION
     # Absolute path of the ``.scriptree`` file this tool was loaded
     # from — populated by ``load_tool()``. Used at run time to resolve

@@ -114,3 +114,8 @@ gives the per-topic slice.
   the current cluster — `_close_this` must use `_members` and let
   `_check_master_validity` enforce the quorum rule.
   → `rags/lessons/close_member_uses_membership_not_source_id.md`
+- [v3-architecture] **interactive_stdin_with_two_layer_gate**: v0.3.0
+  interactive-stdin runner mode requires BOTH `ToolDef.interactive`
+  AND the `interactive_stdin` permission file (default-deny) to
+  surface the send-line widget.  Tool author × admin opt-in.
+  → `rags/lessons/interactive_stdin_with_two_layer_gate.md`

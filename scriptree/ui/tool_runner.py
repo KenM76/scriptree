@@ -679,15 +679,21 @@ class _RunWorker(QObject):
         command: ResolvedCommand,
         *,
         credentials: tuple[str, str, str] | None = None,
+        interactive: bool = False,
     ) -> None:
         super().__init__()
         self._command = command
         # (username, password, domain) or None for normal spawn.
         self._credentials = credentials
+        # When True, the child is spawned with ``stdin=PIPE`` so the
+        # UI can call ``send_line()`` to push answers (e.g. y/n/!/q
+        # for query-replace) into the running process.
+        self._interactive = interactive
         # Set from the worker thread in ``_on_process_start``; read
-        # from the UI thread in ``stop``. A plain attribute assignment
-        # is atomic in CPython and the Stop button races are benign —
-        # worst case we call terminate on an already-exited process.
+        # from the UI thread in ``stop`` / ``send_line``. A plain
+        # attribute assignment is atomic in CPython and the Stop /
+        # Send button races are benign — worst case we call terminate
+        # / write to an already-exited process and catch BrokenPipeError.
         self._proc: subprocess.Popen | None = None
         self._stop_level = 0  # 0=running, 1=terminate sent, 2=kill sent
 
@@ -695,6 +701,17 @@ class _RunWorker(QObject):
         try:
             if self._credentials is not None:
                 username, password, domain = self._credentials
+                # Run-as-user does NOT support interactive stdin —
+                # CreateProcessWithLogonW + interactive pipes would
+                # require additional plumbing (proper handle
+                # inheritance through impersonation).  Fall back to
+                # non-interactive spawn and surface the limitation.
+                if self._interactive:
+                    self.stderrLine.emit(
+                        "[warning] Interactive stdin is not supported "
+                        "with run-as-different-user; running non-"
+                        "interactively.",
+                    )
                 result = spawn_streaming_as_user(
                     self._command,
                     username,
@@ -710,6 +727,7 @@ class _RunWorker(QObject):
                     self.stdoutLine.emit,
                     self.stderrLine.emit,
                     on_start=self._on_process_start,
+                    interactive=self._interactive,
                 )
         except Exception as e:  # noqa: BLE001 - surface to UI
             self.stderrLine.emit(f"[runner error] {e}")
@@ -719,6 +737,46 @@ class _RunWorker(QObject):
 
     def _on_process_start(self, proc: subprocess.Popen) -> None:
         self._proc = proc
+
+    def send_line(self, text: str) -> bool:
+        """Write ``text + '\\n'`` to the child's stdin.
+
+        Called from the UI thread when the user clicks Send (or hits
+        Enter in the interactive input box).  Returns True on success,
+        False if the pipe is missing, closed, or the write failed —
+        in which case the caller should surface the error in the
+        output pane and disable the input box.
+
+        Safe to call from any thread; ``Popen.stdin`` writes are
+        protected by Python's GIL and the underlying pipe handle is
+        independent of the stdout / stderr pump threads.
+        """
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            return False
+        if proc.poll() is not None:
+            return False
+        try:
+            proc.stdin.write(text + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+        return True
+
+    def close_stdin(self) -> None:
+        """Close the child's stdin pipe to signal EOF.
+
+        Some interactive tools watch for stdin EOF as a clean-exit
+        signal (``read EOF`` → break out of the prompt loop and
+        finalise).  The output pane's "End input" button calls this.
+        """
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            return
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
 
     def stop(self) -> int:
         """Ask the child process to stop.
@@ -872,7 +930,25 @@ class ToolRunnerView(QWidget):
         return self._bottom_pane
 
     def _build_output_panel(self) -> QWidget:
-        """Build the output pane as a standalone widget."""
+        """Build the output pane as a standalone widget.
+
+        For interactive tools (``tool.interactive == True`` AND the
+        ``interactive_stdin`` capability is granted), an extra input
+        row is appended below the output text:
+
+          ┌──────────────────────────────────────┐
+          │ Output text (read-only)              │
+          ├──────────────────────────────────────┤
+          │ Send: [_____________] [y][n][!][q] [Send] [End input]
+          └──────────────────────────────────────┘
+
+        Pressing Enter in the line edit, or clicking one of the
+        quick-response buttons, writes the line to the running
+        process's stdin via the worker's ``send_line``.  When the
+        permission is missing or the tool isn't declared interactive,
+        the row is hidden and the runner runs in pre-v0.3 one-shot
+        mode (matches every existing .scriptree).
+        """
         output_box = QGroupBox("Output")
         out_layout = QVBoxLayout(output_box)
         mono = QFont()
@@ -882,7 +958,103 @@ class ToolRunnerView(QWidget):
         self._output.setReadOnly(True)
         self._output.setFont(mono)
         out_layout.addWidget(self._output)
+
+        # Interactive input row — built unconditionally so tests can
+        # access it, but visibility is toggled by
+        # ``_refresh_interactive_visibility`` based on
+        # ``tool.interactive`` AND the runtime permission.
+        self._interactive_row = self._build_interactive_input_row()
+        out_layout.addWidget(self._interactive_row)
+        self._refresh_interactive_visibility()
+
         return output_box
+
+    def _build_interactive_input_row(self) -> QWidget:
+        """Construct the send-line widget shown for interactive tools."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 4, 0, 0)
+
+        prompt_label = QLabel("Send:")
+        prompt_label.setToolTip(
+            "Type a line and press Enter (or click Send) to write it "
+            "to the running tool's stdin."
+        )
+        row_layout.addWidget(prompt_label)
+
+        self._send_line_edit = QLineEdit()
+        self._send_line_edit.setPlaceholderText(
+            "Type response, then Enter to send..."
+        )
+        self._send_line_edit.returnPressed.connect(self._on_send_line)
+        row_layout.addWidget(self._send_line_edit, stretch=1)
+
+        # Quick-response buttons.  Order matches Emacs query-replace's
+        # most-used answers; ``!`` accepts all remaining matches, ``q``
+        # quits the prompt loop.  Tools that don't use the y/n/!/q
+        # vocabulary just ignore unrelated input — these are safe
+        # convenience shortcuts, not protocol.
+        for label, tip in (
+            ("y", "Send 'y' (yes — accept this match)"),
+            ("n", "Send 'n' (no — skip this match)"),
+            ("!", "Send '!' (accept all remaining matches)"),
+            ("q", "Send 'q' (quit the prompt loop)"),
+        ):
+            btn = QPushButton(label)
+            btn.setFixedWidth(28)
+            btn.setToolTip(tip)
+            btn.clicked.connect(
+                lambda checked=False, t=label: self._send_quick_response(t)
+            )
+            row_layout.addWidget(btn)
+
+        self._btn_send = QPushButton("Send")
+        self._btn_send.setToolTip("Send the typed line to the tool's stdin.")
+        self._btn_send.clicked.connect(self._on_send_line)
+        row_layout.addWidget(self._btn_send)
+
+        self._btn_end_input = QPushButton("End input")
+        self._btn_end_input.setToolTip(
+            "Close the tool's stdin pipe.  Some interactive tools treat "
+            "this as a clean-exit signal.",
+        )
+        self._btn_end_input.clicked.connect(self._on_end_input)
+        row_layout.addWidget(self._btn_end_input)
+
+        return row
+
+    def _refresh_interactive_visibility(self) -> None:
+        """Show / hide the interactive input row based on tool flag +
+        permission state.
+
+        Both must be true:
+
+        * ``self._tool.interactive`` — the .scriptree opted in.
+        * ``interactive_stdin`` permission — the org allowed it.
+
+        When either is False the row is hidden and the runner falls
+        back to pre-v0.3 one-shot behaviour.
+        """
+        from ..core.permissions import get_app_permissions
+
+        if not getattr(self, "_interactive_row", None):
+            return
+        tool_opted_in = bool(getattr(self._tool, "interactive", False))
+        if tool_opted_in:
+            try:
+                perms = get_app_permissions()
+                permission_granted = perms.can("interactive_stdin")
+            except Exception:  # noqa: BLE001
+                permission_granted = False
+        else:
+            permission_granted = False
+
+        show_row = tool_opted_in and permission_granted
+        self._interactive_row.setVisible(show_row)
+        self._interactive_enabled = show_row
+        self._interactive_permission_denied = (
+            tool_opted_in and not permission_granted
+        )
 
     def _build_form_panel(self, tool: ToolDef) -> QWidget:
         """Build the form panel as a standalone widget."""
@@ -1914,13 +2086,38 @@ class ToolRunnerView(QWidget):
         else:
             self._append_line(f"$ {cmd.display()}\n")
 
+        # Interactive-stdin gating: tool must have ``interactive=True``
+        # AND the ``interactive_stdin`` capability must be granted.
+        # When the tool opted in but the permission denies, surface a
+        # one-line warning before the run so the user knows why the
+        # send-line widget didn't appear.
+        tool_opted_in = bool(getattr(self._tool, "interactive", False))
+        run_interactive = False
+        if tool_opted_in:
+            if perms.can("interactive_stdin"):
+                run_interactive = True
+            else:
+                self._append_line(
+                    "[interactive disabled] This tool requested "
+                    "interactive stdin, but the 'interactive_stdin' "
+                    "permission is not granted.  Running non-"
+                    "interactively.",
+                    color=QColor("#b8860b"),  # dark goldenrod
+                )
+        # Refresh visibility now in case the user toggled the
+        # permission between sessions; an inactive run keeps the
+        # row hidden until permission and tool flag agree.
+        self._refresh_interactive_visibility()
+
         self._btn_run.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._btn_stop.setText("Stop")
         self._status.setText("Running…")
 
         self._thread = QThread(self)
-        self._worker = _RunWorker(cmd, credentials=credentials)
+        self._worker = _RunWorker(
+            cmd, credentials=credentials, interactive=run_interactive,
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.stdoutLine.connect(self._on_stdout)
@@ -2403,6 +2600,67 @@ class ToolRunnerView(QWidget):
                 f"Completed successfully in {duration:.2f}s.",
             )
         self._stderr_buffer.clear()
+
+    # --- interactive stdin (v0.3.0) -------------------------------------
+
+    def _on_send_line(self) -> None:
+        """User clicked Send (or hit Enter in the input box).
+
+        Pull the typed text, route through the worker's
+        ``send_line``, then clear the box and refocus it for the
+        next response.  Echo the sent line into the output pane in
+        a dim colour so the conversation is self-documenting.
+        """
+        edit = getattr(self, "_send_line_edit", None)
+        if edit is None:
+            return
+        text = edit.text()
+        edit.clear()
+        edit.setFocus()
+        self._send_text_to_worker(text)
+
+    def _send_quick_response(self, text: str) -> None:
+        """User clicked one of the y/n/!/q quick-response buttons.
+
+        Sends ``text`` immediately without consulting the line edit.
+        Refocuses the line edit so the next typed key keeps flowing.
+        """
+        self._send_text_to_worker(text)
+        edit = getattr(self, "_send_line_edit", None)
+        if edit is not None:
+            edit.setFocus()
+
+    def _send_text_to_worker(self, text: str) -> None:
+        """Common dispatch for both Send button and quick-response."""
+        worker = self._worker
+        if worker is None:
+            self._append_line(
+                "[send] No process is running.",
+                color=QColor("#666666"),
+            )
+            return
+        ok = worker.send_line(text)
+        if not ok:
+            self._append_line(
+                "[send] Could not write to the tool's stdin "
+                "(pipe closed or process exited).",
+                color=QColor("#b00020"),
+            )
+            return
+        # Echo the line we just sent.  Use the same colour as the
+        # ``$ <command>`` echo so the user can scan the conversation.
+        self._append_line(
+            f"> {text}",
+            color=QColor("#1976d2"),
+        )
+
+    def _on_end_input(self) -> None:
+        """User clicked End input — close the child's stdin pipe."""
+        worker = self._worker
+        if worker is None:
+            return
+        worker.close_stdin()
+        self._append_line("[stdin closed]", color=QColor("#666666"))
 
     # --- helpers ---------------------------------------------------------
 

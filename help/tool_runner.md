@@ -157,6 +157,52 @@ for the per-scope behavior table — non-session scopes also rewrite
 `tool.executable` to the basename so PATH lookup is actually consulted
 on subsequent runs.
 
+### Interactive tools (v0.3.0)
+
+Tools that need to **read user input while they're running** —
+query-replace dialogs, confirm prompts, REPLs — can opt into the
+runner's interactive mode by setting `interactive: true` in the
+`.scriptree` file (or via the **Interactive** checkbox in the tool
+editor).
+
+When interactive mode is on AND the `interactive_stdin` permission
+is granted, a send-line row appears below the output pane:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Output text (read-only)                                        │
+├────────────────────────────────────────────────────────────────┤
+│ Send: [_____________________] [y][n][!][q] [Send] [End input]  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- **Type a line + Enter** (or click **Send**) writes the line to
+  the running tool's stdin.
+- **y / n / ! / q** quick-response buttons send a single character
+  for tools that follow the Emacs `query-replace` convention
+  (accept / skip / accept all / quit). Tools that don't use that
+  vocabulary just ignore unrelated input — these are convenience
+  shortcuts, not protocol.
+- **End input** closes stdin (sends EOF). Some interactive tools
+  treat that as a clean-exit signal.
+- Lines you send are echoed into the output pane in blue so the
+  conversation is self-documenting.
+
+**Permission gate.** Both halves are required:
+
+1. The `.scriptree` declares `interactive: true` (per-tool opt-in).
+2. The `interactive_stdin` capability file is present and writable
+   in `permissions/` (admin opt-in — **default-denied**).
+
+When the tool opts in but the permission denies, the runner falls
+back to one-shot mode and prints a one-line warning into the
+output pane so you know why the send-line widget didn't appear.
+Run-as-different-user is not compatible with interactive mode (a
+warning is emitted on stderr; the run proceeds non-interactively).
+
+A demo tool ships at `ScripTreeApps/Demos/find-replace/` —
+interactive find-and-replace, Emacs M-% style.
+
 ### Output formatting and ANSI colors
 
 ScripTree publishes `NO_COLOR=1`, `TERM=dumb`, `CLICOLOR=0`, and

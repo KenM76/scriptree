@@ -63,3 +63,10 @@ design.
   closing one of the original two seed cells of a 3+ member ring
   tears down the whole master.
   → `rags/lessons/close_member_uses_membership_not_source_id.md`
+- [v3-architecture] **interactive_stdin_with_two_layer_gate**: v0.3.0
+  added an interactive-stdin runner mode (Emacs M-% style send-line
+  widget); enabled iff (`ToolDef.interactive` AND the
+  `interactive_stdin` permission file is writable).  Per-tool author
+  opt-in × org admin opt-in.  Print prompts with `flush=True`;
+  treat empty `readline()` as EOF.
+  → `rags/lessons/interactive_stdin_with_two_layer_gate.md`

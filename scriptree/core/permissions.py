@@ -225,6 +225,15 @@ CAPABILITIES: dict[str, str] = {
         "Access paths outside the tool's working directory "
         "(e.g. system directories, user profile folders)"
     ),
+    # interactive stdin (v0.3.0) — gates the M-%-style live find/replace
+    # mode. When the file is missing or read-only, the runner runs the
+    # tool non-interactively even if the .scriptree declares
+    # ``interactive: true``. IT can lock the file's write-bit to
+    # disable for the whole organisation.
+    "interactive_stdin": (
+        "Allow tools to read user input from stdin while running "
+        "(query-replace style interactive prompt loop)"
+    ),
 }
 
 

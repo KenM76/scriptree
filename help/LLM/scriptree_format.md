@@ -19,6 +19,7 @@ disagree, the code wins — open an issue and fix the docs.
   "path_prepend": ["directory", "..."],
   "menus": [/* list[MenuItemDef], optional, omitted when empty */],
   "cell": {/* CellAppearance, optional, see below — v0.2.7+ */},
+  "interactive": "bool, optional, default false — v0.3.0+",
   "source": {
     "mode": "manual | argparse | click | docopt | heuristic | powershell | winhelp",
     "help_text_cached": "string or null"
@@ -265,6 +266,49 @@ its default.
   "icon_scale": 0.8
 }
 ```
+
+## `interactive` flag (v0.3.0+, optional)
+
+Top-level boolean.  When `true`, the runner spawns the child process
+with `stdin=PIPE` and shows a send-line widget below the output
+pane (line edit + `y` / `n` / `!` / `q` quick-response buttons +
+Send + End input).  Lines typed into the widget — or sent via the
+quick buttons — are written to the running tool's stdin, so tools
+can implement query-replace-style prompt loops (Emacs M-%) inside
+the GUI.
+
+```json
+"interactive": true
+```
+
+Field rules:
+
+- **Type** — `bool`.
+- **Default** — `false`.  Omitted from the JSON when at the default
+  so v0.2.x files round-trip byte-identical.
+- **Permission gate** — the runner ALSO requires the
+  `interactive_stdin` capability to be granted at the app level
+  (file present and writable in the deployed `permissions/`
+  directory).  When the tool opts in but the permission denies,
+  the runner falls back to one-shot mode and prints a one-line
+  warning into the output pane.
+- **Run-as-user incompatibility** — interactive mode is suppressed
+  when a configuration is set to `prompt_credentials: true`.  A
+  warning is emitted on stderr; the run proceeds non-interactively.
+- **Stdout buffering** — tools that read from stdin should
+  `flush=True` after every prompt (`print(..., flush=True)` in
+  Python) so the runner sees each prompt as it's emitted, not all
+  at once after the script exits.
+
+Use `interactive: true` for tools that genuinely benefit from a
+live prompt loop:
+
+- Find / replace with per-match accept / skip (`query-replace`).
+- Confirm-each-file batch operations.
+- REPL-style exploration tools.
+
+Don't use `interactive: true` for tools that just emit progress
+bars or status output — those work fine without stdin.
 
 ## `source` block
 

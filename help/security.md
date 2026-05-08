@@ -111,6 +111,7 @@ denied for that user.
 | | `add_to_system_path` | Modifying the system-wide PATH via the registry; requires admin elevation (default-**denied** — admin must opt in) |
 | **Security** | `allow_symlinks` | Allowing symlinks in tool/tree path resolution |
 | | `allow_path_traversal` | Allowing `../` in tree leaf paths |
+| | `interactive_stdin` | Allowing tools to read live input from stdin while running (V3 v0.3.0 — query-replace style send-line widget; **default-denied**, admin must opt in) |
 
 #### PATH-add scopes — secure-by-default
 

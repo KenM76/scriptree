@@ -509,6 +509,7 @@ def spawn_streaming(
     on_stderr_line: Callable[[str], None],
     *,
     on_start: Callable[[subprocess.Popen], None] | None = None,
+    interactive: bool = False,
 ) -> RunResult:
     """Run the command, streaming stdout/stderr line-by-line to callbacks.
 
@@ -520,14 +521,24 @@ def spawn_streaming(
     begins. The UI layer uses this to stash the handle so a Stop
     button can call :meth:`Popen.terminate`/:meth:`Popen.kill` from
     the GUI thread without racing the pump threads.
+
+    ``interactive`` (V3 v0.3.0) — when ``True``, the child's stdin is
+    opened as a pipe so the UI can ``proc.stdin.write(...)`` /
+    ``flush()`` while the process is running.  Default ``False``
+    leaves stdin closed (DEVNULL on Windows / inherited elsewhere),
+    matching pre-v0.3 behaviour.  The flag is independent of the
+    ``interactive_stdin`` permission gate — that gate is applied at
+    the UI layer; this function trusts its caller.
     """
     import time
 
     start = time.monotonic()
+    stdin_arg = subprocess.PIPE if interactive else subprocess.DEVNULL
     proc = subprocess.Popen(
         cmd.argv,
         cwd=cmd.cwd,
         env=cmd.env,
+        stdin=stdin_arg,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

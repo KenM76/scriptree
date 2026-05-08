@@ -153,6 +153,27 @@ class ToolEditorView(QWidget):
         env_wrapper.setLayout(env_row)
         top_form.addRow("Environment:", env_wrapper)
 
+        # Interactive stdin (V3 v0.3.0) — opt-in flag that tells the
+        # runner to spawn the child with ``stdin=PIPE`` and surface a
+        # send-line widget below the output pane.  Off by default;
+        # use it for tools that implement query-replace-style prompt
+        # loops (Emacs M-%) — pick a match, type ``y``/``n``/``!``/``q``,
+        # hit Enter.  The runner ALSO requires the ``interactive_stdin``
+        # capability to be granted; when missing the row is hidden and
+        # the tool runs non-interactively.
+        self._interactive_check = QCheckBox(
+            "Allow this tool to read live input from stdin while running"
+        )
+        self._interactive_check.setToolTip(
+            "When checked, the runner shows a send-line widget below "
+            "the output pane so you can type responses (y / n / ! / q) "
+            "to a running tool's prompt loop, Emacs M-% style.  Also "
+            "requires the 'interactive_stdin' permission to be granted."
+        )
+        self._interactive_check.setChecked(bool(self._tool.interactive))
+        self._interactive_check.toggled.connect(self._on_interactive_toggled)
+        top_form.addRow("Interactive:", self._interactive_check)
+
         # Custom menus — tool.menus. Rendered as a QMenuBar above the
         # form by ToolRunnerView when the tool is run.
         menus_row = QHBoxLayout()
@@ -539,6 +560,14 @@ class ToolEditorView(QWidget):
 
     def _on_desc_changed(self, text: str) -> None:
         self._tool.description = text
+
+    def _on_interactive_toggled(self, checked: bool) -> None:
+        """Mirror the checkbox state into ``ToolDef.interactive``.
+
+        The runner re-evaluates this flag at run time; a Save is
+        still required to persist the change to disk.
+        """
+        self._tool.interactive = bool(checked)
 
     # --- tool-level environment -----------------------------------------
 
