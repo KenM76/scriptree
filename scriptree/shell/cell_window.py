@@ -1671,6 +1671,25 @@ class CellWindow(QMainWindow):
         # NOT serialised to .scriptreering files.
         self._auto_hidden: set[str] = set()
 
+        # Ring dirty-state flag (V3 v0.3.1).  Only meaningful on
+        # master cells.  Set when a cell is added to or removed from
+        # this master's group; cleared when the ring is saved.
+        # Position-only mutations (drag, repack, drift snap-back) do
+        # NOT set this flag — the user spec is "ask before close iff
+        # membership has changed since save, but stay quiet for pure
+        # rearrangements".  Initialised False; ``_try_spawn_master``
+        # Case 1 sets it True on a fresh master so a never-saved
+        # ring counts as dirty.  ``ring_io.load_ring`` resets it to
+        # False after a successful load (the on-disk ring matches).
+        self._ring_dirty: bool = False
+        # On-disk ring file (.scriptreering) backing this master, if
+        # any.  Set by ``save_ring`` / ``load_ring`` / the editor's
+        # Open Cell Layout flow; ``None`` means brand-new ring.
+        # Initialised here (was a lazy attribute pre-v0.3.1) so
+        # ``_ring_needs_save_prompt`` and tests can check it
+        # directly without ``getattr(..., None)``.
+        self._saved_ring_path = None  # type: ignore[assignment]
+
         # Creation timestamp â€” used by _try_spawn_master to pick the oldest
         # canonical master when two groups merge.
         import time as _time_mod
@@ -3407,6 +3426,8 @@ class CellWindow(QMainWindow):
         try:
             save_ring(self, path)
             self._saved_ring_path = path
+            # Ring on disk now matches the in-memory state — clean.
+            self._ring_dirty = False
             _log(f"Ring saved to {path} by id={self._id[:8]}")
         except Exception as exc:  # noqa: BLE001
             _log(f"_write_ring_to_path: save_ring failed: {exc!r}")
@@ -3863,6 +3884,8 @@ class CellWindow(QMainWindow):
             master._members.pop(self._id, None)
             master._positioned.discard(self._id)
             master._dock_partners.discard(self._id)
+            # Member removed — ring is dirty (membership changed).
+            master._ring_dirty = True
 
         self._group_master_id = None
         self._docked_to.clear()
@@ -3904,6 +3927,8 @@ class CellWindow(QMainWindow):
             master._members.pop(self._id, None)
             master._positioned.discard(self._id)
             master._dock_partners.discard(self._id)
+            # Member removed — ring is dirty (membership changed).
+            master._ring_dirty = True
 
         old_master_short = mid[:8]
         self._group_master_id = None
@@ -4044,6 +4069,8 @@ class CellWindow(QMainWindow):
                 master._positioned.discard(self._id)
                 master._dock_partners.discard(self._id)
                 master._auto_hidden.discard(self._id)
+                # Member removed — ring is dirty (membership changed).
+                master._ring_dirty = True
                 # Repack the surviving members so they fill the gap
                 # the closed cell left behind, then re-evaluate
                 # whether the master should still exist.
@@ -4061,6 +4088,18 @@ class CellWindow(QMainWindow):
         # closeEvent (if any) handles member cleanup.  We do NOT
         # cascade-close based on source_a_id / source_b_id any more.
         if self.role == "master":
+            # Same save-prompt rule as _close_ring_undock_all /
+            # _close_all_related — masters with unsaved membership
+            # changes get a Save / Discard / Cancel dialog before
+            # vanishing.  Non-master cells skip the prompt entirely
+            # (already short-circuited above by ``role != "master"``).
+            if self._ring_needs_save_prompt():
+                if not self._confirm_discard_unsaved_ring():
+                    _log(
+                        f"_close_this: cancelled by user "
+                        f"(unsaved master ring {self._id[:8]})"
+                    )
+                    return
             registry.masterDespawned.emit(self._id)
 
         # Check if this is the last non-master hex.
@@ -4077,6 +4116,82 @@ class CellWindow(QMainWindow):
     # Role-aware close + exit handlers (right-click menu)
     # ------------------------------------------------------------------
 
+    def _ring_needs_save_prompt(self) -> bool:
+        """True iff closing this master should ask the user to save first.
+
+        The trigger conditions, per the v0.3.1 user spec:
+
+        * **Never saved** (``_saved_ring_path is None``) — no on-disk
+          file exists yet.
+        * **Membership changed** since last save (``_ring_dirty``) —
+          a cell was added or removed.
+
+        Returns False for masters that have been saved AND haven't
+        had their membership change since (pure position drag,
+        repack, drift snap-back are deliberately NOT marked dirty).
+        Always False for non-masters (a standalone cell carries no
+        ring file).
+        """
+        if self.role != "master":
+            return False
+        if not self._members:
+            # Empty master is being closed by _check_master_validity —
+            # no content worth saving.
+            return False
+        return (
+            self._ring_dirty
+            or getattr(self, "_saved_ring_path", None) is None
+        )
+
+    def _confirm_discard_unsaved_ring(self) -> bool:
+        """Show a Save / Discard / Cancel dialog for an unsaved ring.
+
+        Returns True if the caller may proceed with closing the ring
+        (user picked Save and save succeeded, or picked Discard).
+        Returns False if the caller must abort (user picked Cancel
+        or save failed).
+
+        Caller is responsible for first checking
+        ``_ring_needs_save_prompt`` — this method always shows the
+        dialog when invoked.
+        """
+        path = getattr(self, "_saved_ring_path", None)
+        if path is None:
+            text = (
+                "This ring has not been saved yet.\n\n"
+                "Save it before closing?"
+            )
+        else:
+            text = (
+                f"This ring has unsaved changes since it was last "
+                f"saved to '{path.name}'.\n\n"
+                "Save the changes before closing?"
+            )
+
+        reply = QMessageBox.question(
+            None,
+            "Unsaved ring",
+            text,
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.Discard:
+            return True
+        # Save chosen — delegate to the standard save flow.  If the
+        # ring already has a path, this just writes; if not, the
+        # save-as dialog runs and the user can still cancel it.
+        self._save_ring_dialog()
+        # If save succeeded, _write_ring_to_path cleared _ring_dirty
+        # AND set _saved_ring_path.  If the user cancelled save-as,
+        # _saved_ring_path stays None and we abort the close.
+        if self._ring_needs_save_prompt():
+            return False
+        return True
+
     def _close_ring_undock_all(self) -> None:
         """Master-cell action: destroy the master and let its member
         cells revert to standalones.
@@ -4090,6 +4205,13 @@ class CellWindow(QMainWindow):
             _log("_close_ring_undock_all on non-master — falling back to _close_this")
             self._close_this()
             return
+        if self._ring_needs_save_prompt():
+            if not self._confirm_discard_unsaved_ring():
+                _log(
+                    f"_close_ring_undock_all: cancelled by user "
+                    f"(unsaved ring {self._id[:8]})"
+                )
+                return
         registry = CellRegistry.instance()
         # Iterate a copy of member ids so we can release relationships
         # without mutating during iteration.
@@ -4121,6 +4243,13 @@ class CellWindow(QMainWindow):
             _log("_close_all_related on non-master — falling back to _close_this")
             self._close_this()
             return
+        if self._ring_needs_save_prompt():
+            if not self._confirm_discard_unsaved_ring():
+                _log(
+                    f"_close_all_related: cancelled by user "
+                    f"(unsaved ring {self._id[:8]})"
+                )
+                return
         registry = CellRegistry.instance()
         member_ids = list((self._members or {}).keys())
         _log(
@@ -5030,11 +5159,15 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             old_master._members.pop(a._id, None)
             old_master._positioned.discard(a._id)
             old_master._dock_partners.discard(a._id)
+            # Member transferred out — old ring is dirty (membership changed).
+            old_master._ring_dirty = True
         if new_master is not None:
             _adopt_member_geometry(a, new_master)
             new_master._members[a._id] = QPoint(a.pos())
             new_master._positioned.add(a._id)
             new_master._dock_partners.add(a._id)
+            # Member added — new ring is dirty (membership changed).
+            new_master._ring_dirty = True
         a._group_master_id = tgt_master_id
         a._docked_to.clear()
         _update_docked_to(a, b, registry)
@@ -5066,6 +5199,8 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             if not master.isVisible():
                 master.show()
             master._repack_members()
+            # New member joined — ring is dirty.
+            master._ring_dirty = True
         _log(f"Case 2 (src joins tgt group): {a._id[:8]} -> group {tgt_master_id[:8]}")
         return
 
@@ -5084,6 +5219,8 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             if not master.isVisible():
                 master.show()
             master._repack_members()
+            # New member joined — ring is dirty.
+            master._ring_dirty = True
         _log(f"Case 3 (tgt joins src group): {b._id[:8]} -> group {src_master_id[:8]}")
         return
 
@@ -5200,6 +5337,9 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     # honeycomb slots around the master so a non-canonical drag-release
     # (e.g. dropped slightly off-slot) snaps to a clean ring layout.
     master._repack_members()
+    # Fresh master = brand-new ring with content but no on-disk file
+    # → dirty (so close prompts to save).
+    master._ring_dirty = True
     _log(f"Master spawned: {master_id[:20]} at ({cand_x},{cand_y})")
     registry.masterSpawned.emit(master_id, a._id, b._id)
 

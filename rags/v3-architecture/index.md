@@ -70,3 +70,11 @@ design.
   opt-in × org admin opt-in.  Print prompts with `flush=True`;
   treat empty `readline()` as EOF.
   → `rags/lessons/interactive_stdin_with_two_layer_gate.md`
+- [v3-architecture] **ring_dirty_membership_only**: ring close-
+  prompt fires iff `_ring_dirty` OR `_saved_ring_path is None`.
+  Flip the bit only at membership-change sites (Case 1 spawn,
+  Case 2/3 add, Case 4 transfer, member-close, leave-group,
+  shake-detected) — NOT at position-only sites (drag, repack,
+  drift, collapse).  Reset in `_write_ring_to_path` and
+  `ring_io.load_ring`.
+  → `rags/lessons/ring_dirty_membership_only.md`

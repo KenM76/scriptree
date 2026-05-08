@@ -534,8 +534,14 @@ def load_ring(
         except Exception as _efe:
             _log(f"load_ring: _check_edge_fold raised {_efe!r} - continuing")
 
+    # Loaded ring matches the on-disk file -> clean.  Repack and
+    # similar in-memory mutations above run with master in a
+    # transient dirty state; reset here so a fresh load doesn't
+    # immediately prompt to save on close.
+    master_win._ring_dirty = False
+
     _log(
-        f"load_ring: complete â€” master {master_win._id[:8]} "
+        f"load_ring: complete - master {master_win._id[:8]} "
         f"with {len(master_win._members)} member(s)"
     )
     return master_win

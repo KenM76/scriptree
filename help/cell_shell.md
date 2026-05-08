@@ -227,6 +227,17 @@ If none of those produce any cells, ScripTreeRing spawns one fresh starter cell 
 
 Right-click any cell → **Tree Ring ▶ Save ring…**. The dialog defaults to `~/Documents/ScripTree/rings/` and uses the file filter "Tree Rings (*.scriptreering)". The saved file captures every cell's position, size, transparency, shape/orientation and `catalog_path`.
 
+### Unsaved-ring close prompt (v0.3.1)
+
+Closing a ring with unsaved membership changes shows a **Save / Discard / Cancel** dialog before tearing it down. The prompt fires when:
+
+- The ring has never been saved (no `.scriptreering` file exists for it yet), **or**
+- A cell has been added to or removed from the ring since the last save.
+
+It does **not** fire for pure position changes — dragging the ring around, repacking after a size/shape change, drift snap-back. Position is cheap to redo; membership isn't.
+
+The check runs from all three master close paths: **Close ring (undock all members)**, **Close all related (master + members)**, and the rare master-cell **Close this cell**. Picking Cancel aborts the close; Save runs the standard save flow (Save-As prompt if no file exists yet, otherwise straight write); Discard closes without writing.
+
 ### Save a single-cell layout from the V1 editor
 
 The V1 editor doesn't render cells, but **File → Save Cell Layout** (or **Save Cell Layout As…**) saves a single-cell `.scriptreering` referencing the `.scriptreetree` you currently have loaded. Open it later with **File → Open Cell Layout…** (which launches ScripTreeRing on it) or by double-clicking the `.scriptreering` in Explorer once the file association is set.

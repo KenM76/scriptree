@@ -119,3 +119,8 @@ gives the per-topic slice.
   AND the `interactive_stdin` permission file (default-deny) to
   surface the send-line widget.  Tool author × admin opt-in.
   → `rags/lessons/interactive_stdin_with_two_layer_gate.md`
+- [v3-architecture] **ring_dirty_membership_only**: ring close-
+  prompt fires iff `_ring_dirty` OR `_saved_ring_path is None`;
+  flip the bit only at membership-change sites, never at position-
+  only sites.  Reset on save / load.
+  → `rags/lessons/ring_dirty_membership_only.md`
