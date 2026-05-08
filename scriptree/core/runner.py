@@ -406,6 +406,7 @@ def build_env(
     global_env_overrides: bool = False,
     global_path_prepend: list[str] | None = None,
     global_path_overrides: bool = False,
+    tree_path_prepend: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Merge environment overrides into an effective child environment.
 
@@ -424,10 +425,25 @@ def build_env(
         config_env
         global_env              ← overrides everything
 
-    ``path_prepend`` entries from the tool and the configuration are
-    concatenated (tool first, config second) and prepended to the
-    resulting ``PATH``. Relative directories are resolved against the
-    tool's ``working_directory`` if one is set, else the executable's
+    ``path_prepend`` entries are concatenated and prepended to ``PATH``.
+    Default order (earliest = highest search priority)::
+
+        [tool.path_prepend, config_path_prepend, tree_path_prepend,
+         global_path_prepend, original PATH]
+
+    When ``global_path_overrides`` is True, global goes first::
+
+        [global_path_prepend, tool.path_prepend, config_path_prepend,
+         tree_path_prepend, original PATH]
+
+    The **tree** layer (V3 v0.3.2+) carries a ``.scriptreetree``'s
+    own ``path_prepend`` list when a tool is launched through that
+    tree.  Per the documented intent on ``TreeDef.path_prepend``:
+    "tree-wide overrides win over global but lose to per-tool".
+    Pass ``None`` (the default) when no parent tree exists.
+
+    Relative directories are resolved against the tool's
+    ``working_directory`` if one is set, else the executable's
     directory.
 
     Returns ``None`` when there's nothing to override — the caller can
@@ -441,9 +457,11 @@ def build_env(
     tool_paths = list(tool.path_prepend or [])
     cfg_paths = list(config_path_prepend or [])
     g_paths = list(global_path_prepend or [])
+    tree_paths = list(tree_path_prepend or [])
 
     if (not tool_env and not cfg_env and not tool_paths
-            and not cfg_paths and not g_env and not g_paths):
+            and not cfg_paths and not g_env and not g_paths
+            and not tree_paths):
         return None
 
     env = dict(base_env if base_env is not None else os.environ)
@@ -482,19 +500,17 @@ def build_env(
             return str(p)
         return str((anchor / p).resolve(strict=False))
 
-    # Assemble the PATH prepend list. Default order (earliest = highest
-    # search priority):
-    #   [config_paths, tool_paths, global_paths, <original PATH>]
-    #
-    # When global_path_overrides is True, global goes first:
-    #   [global_paths, config_paths, tool_paths, <original PATH>]
+    # Assemble the PATH prepend list per the layering documented above.
     tool_and_cfg = [_resolve(d) for d in (tool_paths + cfg_paths)]
+    tree_resolved = [_resolve(d) for d in tree_paths]
     global_resolved = [_resolve(d) for d in g_paths]
 
     if global_path_overrides:
-        prepend = global_resolved + tool_and_cfg
+        # [global, tool, cfg, tree, base]
+        prepend = global_resolved + tool_and_cfg + tree_resolved
     else:
-        prepend = tool_and_cfg + global_resolved
+        # [tool, cfg, tree, global, base]
+        prepend = tool_and_cfg + tree_resolved + global_resolved
 
     if prepend:
         current = env.get("PATH", "")
@@ -1083,6 +1099,7 @@ def build_full_argv(
     global_env_overrides: bool = False,
     global_path_prepend: list[str] | None = None,
     global_path_overrides: bool = False,
+    tree_path_prepend: list[str] | None = None,
 ) -> ResolvedCommand:
     """Resolve ``tool`` and append user-added extras.
 
@@ -1092,6 +1109,12 @@ def build_full_argv(
     returned ``ResolvedCommand.env`` carries the merged environment
     block; otherwise it's ``None`` so the child just inherits the
     parent env verbatim.
+
+    ``tree_path_prepend`` (V3 v0.3.2+) carries the parent
+    ``.scriptreetree``'s own ``path_prepend`` list so its entries
+    reach the spawned child's PATH.  The runner populates this from
+    ``TreeLauncherView.tree_path_prepend()`` whenever a tool is
+    opened through a loaded tree.
     """
     cmd = resolve(tool, values, ignore_required=ignore_required)
     env = build_env(
@@ -1100,6 +1123,7 @@ def build_full_argv(
         global_env_overrides=global_env_overrides,
         global_path_prepend=global_path_prepend,
         global_path_overrides=global_path_overrides,
+        tree_path_prepend=tree_path_prepend,
     )
     return ResolvedCommand(
         argv=[*cmd.argv, *extras], cwd=cmd.cwd, env=env

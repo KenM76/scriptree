@@ -1231,6 +1231,14 @@ class MainWindow(QMainWindow):
             self._unsaved_runner = view
             self._stack.addWidget(view)
 
+        # Forward the parent tree's path_prepend (V3 v0.3.2+) so the
+        # spawned child's PATH includes tree-level entries.  Refresh
+        # on every _show_runner — a runner cached in ``self._runners``
+        # may outlive several tree-load events; calling the setter
+        # each time keeps it in sync with whichever tree the launcher
+        # is currently showing.  No tree loaded → empty list.
+        view.set_tree_path_prepend(self._launcher.tree_path_prepend())
+
         self._stack.setCurrentWidget(view)
         self._install_runner_panels(view)
         self.setWindowTitle(f"ScripTree — {tool.name}")

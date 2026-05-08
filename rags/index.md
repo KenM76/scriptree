@@ -124,3 +124,10 @@ gives the per-topic slice.
   flip the bit only at membership-change sites, never at position-
   only sites.  Reset on save / load.
   → `rags/lessons/ring_dirty_membership_only.md`
+- [v3-architecture] **tree_path_prepend_run_time_wiring**: v0.3.2
+  closed a dead-code gap on `TreeDef.path_prepend` with a
+  five-step kwarg-thread (build_env → build_full_argv → launcher →
+  runner setter → main-window glue).  Tree slots between local
+  (tool+cfg) and global; setter pattern needed because runners
+  are cached across tree-load events.
+  → `rags/lessons/tree_path_prepend_run_time_wiring.md`

@@ -316,6 +316,20 @@ class TreeLauncherView(QWidget):
     def tree_file(self) -> Path | None:
         return self._tree_file
 
+    def tree_path_prepend(self) -> list[str]:
+        """Return the loaded tree's ``path_prepend`` list (V3 v0.3.2+).
+
+        Empty list when no tree is loaded or when the tree carries
+        no path_prepend entries.  The runner forwards these to
+        ``build_full_argv`` so they reach the child's PATH at run
+        time — closes the dead-code gap pinned by
+        ``test_global_env_layering.TestTreePathPrependDeadCodeGap``
+        in v0.3.1.
+        """
+        if self._tree is None:
+            return []
+        return list(self._tree.path_prepend or [])
+
     def save(self) -> bool:
         """Write the tree to disk. Returns True on success."""
         return self._save_tree()

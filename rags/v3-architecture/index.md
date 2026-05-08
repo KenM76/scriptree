@@ -78,3 +78,11 @@ design.
   drift, collapse).  Reset in `_write_ring_to_path` and
   `ring_io.load_ring`.
   → `rags/lessons/ring_dirty_membership_only.md`
+- [v3-architecture] **tree_path_prepend_run_time_wiring**: v0.3.2
+  closed the dead-code gap on `TreeDef.path_prepend` with a
+  five-step pattern — kwarg in `build_env`, forwarded through
+  `build_full_argv`, exposed via `TreeLauncherView.tree_path_prepend()`,
+  consumed via `ToolRunnerView.set_tree_path_prepend(list)`,
+  refreshed each `MainWindow._show_runner`.  Tree slots between
+  local (tool+cfg) and global in the prepend list.
+  → `rags/lessons/tree_path_prepend_run_time_wiring.md`

@@ -18,24 +18,36 @@ nodes are named folders.
 }
 ```
 
-### `path_prepend` (v0.1.11)
+### `path_prepend` (v0.1.11; run-time wiring landed in v0.3.2)
 
-Optional list of directories prepended to the child process's `PATH`
-for **every tool launched via this tree**. Tree-level entries are
-applied *after* the tool's own `path_prepend` (so config-level wins,
-then tool-level, then tree-level, then ambient PATH — see
-[../environment.md](../environment.md)).
+Optional list of directories prepended to the child process's
+`PATH` for **every tool launched via this tree**.  Layered between
+local (tool + config) and global per-Settings entries — see
+[../environment.md](../environment.md) for the full search-order
+table.
 
-Typical use: a tree of CLIs that all need a vendored binary directory
-on PATH (e.g. `./vendor/bin`). Setting it once on the tree avoids
-copy-pasting the same `path_prepend` into every leaf tool's
-`.scriptree`. The missing-executable recovery dialog can populate
-this field automatically when the user picks the *.scriptreetree
-path_prepend* scope.
+Typical use: a tree of CLIs that all need a vendored binary
+directory on PATH (e.g. `./vendor/bin`).  Setting it once on the
+tree avoids copy-pasting the same `path_prepend` into every leaf
+tool's `.scriptree`.  The missing-executable recovery dialog can
+populate this field automatically when the user picks the
+*.scriptreetree path_prepend* scope.
 
 Empty / missing fields serialize to nothing — the field is omitted
 from the JSON when the list is empty so legacy trees stay
 byte-identical.
+
+> **Note on v0.3.2.** The field has existed since v0.1.11 and the
+> recovery dialog has always been able to write to it, but the
+> run-time wiring (forwarding the list into the spawned child's
+> PATH at Run time) was missing in v0.1.x – v0.3.1.  v0.3.2 closed
+> the gap: ``build_env`` / ``build_full_argv`` accept a
+> ``tree_path_prepend=`` kwarg, ``TreeLauncherView.tree_path_prepend()``
+> exposes the loaded tree's list, and ``MainWindow._show_runner``
+> forwards it to the runner before each Run.  Existing
+> `.scriptreetree` files that already had `path_prepend` entries
+> from the recovery dialog will start having them honoured at Run
+> time after upgrading.
 
 Each `Node` is either a folder or a leaf:
 

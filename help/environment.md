@@ -132,22 +132,51 @@ and persists the sidecar immediately.
 
 ## Layering rules
 
-1. Start with `os.environ` (the ScripTree process's own environment).
-2. Apply `tool.env` on top — any variable in `tool.env` overrides the
-   ambient value.
-3. Apply `configuration.env` on top — any variable in the active config
-   overrides both the tool and the ambient.
+### Environment variables (`KEY=VALUE`)
 
-For PATH prepends: tool entries come first, then configuration entries,
-then whatever PATH was already set. So a tool-level `./vendor` and a
-config-level `./debug-bin` produce:
+Highest priority wins. Default order (lowest → highest):
+
+1. `os.environ` (the ScripTree process's own environment).
+2. **Global env** (Settings → Global environment) — applies to every tool.
+3. `tool.env` — overrides the ambient + global.
+4. `configuration.env` — overrides everything above.
+
+Tick **Global env overrides tool / config env** in Settings to flip
+the global layer to the top instead:
 
 ```
-./debug-bin ; ./vendor ; <original PATH>
+os.environ < tool.env < configuration.env < global env (overrides)
 ```
 
-(Config entries have higher priority — they're earlier in the PATH
-search order.)
+### PATH-prepend (search order)
+
+Earlier in PATH = higher search priority. Default order (highest first):
+
+1. `tool.path_prepend` (most specific to this tool).
+2. `configuration.path_prepend`.
+3. `tree.path_prepend` (V3 v0.3.2+) — the parent `.scriptreetree`'s
+   own list, applied to every tool launched through that tree.
+4. **Global PATH-prepend** (Settings).
+5. The original `PATH` from `os.environ`.
+
+So tool-level `./vendor`, config-level `./debug-bin`, and a tree-level
+`./shared/bin` produce a PATH that starts with:
+
+```
+./vendor ; ./debug-bin ; ./shared/bin ; <global PATH-prepend> ; <original PATH>
+```
+
+Tick **Global PATH overrides tool / config PATH** in Settings to
+move global to the front:
+
+```
+<global PATH-prepend> ; ./vendor ; ./debug-bin ; ./shared/bin ; <original PATH>
+```
+
+(Note the asymmetry between env vars and PATH: for env vars, **config**
+wins over tool because dict-update applies it last; for PATH search,
+**tool** wins over config because it's first in the prepend list. This
+matches the documented intent on each layer's docstring.)
 
 ## Relative paths
 

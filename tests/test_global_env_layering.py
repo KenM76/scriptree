@@ -402,38 +402,31 @@ class TestBuildFullArgvForwardsGlobals:
 
 
 # ===========================================================================
-# 5. Regression pin — TreeDef.path_prepend has NO run-time wiring (yet)
+# 5. TreeDef.path_prepend run-time wiring (v0.3.2+ — closed the gap)
 # ===========================================================================
 
-class TestTreePathPrependDeadCodeGap:
-    """``TreeDef.path_prepend`` is a real field that round-trips
-    through ``save_tree`` / ``load_tree`` and that the
-    missing-executable recovery dialog can append to via
-    ``add_to_scriptreetree_path_prepend``.  But — as of v0.3.1 — it
-    has **no run-time wiring**: ``build_env`` accepts no
-    ``tree_path_prepend`` argument, ``build_full_argv`` passes
-    nothing of the sort, and ``MainWindow._show_runner`` /
-    ``ToolRunnerView._start_run`` never read the launcher's tree
-    field.  Entries the user adds to a tree's ``path_prepend`` are
-    silently dropped at run time.
+class TestTreePathPrependWiring:
+    """``TreeDef.path_prepend`` is wired through to the spawned child's
+    PATH as of v0.3.2:
 
-    These tests **pin the broken state** so any future fix flips
-    them red and the change is intentional.  When the gap is
-    fixed:
+    * ``build_env`` accepts a ``tree_path_prepend=`` kwarg and slots it
+      between local (tool + cfg) and global in the prepend list.
+    * ``build_full_argv`` forwards it.
+    * ``TreeLauncherView.tree_path_prepend()`` exposes the loaded
+      tree's list (empty when no tree is loaded).
+    * ``MainWindow._show_runner`` calls
+      ``ToolRunnerView.set_tree_path_prepend`` every time it surfaces
+      a tool, so cached runners stay in sync with whichever tree
+      the launcher is currently showing.
 
-    * Replace ``test_tree_path_prepend_does_NOT_reach_build_env``
-      with a positive test that ``tree_path_prepend=...`` reaches
-      ``build_env``.
-    * Drop ``test_build_env_has_no_tree_path_prepend_kwarg`` (it
-      will fail with the new signature, which is the desired
-      signal).
+    These tests pin the v0.3.2 contract — the previous gap-pin
+    tests in v0.3.1 (now removed) checked the dead-code state.
     """
 
     def test_tree_path_prepend_round_trips_to_disk(
         self, tmp_path: Path,
     ) -> None:
         """Confirm the field is real — saved AND reloaded."""
-        # Need a leaf so save_tree doesn't reject the empty tree.
         tool_path = tmp_path / "leaf.scriptree"
         save_tool(_tool(), tool_path)
         tree = TreeDef(
@@ -448,47 +441,184 @@ class TestTreePathPrependDeadCodeGap:
         loaded = load_tree(tree_path)
         assert loaded.path_prepend == ["C:/Vendor/bin", "./relative/dir"]
 
-    def test_build_env_has_no_tree_path_prepend_kwarg(self) -> None:
-        """Pin: ``build_env``'s signature does not accept any
-        tree-level path_prepend.  When this test fails, the
-        dead-code gap has been closed — update the layer in step."""
+    def test_build_env_accepts_tree_path_prepend(self) -> None:
         import inspect
         sig = inspect.signature(build_env)
-        assert "tree_path_prepend" not in sig.parameters
+        assert "tree_path_prepend" in sig.parameters
+        # Default must be None so legacy callers stay valid.
+        assert sig.parameters["tree_path_prepend"].default is None
 
-    def test_build_full_argv_has_no_tree_path_prepend_kwarg(self) -> None:
-        """Same pin for build_full_argv."""
+    def test_build_full_argv_accepts_tree_path_prepend(self) -> None:
         import inspect
         sig = inspect.signature(build_full_argv)
-        assert "tree_path_prepend" not in sig.parameters
+        assert "tree_path_prepend" in sig.parameters
+        assert sig.parameters["tree_path_prepend"].default is None
 
-    def test_tree_path_prepend_does_NOT_reach_resolved_command(
-        self, tmp_path: Path,
-    ) -> None:
-        """The user spec consequence: write entries into the tree's
-        path_prepend, run a tool from inside that tree, and the
-        running child's PATH does NOT contain those entries.
+    def test_tree_path_prepend_reaches_built_env(self) -> None:
+        """An entry passed via ``tree_path_prepend=`` shows up in
+        the merged env's PATH."""
+        tree_dir = os.path.abspath("/tree/bin")
+        env = build_env(
+            _tool(),
+            base_env={"PATH": ""},
+            tree_path_prepend=[tree_dir],
+        )
+        assert env is not None
+        assert tree_dir in env["PATH"]
 
-        When this test fails, tree.path_prepend has gained run-time
-        wiring (good!) and the gap test should be replaced with a
-        positive test."""
-        # Build a tree with a path_prepend entry.
-        tool_path = tmp_path / "leaf.scriptree"
-        save_tool(_tool(path_prepend=[]), tool_path)
-        # Note: the tree itself carries the entry, but no API today
-        # forwards it to build_full_argv.  We exercise the most
-        # public entry-point (build_full_argv) the same way the
-        # runner does and confirm the entry doesn't appear.
-        from scriptree.core.io import load_tool
-        tool = load_tool(tool_path)
+    def test_tree_path_prepend_default_priority(self) -> None:
+        """Documented order [tool, cfg, tree, global, base]: tree
+        comes after local (tool + cfg) but before global."""
+        n = os.path.abspath
+        env = build_env(
+            _tool(path_prepend=[n("/tool")]),
+            config_path_prepend=[n("/cfg")],
+            base_env={"PATH": n("/base")},
+            tree_path_prepend=[n("/tree")],
+            global_path_prepend=[n("/glb")],
+        )
+        assert env is not None
+        parts = env["PATH"].split(os.pathsep)
+        assert parts[0] == n("/tool")
+        assert parts[1] == n("/cfg")
+        assert parts[2] == n("/tree")
+        assert parts[3] == n("/glb")
+        assert parts[4] == n("/base")
+
+    def test_tree_path_prepend_with_global_path_overrides(self) -> None:
+        """When global_path_overrides=True the order becomes
+        [global, tool, cfg, tree, base] — global wins, but tree
+        still comes after local entries."""
+        n = os.path.abspath
+        env = build_env(
+            _tool(path_prepend=[n("/tool")]),
+            config_path_prepend=[n("/cfg")],
+            base_env={"PATH": n("/base")},
+            tree_path_prepend=[n("/tree")],
+            global_path_prepend=[n("/glb")],
+            global_path_overrides=True,
+        )
+        assert env is not None
+        parts = env["PATH"].split(os.pathsep)
+        assert parts[0] == n("/glb")
+        assert parts[1] == n("/tool")
+        assert parts[2] == n("/cfg")
+        assert parts[3] == n("/tree")
+        assert parts[4] == n("/base")
+
+    def test_tree_path_prepend_alone_triggers_non_none(self) -> None:
+        """tree_path_prepend on its own is reason enough to
+        materialise an env dict (matches the global_env / global_path
+        early-out fix)."""
+        env = build_env(
+            _tool(),
+            base_env={"PATH": ""},
+            tree_path_prepend=[os.path.abspath("/tree")],
+        )
+        assert env is not None
+        assert os.path.abspath("/tree") in env["PATH"]
+
+    def test_build_full_argv_forwards_tree_path_prepend(self) -> None:
+        tree_dir = os.path.abspath("/tree/bin")
         cmd = build_full_argv(
-            tool,
+            _tool(),
             {"name": "x"},
             extras=[],
-            # The runner has no way to forward a tree's path_prepend
-            # to this call, so we don't pass anything.  When wiring
-            # is added a new kwarg will appear and this test should
-            # become a positive assertion.
+            tree_path_prepend=[tree_dir],
         )
-        # No env at all (no overrides anywhere) → cmd.env is None.
-        assert cmd.env is None
+        assert cmd.env is not None
+        assert tree_dir in cmd.env["PATH"]
+
+
+class TestTreeLauncherViewExposesPathPrepend:
+    """``TreeLauncherView.tree_path_prepend()`` is the public API
+    ``MainWindow._show_runner`` reads at run time.  Empty when no
+    tree is loaded; populated when a loaded tree carries entries."""
+
+    @staticmethod
+    def _qapp():
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    def test_empty_when_no_tree_loaded(self) -> None:
+        self._qapp()
+        from scriptree.ui.tree_view import TreeLauncherView
+        view = TreeLauncherView()
+        assert view.tree_path_prepend() == []
+
+    def test_returns_loaded_tree_paths(self, tmp_path: Path) -> None:
+        self._qapp()
+        from scriptree.core.io import save_tool, save_tree
+        from scriptree.ui.tree_view import TreeLauncherView
+
+        tool_path = tmp_path / "leaf.scriptree"
+        save_tool(_tool(), tool_path)
+        tree = TreeDef(
+            name="t",
+            nodes=[TreeNode(type="leaf", path=str(tool_path))],
+            path_prepend=["C:/Vendor/bin"],
+        )
+        tree_path = tmp_path / "demo.scriptreetree"
+        save_tree(tree, tree_path)
+
+        view = TreeLauncherView()
+        view.load(str(tree_path))
+        assert view.tree_path_prepend() == ["C:/Vendor/bin"]
+
+
+class TestMainWindowForwardsTreePathPrepend:
+    """End-to-end: MainWindow → ToolRunnerView setter wiring."""
+
+    def test_show_runner_sets_tree_path_on_runner(
+        self, tmp_path: Path,
+    ) -> None:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from scriptree.core.io import load_tool, save_tool, save_tree
+        from scriptree.ui.main_window import MainWindow
+
+        QApplication.instance() or QApplication([])
+        QMessageBox.warning = staticmethod(  # type: ignore[assignment]
+            lambda *a, **kw: QMessageBox.StandardButton.Ok
+        )
+
+        # Save a leaf .scriptree and a wrapping tree with path_prepend.
+        leaf = tmp_path / "leaf.scriptree"
+        save_tool(_tool(), leaf)
+        tree = TreeDef(
+            name="t",
+            nodes=[TreeNode(type="leaf", path=str(leaf))],
+            path_prepend=["C:/Vendor/bin"],
+        )
+        tree_path = tmp_path / "demo.scriptreetree"
+        save_tree(tree, tree_path)
+
+        w = MainWindow()
+        w._launcher.load(str(tree_path))
+        # Open the leaf through the tree by selecting it programmatically.
+        w._show_runner(load_tool(str(leaf)), str(leaf))
+
+        runner = w._active_runner
+        assert runner is not None
+        assert runner.tree_path_prepend() == ["C:/Vendor/bin"]
+
+    def test_show_runner_clears_tree_path_when_no_tree(
+        self, tmp_path: Path,
+    ) -> None:
+        """A bare runner (no tree loaded) sees an empty list."""
+        from PySide6.QtWidgets import QApplication, QMessageBox
+        from scriptree.core.io import load_tool, save_tool
+        from scriptree.ui.main_window import MainWindow
+
+        QApplication.instance() or QApplication([])
+        QMessageBox.warning = staticmethod(  # type: ignore[assignment]
+            lambda *a, **kw: QMessageBox.StandardButton.Ok
+        )
+
+        leaf = tmp_path / "leaf.scriptree"
+        save_tool(_tool(), leaf)
+        w = MainWindow()
+        w._show_runner(load_tool(str(leaf)), str(leaf))
+
+        runner = w._active_runner
+        assert runner is not None
+        assert runner.tree_path_prepend() == []

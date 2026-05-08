@@ -838,6 +838,13 @@ class ToolRunnerView(QWidget):
         self._widgets: dict[str, ParamWidget] = {}
         self._thread: QThread | None = None
         self._worker: _RunWorker | None = None
+        # Parent-tree path_prepend (V3 v0.3.2+).  Empty list when this
+        # tool was not opened through a loaded ``.scriptreetree``.
+        # Updated by ``MainWindow._show_runner`` every time the runner
+        # surfaces, so a runner cached in ``MainWindow._runners`` picks
+        # up tree-level path edits across re-opens.  See
+        # ``set_tree_path_prepend``.
+        self._tree_path_prepend: list[str] = []
 
         # Editable-preview state.
         self._extras: list[str] = []
@@ -928,6 +935,26 @@ class ToolRunnerView(QWidget):
         to the runner's internal splitter.
         """
         return self._bottom_pane
+
+    def set_tree_path_prepend(self, paths: list[str] | None) -> None:
+        """Set the parent-tree ``path_prepend`` list for this runner.
+
+        Called by ``MainWindow._show_runner`` whenever it surfaces a
+        tool that was opened through a loaded ``.scriptreetree``.
+        Pass ``None`` or ``[]`` to clear (e.g. when the same runner
+        is later reused for a tool opened directly without a tree).
+
+        The value is consumed at run time inside ``_start_run`` and
+        forwarded to ``build_full_argv`` as ``tree_path_prepend=``,
+        so changes take effect on the next Run click.  Doesn't
+        affect the editable live-preview text box (the preview only
+        renders argv, not env).
+        """
+        self._tree_path_prepend = list(paths or [])
+
+    def tree_path_prepend(self) -> list[str]:
+        """Return the runner's current parent-tree path_prepend list."""
+        return list(self._tree_path_prepend)
 
     def _build_output_panel(self) -> QWidget:
         """Build the output pane as a standalone widget.
@@ -2042,6 +2069,7 @@ class ToolRunnerView(QWidget):
                 global_env_overrides=_g_env_override,
                 global_path_prepend=_g_path or None,
                 global_path_overrides=_g_path_override,
+                tree_path_prepend=self._tree_path_prepend or None,
             )
         except RunnerError as e:
             QMessageBox.warning(self, "Validation error", str(e))
