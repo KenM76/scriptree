@@ -2077,13 +2077,18 @@ class ToolRunnerView(QWidget):
         if self._file_path:
             from ..core.permissions import load_permissions
             perms = load_permissions(file_path=self._file_path)
-        warnings = sanitize_all_values(
+        # Use the detailed sanitizer so each warning carries the
+        # source field id — needed for the v0.3.4 per-field
+        # suppression feature.
+        from ..core.sanitize import sanitize_all_values_detailed
+        detailed_warnings: list[tuple[str, str]] = sanitize_all_values_detailed(
             {k: str(v) for k, v in values.items() if v},
             path_fields=path_ids,
             labels=labels,
             allow_traversal=perms.can("allow_path_traversal"),
             allow_sensitive=perms.can("access_sensitive_paths"),
         )
+        warnings = [w for w, _fid in detailed_warnings]
 
         # ``allow_symlinks`` capability gate (V3 v0.3.3): when DENIED,
         # check the resolved executable path for symlink components
@@ -2106,7 +2111,11 @@ class ToolRunnerView(QWidget):
                         allow_symlinks=False,
                         allow_traversal=True,  # already checked above
                     )
-                    warnings.extend(sym_warnings)
+                    # Symlink warnings are tagged with the synthetic
+                    # field id ``__exe__`` so per-field mute can target
+                    # them.
+                    for w in sym_warnings:
+                        detailed_warnings.append((w, "__exe__"))
             except (OSError, RuntimeError, ValueError):
                 # Resolution failed (broken symlink, network drive
                 # offline, etc.) — skip silently rather than block.
@@ -2121,16 +2130,47 @@ class ToolRunnerView(QWidget):
             from ..core.sanitize import sanitize_value
             for token in self._extras:
                 r = sanitize_value(token, field_label="Extra arguments")
-                warnings.extend(r.warnings)
+                for w in r.warnings:
+                    detailed_warnings.append((w, "__extras__"))
             cmd_text = self._live_cmd.toPlainText().strip()
             if cmd_text:
                 r = sanitize_value(cmd_text, field_label="Command line")
-                warnings.extend(r.warnings)
+                for w in r.warnings:
+                    detailed_warnings.append((w, "__cmdline__"))
 
-        if warnings:
+        # ``suppress_sanitization_warnings`` filtering (V3 v0.3.4).
+        # Three suppression scopes:
+        #   1. Globally muted    -> skip dialog entirely.
+        #   2. This tool muted   -> skip dialog entirely.
+        #   3. Per-field muted   -> drop those warnings; if none
+        #                           remain after the drop, also skip.
+        from ..core import sanitize_suppression as _supp
+        if detailed_warnings:
+            if _supp.should_skip_dialog(self._file_path):
+                detailed_warnings = []
+            else:
+                texts = [w for w, _f in detailed_warnings]
+                fids = [f for _w, f in detailed_warnings]
+                kept_texts = _supp.filter_warnings(
+                    self._file_path, texts, fids,
+                )
+                if len(kept_texts) != len(detailed_warnings):
+                    kept_q: list[str] = list(kept_texts)
+                    new_pairs: list[tuple[str, str]] = []
+                    for text, fid in detailed_warnings:
+                        if kept_q and kept_q[0] == text:
+                            new_pairs.append((text, fid))
+                            kept_q.pop(0)
+                    detailed_warnings = new_pairs
+
+        warnings = [w for w, _f in detailed_warnings]
+
+        if detailed_warnings:
+            warning_fids = [f for _w, f in detailed_warnings]
             detail = "\n".join(f"\u2022 {w}" for w in warnings)
             if not self._show_injection_warning(
-                detail, editor_protection, perms
+                detail, editor_protection, perms,
+                warning_fids=warning_fids,
             ):
                 return
 
@@ -2816,28 +2856,36 @@ class ToolRunnerView(QWidget):
         detail: str,
         editor_protection: bool,
         perms: Any,
+        *,
+        warning_fids: list[str] | None = None,
     ) -> bool:
-        """Show the injection warning dialog. Returns True to proceed."""
-        from PySide6.QtWidgets import QApplication
+        """Show the injection warning dialog. Returns True to proceed.
 
-        if editor_protection:
-            # Permission file present — simple warning.
-            reply = QMessageBox.warning(
-                self,
-                "Suspicious input detected",
-                "The following inputs contain potentially unsafe "
-                "characters:\n\n" + detail + "\n\n"
-                "Do you want to continue anyway?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            return reply == QMessageBox.StandardButton.Yes
+        v0.3.4+ — when the ``suppress_sanitization_warnings``
+        capability is granted, three "Don't warn again" checkboxes
+        appear at the bottom of the dialog:
 
-        # Permission file missing — show instructions with path and copy button.
-        perm_dir = perms.app_permissions_dir or "(permissions folder not found)"
-        filename = "injection_protection_on_editor"
+        * **For these field(s)** — silence further warnings whose
+          source field is in ``warning_fids`` (in this same tool).
+        * **For this tool** — silence every warning from this tool.
+        * **For all tools** — global mute.
 
+        On Yes / Proceed the chosen scopes are written to QSettings
+        via the ``sanitize_suppression`` module.  Re-enable later
+        via Edit -> Sanitization warnings... in the main window.
+        """
+        from PySide6.QtWidgets import (
+            QApplication,
+            QCheckBox,
+            QDialogButtonBox,
+        )
+        from .permission_guards import perm_check
+        from ..core import sanitize_suppression as _supp
+
+        # Build a custom dialog so we can append the suppression
+        # checkboxes regardless of editor_protection mode.  The
+        # editor-protection-missing branch's permission-file
+        # instructions get folded in conditionally.
         dlg = QDialog(self)
         dlg.setWindowTitle("Suspicious input detected")
         dlg.setMinimumWidth(480)
@@ -2850,39 +2898,105 @@ class ToolRunnerView(QWidget):
         detail_label.setWordWrap(True)
         lay.addWidget(detail_label)
 
-        lay.addWidget(QLabel(
-            "\nTo enable injection protection on the command line "
-            "editor and extra arguments (blocking these at the "
-            "source), add this file to your permissions folder:"
-        ))
+        if not editor_protection:
+            # Permission file missing — show instructions with path
+            # and copy button so the IT admin can opt in to editor
+            # protection.
+            perm_dir = perms.app_permissions_dir or "(permissions folder not found)"
+            filename = "injection_protection_on_editor"
 
-        # Copyable filename.
-        file_row = QHBoxLayout()
-        file_field = QLineEdit(filename)
-        file_field.setReadOnly(True)
-        file_row.addWidget(file_field, stretch=1)
-        btn_copy_name = QPushButton("Copy name")
-        btn_copy_name.clicked.connect(
-            lambda: QApplication.clipboard().setText(filename)
-        )
-        file_row.addWidget(btn_copy_name)
-        lay.addLayout(file_row)
+            lay.addWidget(QLabel(
+                "\nTo enable injection protection on the command line "
+                "editor and extra arguments (blocking these at the "
+                "source), add this file to your permissions folder:"
+            ))
 
-        # Permissions path with open-folder button.
-        path_row = QHBoxLayout()
-        path_field = QLineEdit(perm_dir)
-        path_field.setReadOnly(True)
-        path_row.addWidget(path_field, stretch=1)
-        btn_open_folder = QPushButton("Open folder")
-        btn_open_folder.clicked.connect(
-            lambda: self._open_folder_in_explorer(perm_dir)
-        )
-        path_row.addWidget(btn_open_folder)
-        lay.addLayout(path_row)
+            file_row = QHBoxLayout()
+            file_field = QLineEdit(filename)
+            file_field.setReadOnly(True)
+            file_row.addWidget(file_field, stretch=1)
+            btn_copy_name = QPushButton("Copy name")
+            btn_copy_name.clicked.connect(
+                lambda: QApplication.clipboard().setText(filename)
+            )
+            file_row.addWidget(btn_copy_name)
+            lay.addLayout(file_row)
+
+            path_row = QHBoxLayout()
+            path_field = QLineEdit(perm_dir)
+            path_field.setReadOnly(True)
+            path_row.addWidget(path_field, stretch=1)
+            btn_open_folder = QPushButton("Open folder")
+            btn_open_folder.clicked.connect(
+                lambda: self._open_folder_in_explorer(perm_dir)
+            )
+            path_row.addWidget(btn_open_folder)
+            lay.addLayout(path_row)
+
+        # ── v0.3.4 suppression checkboxes ─────────────────────────
+        # Three "Don't warn again" scopes.  Each only appears when
+        # the suppress_sanitization_warnings capability is granted.
+        # The per-field box is also gated on having ``warning_fids``
+        # data — without it we have nothing to silence at the field
+        # granularity.
+        chk_field: QCheckBox | None = None
+        chk_tool: QCheckBox | None = None
+        chk_global: QCheckBox | None = None
+        if perm_check("suppress_sanitization_warnings"):
+            unique_fids = sorted({
+                f for f in (warning_fids or [])
+                if f and not f.startswith("__")
+            }) if warning_fids else []
+            other_fid_count = sum(
+                1 for f in (warning_fids or [])
+                if f and f.startswith("__")
+            )
+
+            lay.addWidget(QLabel(
+                "\n<b>Don't warn me again</b> "
+                "(applies on Proceed):"
+            ))
+            if unique_fids:
+                if len(unique_fids) == 1:
+                    field_label = f"For field '{unique_fids[0]}'"
+                else:
+                    field_label = (
+                        f"For these {len(unique_fids)} field(s)"
+                    )
+                if other_fid_count:
+                    field_label += (
+                        f" (warnings from extras / cmd-line / "
+                        f"executable will keep showing)"
+                    )
+                chk_field = QCheckBox(field_label)
+                chk_field.setToolTip(
+                    "Silence further warnings about these specific "
+                    "fields in this tool only.  Re-enable via "
+                    "Edit -> Sanitization warnings..."
+                )
+                lay.addWidget(chk_field)
+            chk_tool = QCheckBox("For this tool (every field)")
+            chk_tool.setToolTip(
+                "Silence every sanitization warning from this tool. "
+                "Re-enable via Edit -> Sanitization warnings..."
+            )
+            chk_tool.setEnabled(bool(self._file_path))
+            if not self._file_path:
+                chk_tool.setToolTip(
+                    chk_tool.toolTip()
+                    + "\n(Disabled: this tool has no on-disk path.)"
+                )
+            lay.addWidget(chk_tool)
+            chk_global = QCheckBox("For all tools, everywhere")
+            chk_global.setToolTip(
+                "Silence every sanitization warning across the whole "
+                "ScripTree install.  Re-enable via "
+                "Edit -> Sanitization warnings..."
+            )
+            lay.addWidget(chk_global)
 
         lay.addWidget(QLabel("\nDo you want to continue anyway?"))
 
-        from PySide6.QtWidgets import QDialogButtonBox
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Yes
             | QDialogButtonBox.StandardButton.No
@@ -2891,7 +3005,34 @@ class ToolRunnerView(QWidget):
         btns.rejected.connect(dlg.reject)
         lay.addWidget(btns)
 
-        return dlg.exec() == QDialog.DialogCode.Accepted
+        proceed = dlg.exec() == QDialog.DialogCode.Accepted
+
+        if proceed:
+            # Apply the user's choices BEFORE returning so the next
+            # Run picks them up.  Only persist on Yes — Cancel / No
+            # leaves the suppression state unchanged.
+            if chk_global is not None and chk_global.isChecked():
+                _supp.set_globally_muted(True)
+            if (
+                chk_tool is not None
+                and chk_tool.isChecked()
+                and self._file_path
+            ):
+                _supp.mute_tool(self._file_path)
+            if (
+                chk_field is not None
+                and chk_field.isChecked()
+                and self._file_path
+                and warning_fids
+            ):
+                # Mute every concrete (non-synthetic) field id that
+                # tripped this dialog.
+                concrete = {
+                    f for f in warning_fids
+                    if f and not f.startswith("__")
+                }
+                _supp.mute_fields_for_tool(self._file_path, concrete)
+        return proceed
 
     @staticmethod
     def _open_folder_in_explorer(path: str) -> None:

@@ -96,3 +96,10 @@ design.
   required new code paths plumbed through `sanitize_all_values` and
   `validate_resolved_path`.
   → `rags/lessons/capability_wiring_full_audit.md`
+- [v3-architecture] **sanitization_warning_suppression**: v0.3.4
+  added three "Don't warn me again" checkboxes to the injection
+  popup (per-field / per-tool / global), all gated by a single new
+  ``suppress_sanitization_warnings`` capability.  Storage in
+  QSettings via `core/sanitize_suppression.py`; re-enable dialog
+  under Edit ▸ Sanitization warnings...  +22 tests.
+  → `rags/lessons/sanitization_warning_suppression.md`

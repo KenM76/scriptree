@@ -400,6 +400,20 @@ class MainWindow(QMainWindow):
         m_edit.addAction(act_edit_current)
 
         m_edit.addSeparator()
+        # ``Sanitization warnings...`` (V3 v0.3.4) — view + re-enable
+        # the global / per-tool / per-field mutes set via the three
+        # checkboxes in the injection-warning dialog.  Always
+        # available regardless of permission state — re-enabling is
+        # the safe direction (more warnings, not fewer).
+        act_supp = QAction("Sani&tization warnings...", self)
+        act_supp.setToolTip(
+            "View and re-enable sanitization warnings you previously "
+            "dismissed via the 'Don't warn again' checkboxes."
+        )
+        act_supp.triggered.connect(self._open_sanitization_suppression)
+        m_edit.addAction(act_supp)
+
+        m_edit.addSeparator()
         act_settings = QAction("&Settings...", self)
         act_settings.triggered.connect(self._open_settings)
         # ``access_settings`` capability gate (V3 v0.3.3) — when
@@ -1423,6 +1437,15 @@ class MainWindow(QMainWindow):
         win.show()
 
     # --- settings dialog ------------------------------------------------------
+
+    def _open_sanitization_suppression(self) -> None:
+        """Open the dialog to view + re-enable suppressed sanitization
+        warnings (V3 v0.3.4)."""
+        from .sanitization_suppression_dialog import (
+            SanitizationSuppressionDialog,
+        )
+        dlg = SanitizationSuppressionDialog(parent=self)
+        dlg.exec()
 
     def _open_settings(self) -> None:
         """Open the application settings dialog."""

@@ -234,6 +234,17 @@ CAPABILITIES: dict[str, str] = {
         "Allow tools to read user input from stdin while running "
         "(query-replace style interactive prompt loop)"
     ),
+    # Sanitization-warning suppression (v0.3.4).  Gates the three
+    # "Don't warn again" checkboxes (per-field / per-tool / global)
+    # in the injection-warning dialog.  When the file is missing
+    # or read-only, the checkboxes don't appear — every flagged Run
+    # forces the user to read and OK the dialog.  When granted, the
+    # user can opt out per-field, per-tool, or globally.  Re-enable
+    # via Edit ▸ Sanitization warnings... in the main window.
+    "suppress_sanitization_warnings": (
+        "Allow the user to dismiss future sanitization warnings "
+        "(per-field / per-tool / global checkboxes in the warning dialog)"
+    ),
 }
 
 

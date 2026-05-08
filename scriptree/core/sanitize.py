@@ -185,6 +185,41 @@ def sanitize_value(
     return SanitizeResult(value=value, warnings=warnings)
 
 
+def sanitize_all_values_detailed(
+    values: dict[str, str],
+    path_fields: set[str] | None = None,
+    labels: dict[str, str] | None = None,
+    *,
+    allow_traversal: bool = False,
+    allow_sensitive: bool = False,
+) -> list[tuple[str, str]]:
+    """Like ``sanitize_all_values`` but returns parallel
+    ``(warning_text, field_id)`` tuples (V3 v0.3.4+).
+
+    Used by the runner's injection-warning dialog to power the
+    per-field "Don't warn again" checkbox: knowing which param
+    each warning came from lets us mute future warnings about that
+    specific field without silencing the whole tool.
+    """
+    out: list[tuple[str, str]] = []
+    path_ids = path_fields or set()
+    label_map = labels or {}
+
+    for pid, val in values.items():
+        if not isinstance(val, str):
+            continue
+        result = sanitize_value(
+            val,
+            is_path=pid in path_ids,
+            field_label=label_map.get(pid, pid),
+            allow_traversal=allow_traversal,
+            allow_sensitive=allow_sensitive,
+        )
+        for w in result.warnings:
+            out.append((w, pid))
+    return out
+
+
 def sanitize_all_values(
     values: dict[str, str],
     path_fields: set[str] | None = None,

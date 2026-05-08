@@ -137,3 +137,9 @@ gives the per-topic slice.
   perm_check); +25 tests; 35/35 wired.  Path-security trio plumbed
   through sanitize_all_values + validate_resolved_path.
   → `rags/lessons/capability_wiring_full_audit.md`
+- [v3-architecture] **sanitization_warning_suppression**: v0.3.4
+  added three "Don't warn me again" checkboxes to the injection
+  popup (per-field / per-tool / global), gated by one new
+  `suppress_sanitization_warnings` capability.  QSettings storage
+  + Edit ▸ Sanitization warnings... re-enable dialog.
+  → `rags/lessons/sanitization_warning_suppression.md`
