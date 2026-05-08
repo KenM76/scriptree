@@ -538,6 +538,13 @@ class ToolEditorView(QWidget):
             self._btn_save.setToolTip("File is read-only.")
             self._btn_save_as.setEnabled(False)
             self._btn_save_as.setToolTip("File is read-only.")
+        # Capability gates (V3 v0.3.3) — independent of read-only:
+        # an admin can deny save / save-as without making files
+        # actually read-only on disk.  ``apply_widget_perm`` is a
+        # no-op when the capability is granted.
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(self._btn_save, "save_scriptree")
+        apply_widget_perm(self._btn_save_as, "save_as_scriptree")
 
         self._update_preview()
 

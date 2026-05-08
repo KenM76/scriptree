@@ -229,12 +229,15 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         m_file = self.menuBar().addMenu("&File")
 
+        from .permission_guards import apply_action_perm
         act_new_probe = QAction("&New tool from executable...", self)
         act_new_probe.triggered.connect(self._new_from_executable)
+        apply_action_perm(act_new_probe, "create_new_scriptree")
         m_file.addAction(act_new_probe)
 
         act_new_blank = QAction("New &blank tool", self)
         act_new_blank.triggered.connect(self._new_blank)
+        apply_action_perm(act_new_blank, "create_new_scriptree")
         m_file.addAction(act_new_blank)
 
         m_file.addSeparator()
@@ -259,6 +262,7 @@ class MainWindow(QMainWindow):
 
         act_new_tree = QAction("New scriptree &tree", self)
         act_new_tree.triggered.connect(self._new_tree)
+        apply_action_perm(act_new_tree, "create_new_scriptreetree")
         m_file.addAction(act_new_tree)
 
         # Save tool (.scriptree) — enabled while the tool editor is active.
@@ -398,6 +402,12 @@ class MainWindow(QMainWindow):
         m_edit.addSeparator()
         act_settings = QAction("&Settings...", self)
         act_settings.triggered.connect(self._open_settings)
+        # ``access_settings`` capability gate (V3 v0.3.3) — when
+        # denied, the menu action is greyed out and the tooltip
+        # explains why.  ``_open_settings`` itself adds a defensive
+        # call-time check for keyboard / programmatic access.
+        from .permission_guards import apply_action_perm
+        apply_action_perm(act_settings, "access_settings")
         m_edit.addAction(act_settings)
 
         # View menu — toggle dock visibility via QAds toggle actions.
@@ -812,12 +822,29 @@ class MainWindow(QMainWindow):
         )
 
     def _save_tree(self) -> None:
+        # ``save_scriptreetree`` capability gate (V3 v0.3.3) — runtime
+        # check defends against the Ctrl+S keyboard shortcut bypassing
+        # the menu's ``setEnabled(False)``.
+        from .permission_guards import perm_check
+        if not perm_check("save_scriptreetree"):
+            self.statusBar().showMessage(
+                "Save tree disabled by IT (capability: save_scriptreetree).",
+                5000,
+            )
+            return
         if self._launcher.save():
             self.statusBar().showMessage("Tree saved.")
 
     def _save_tree_as(self) -> None:
         """Prompt for a new ``.scriptreetree`` path and save the
         loaded tree there.  Delegates to ``TreeLauncherView.save_as``."""
+        from .permission_guards import perm_check
+        if not perm_check("save_as_scriptreetree"):
+            self.statusBar().showMessage(
+                "Save tree as disabled by IT (capability: save_as_scriptreetree).",
+                5000,
+            )
+            return
         if self._launcher.save_as():
             path = self._launcher.tree_file()
             if path is not None:
@@ -826,6 +853,13 @@ class MainWindow(QMainWindow):
 
     def _save_tool(self) -> None:
         """Save the active editor's .scriptree.  Disabled when no editor."""
+        from .permission_guards import perm_check
+        if not perm_check("save_scriptree"):
+            self.statusBar().showMessage(
+                "Save tool disabled by IT (capability: save_scriptree).",
+                5000,
+            )
+            return
         editor = self._active_editor
         if editor is None:
             self.statusBar().showMessage(
@@ -836,6 +870,13 @@ class MainWindow(QMainWindow):
 
     def _save_tool_as(self) -> None:
         """Save-As variant — prompts for a path even when one is set."""
+        from .permission_guards import perm_check
+        if not perm_check("save_as_scriptree"):
+            self.statusBar().showMessage(
+                "Save tool as disabled by IT (capability: save_as_scriptree).",
+                5000,
+            )
+            return
         editor = self._active_editor
         if editor is None:
             self.statusBar().showMessage(
@@ -1098,13 +1139,19 @@ class MainWindow(QMainWindow):
             )
 
     def _on_tree_modified(self, dirty: bool) -> None:
+        # Capability gates (V3 v0.3.3): the dynamic "have a tree
+        # loaded" state only enables the action when the corresponding
+        # capability is granted.  When denied, the action stays
+        # disabled regardless of the load state.
+        from .permission_guards import perm_check
+        have_tree = self._launcher.tree_file() is not None or dirty
         self._act_save_tree.setEnabled(
-            self._launcher.tree_file() is not None or dirty
+            have_tree and perm_check("save_scriptreetree")
         )
         # "Save tree as..." just needs *some* tree to be loaded — even
         # an unsaved freshly-created tree is a valid Save-As target.
         self._act_save_tree_as.setEnabled(
-            self._launcher.tree_file() is not None or dirty
+            have_tree and perm_check("save_as_scriptreetree")
         )
         self._refresh_ring_actions()
 
@@ -1124,10 +1171,20 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh_tool_save_actions(self) -> None:
-        """Sync Save tool / Save tool As enabled state to the editor."""
+        """Sync Save tool / Save tool As enabled state to the editor.
+
+        Capability gates (V3 v0.3.3): editor-active is necessary but
+        not sufficient — ``save_scriptree`` and ``save_as_scriptree``
+        must also be granted.
+        """
+        from .permission_guards import perm_check
         editor_active = self._active_editor is not None
-        self._act_save_tool.setEnabled(editor_active)
-        self._act_save_tool_as.setEnabled(editor_active)
+        self._act_save_tool.setEnabled(
+            editor_active and perm_check("save_scriptree")
+        )
+        self._act_save_tool_as.setEnabled(
+            editor_active and perm_check("save_as_scriptree")
+        )
 
     def _confirm_discard_tree(self) -> bool:
         if not self._launcher.is_dirty():
@@ -1369,6 +1426,14 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         """Open the application settings dialog."""
+        from .permission_guards import perm_check
+        if not perm_check("access_settings"):
+            QMessageBox.warning(
+                self, "Settings not permitted",
+                "The Settings dialog is disabled by your administrator "
+                "(capability: access_settings).",
+            )
+            return
         from .settings_dialog import SettingsDialog
 
         dlg = SettingsDialog(self._settings, parent=self)

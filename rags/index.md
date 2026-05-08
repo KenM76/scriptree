@@ -131,3 +131,9 @@ gives the per-topic slice.
   (tool+cfg) and global; setter pattern needed because runners
   are cached across tree-load events.
   → `rags/lessons/tree_path_prepend_run_time_wiring.md`
+- [v3-architecture] **capability_wiring_full_audit**: v0.3.3 wired
+  every previously-unconsulted capability via a helper module
+  (apply_widget_perm / apply_action_perm / apply_text_readonly /
+  perm_check); +25 tests; 35/35 wired.  Path-security trio plumbed
+  through sanitize_all_values + validate_resolved_path.
+  → `rags/lessons/capability_wiring_full_audit.md`

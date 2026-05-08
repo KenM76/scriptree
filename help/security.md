@@ -10,6 +10,12 @@ that users and IT should be aware of.
 
 ## Overview of protections
 
+> **v0.3.3 update.** All 35 capability files in the permissions
+> registry are now actually consulted at runtime.  Previous releases
+> declared 21 of them but never enforced them — putting a read-only
+> `run_tools` file did nothing, etc.  v0.3.3 closed every gap (see
+> the wiring map at the bottom of `### All capability files`).
+
 | Layer | What it does |
 |---|---|
 | **Permissions system** | File-based capability control — denies actions by default |

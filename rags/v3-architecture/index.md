@@ -86,3 +86,13 @@ design.
   refreshed each `MainWindow._show_runner`.  Tree slots between
   local (tool+cfg) and global in the prepend list.
   → `rags/lessons/tree_path_prepend_run_time_wiring.md`
+- [v3-architecture] **capability_wiring_full_audit**: v0.3.3 wired
+  every previously-unconsulted capability in `CAPABILITIES`.  Helper
+  module `ui/permission_guards.py` (apply_widget_perm /
+  apply_action_perm / apply_text_readonly / perm_check) standardises
+  the gate pattern.  +25 tests; final tally is 35/35 wired (was 14
+  direct + 6 helper-mediated, 15 unwired).  Path-security trio
+  (allow_symlinks / allow_path_traversal / access_sensitive_paths)
+  required new code paths plumbed through `sanitize_all_values` and
+  `validate_resolved_path`.
+  → `rags/lessons/capability_wiring_full_audit.md`

@@ -187,8 +187,15 @@ class ReorderableParamForm(QListWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        # ``reorder_parameters`` capability gate (V3 v0.3.3) — when
+        # denied, the form list disables drag-drop entirely so users
+        # see-but-can't-rearrange parameters.  Default-allowed.
+        from .permission_guards import perm_check
+        if perm_check("reorder_parameters"):
+            self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+            self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        else:
+            self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -1279,6 +1286,13 @@ class ToolRunnerView(QWidget):
         self._live_cmd.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._live_cmd.textChanged.connect(self._on_live_cmd_text_changed)
         cmd_layout.addWidget(self._live_cmd)
+        # ``command_line_editor`` capability gate (V3 v0.3.3) — when
+        # denied, the live command box becomes read-only so the user
+        # can still see what's about to run but can't override.  No
+        # behavioural change on Run (validation still runs against
+        # the form-derived argv).
+        from .permission_guards import apply_text_readonly
+        apply_text_readonly(self._live_cmd, "command_line_editor")
         cmd_box.toggled.connect(
             lambda checked, opts=cmd_opts_wrapper, edit=self._live_cmd:
                 (opts.setVisible(checked), edit.setVisible(checked))
@@ -1361,12 +1375,19 @@ class ToolRunnerView(QWidget):
         )
         cfg_layout.addWidget(self._cfg_default_check)
 
+        # Configuration write buttons (V3 v0.3.3 capability gates):
+        # ``write_configurations`` (legacy umbrella) gates Save / Save
+        # As / Delete.  Per-scope gates layer on top — see
+        # ``_refresh_cfg_button_perms`` for the scope-aware logic
+        # that handles personal vs. shared sidecars.
+        from .permission_guards import apply_widget_perm
         self._btn_cfg_save = QPushButton("Save")
         self._btn_cfg_save.setToolTip(
             "Save the current form values into the selected configuration."
         )
         self._btn_cfg_save.clicked.connect(self._cfg_save)
         cfg_layout.addWidget(self._btn_cfg_save)
+        apply_widget_perm(self._btn_cfg_save, "write_configurations")
 
         self._btn_cfg_save_as = QPushButton("Save as...")
         self._btn_cfg_save_as.setToolTip(
@@ -1374,11 +1395,13 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_save_as.clicked.connect(self._cfg_save_as)
         cfg_layout.addWidget(self._btn_cfg_save_as)
+        apply_widget_perm(self._btn_cfg_save_as, "write_configurations")
 
         self._btn_cfg_delete = QPushButton("Delete")
         self._btn_cfg_delete.setToolTip("Delete the selected configuration.")
         self._btn_cfg_delete.clicked.connect(self._cfg_delete)
         cfg_layout.addWidget(self._btn_cfg_delete)
+        apply_widget_perm(self._btn_cfg_delete, "write_configurations")
 
         self._btn_cfg_edit = QPushButton("Edit...")
         self._btn_cfg_edit.setToolTip(
@@ -1386,6 +1409,10 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_edit.clicked.connect(self._cfg_edit)
         cfg_layout.addWidget(self._btn_cfg_edit)
+        # ``edit_configurations`` capability gate (V3 v0.3.3) — opens
+        # the rename / reorder popup; distinct from write
+        # (write = save values, edit = rearrange).
+        apply_widget_perm(self._btn_cfg_edit, "edit_configurations")
 
         self._btn_cfg_env = QPushButton("Env...")
         self._btn_cfg_env.setToolTip(
@@ -1395,6 +1422,9 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_env.clicked.connect(self._cfg_edit_env)
         cfg_layout.addWidget(self._btn_cfg_env)
+        # ``edit_environment`` capability gate (V3 v0.3.3).
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(self._btn_cfg_env, "edit_environment")
 
         self._btn_cfg_visibility = QPushButton("Visibility...")
         self._btn_cfg_visibility.setToolTip(
@@ -1404,6 +1434,8 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_visibility.clicked.connect(self._cfg_edit_visibility)
         cfg_layout.addWidget(self._btn_cfg_visibility)
+        # ``edit_visibility`` capability gate (V3 v0.3.3).
+        apply_widget_perm(self._btn_cfg_visibility, "edit_visibility")
 
         self._chk_prompt_creds = QCheckBox("Prompt for alternate credentials")
         self._chk_prompt_creds.setToolTip(
@@ -1413,6 +1445,10 @@ class ToolRunnerView(QWidget):
         )
         self._chk_prompt_creds.toggled.connect(self._on_prompt_creds_toggled)
         cfg_layout.addWidget(self._chk_prompt_creds)
+        # ``run_as_different_user`` capability gate (V3 v0.3.3) — when
+        # denied, the user can't even tick the box.  Enforced at run
+        # time in ``_start_run`` too for keyboard / programmatic.
+        apply_widget_perm(self._chk_prompt_creds, "run_as_different_user")
 
         layout.addWidget(self._cfg_widget)
 
@@ -1424,6 +1460,18 @@ class ToolRunnerView(QWidget):
         self._btn_run = QPushButton("Run")
         self._btn_run.setDefault(True)
         self._btn_run.clicked.connect(self._start_run)
+        # ``run_tools`` capability gate (V3 v0.3.3): when denied, the
+        # Run button stays disabled.  ``_start_run`` ALSO checks at
+        # call time so other entry points (keyboard shortcut, custom
+        # menu actions wired to "Run") are gated too.
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(
+            self._btn_run, "run_tools",
+            tooltip_when_denied=(
+                "Disabled by IT — running tools is not permitted "
+                "(capability: run_tools)."
+            ),
+        )
         action_row.addWidget(self._btn_run)
 
         self._btn_stop = QPushButton("Stop")
@@ -1994,6 +2042,17 @@ class ToolRunnerView(QWidget):
         return self._thread is not None
 
     def _start_run(self) -> None:
+        # ``run_tools`` capability gate (V3 v0.3.3) — call-time check
+        # so keyboard shortcuts and programmatic invocations are gated
+        # in addition to the already-greyed-out Run button.
+        from .permission_guards import perm_check
+        if not perm_check("run_tools"):
+            QMessageBox.warning(
+                self, "Run not permitted",
+                "Running tools is disabled by your administrator "
+                "(capability: run_tools).",
+            )
+            return
         if self._thread is not None:
             return  # run already in progress
 
@@ -2010,17 +2069,49 @@ class ToolRunnerView(QWidget):
             if p.type is ParamType.PATH
         }
         labels = {p.id: p.label for p in self._tool.params}
-        warnings = sanitize_all_values(
-            {k: str(v) for k, v in values.items() if v},
-            path_fields=path_ids,
-            labels=labels,
-        )
-
-        # Check if editor injection protection is enabled.
+        # Capability lookup BEFORE sanitization so the path-security
+        # trio (allow_path_traversal / access_sensitive_paths /
+        # allow_symlinks) can suppress their respective warnings
+        # when the admin has granted them.  Default deny → strict.
         perms = get_app_permissions()
         if self._file_path:
             from ..core.permissions import load_permissions
             perms = load_permissions(file_path=self._file_path)
+        warnings = sanitize_all_values(
+            {k: str(v) for k, v in values.items() if v},
+            path_fields=path_ids,
+            labels=labels,
+            allow_traversal=perms.can("allow_path_traversal"),
+            allow_sensitive=perms.can("access_sensitive_paths"),
+        )
+
+        # ``allow_symlinks`` capability gate (V3 v0.3.3): when DENIED,
+        # check the resolved executable path for symlink components
+        # and surface a warning to the same dialog.  Symlink resolution
+        # requires disk I/O so we limit it to the executable here
+        # (not every form-value path), keeping the run-start fast.
+        if not perms.can("allow_symlinks"):
+            from ..core.sanitize import validate_resolved_path
+            from pathlib import Path as _Path
+            try:
+                exe_path = self._tool.executable or ""
+                if exe_path:
+                    resolved = _Path(exe_path).expanduser().resolve()
+                    base = (
+                        _Path(self._tool.loaded_from).parent
+                        if self._tool.loaded_from else resolved.parent
+                    )
+                    sym_warnings = validate_resolved_path(
+                        resolved, base,
+                        allow_symlinks=False,
+                        allow_traversal=True,  # already checked above
+                    )
+                    warnings.extend(sym_warnings)
+            except (OSError, RuntimeError, ValueError):
+                # Resolution failed (broken symlink, network drive
+                # offline, etc.) — skip silently rather than block.
+                pass
+
         editor_protection = perms.can(
             "injection_protection_on_editor"
         )
@@ -2101,10 +2192,23 @@ class ToolRunnerView(QWidget):
         # --- credential prompt (run-as-different-user) ---
         credentials: tuple[str, str, str] | None = None
         if cfg is not None and cfg.prompt_credentials:
-            credentials = self._obtain_credentials(cfg)
-            if credentials is None:
-                # User cancelled the credential dialog.
-                return
+            # ``run_as_different_user`` gate (V3 v0.3.3): when denied,
+            # the configuration's prompt_credentials flag is ignored
+            # and the tool runs under the current user's context.  We
+            # surface a one-line warning to the output pane so the
+            # discrepancy is visible.
+            if not perm_check("run_as_different_user"):
+                self._append_line(
+                    "[run_as_different_user disabled] This configuration "
+                    "requested credentials but the capability is not "
+                    "granted.  Running under the current user.",
+                    color=QColor("#b8860b"),
+                )
+            else:
+                credentials = self._obtain_credentials(cfg)
+                if credentials is None:
+                    # User cancelled the credential dialog.
+                    return
 
         if credentials is not None:
             user_display = credentials[0]
