@@ -142,6 +142,9 @@ def test_close_ring_undock_all_releases_member_links() -> None:
     _fresh_registry()
     master = _spawn_standalone()
     master.role = "master"  # synthesize a master without real docking
+    # Pretend the ring was previously saved so v0.3.1's
+    # close-prompt doesn't fire on this synthetic test fixture.
+    master._saved_ring_path = "/tmp/synthetic.scriptreering"  # type: ignore[assignment]
     member1 = _spawn_standalone()
     member2 = _spawn_standalone()
     member1._group_master_id = master._id
@@ -167,6 +170,7 @@ def test_close_all_related_closes_master_and_members() -> None:
     _fresh_registry()
     master = _spawn_standalone()
     master.role = "master"
+    master._saved_ring_path = "/tmp/synthetic.scriptreering"  # type: ignore[assignment]
     member1 = _spawn_standalone()
     member2 = _spawn_standalone()
     member1._group_master_id = master._id
@@ -192,6 +196,7 @@ def test_close_all_related_skips_quit_when_other_cells_remain() -> None:
     bystander = _spawn_standalone()
     master = _spawn_standalone()
     master.role = "master"
+    master._saved_ring_path = "/tmp/synthetic.scriptreering"  # type: ignore[assignment]
     member = _spawn_standalone()
     member._group_master_id = master._id
     master._members = {member._id: member}
