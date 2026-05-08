@@ -1,0 +1,292 @@
+"""
+forest_discover.py — auto-discovery walker for ``.scriptreeforest``.
+
+Implements the priority-by-layer rule the user signed off on:
+
+    For each subdirectory D, walking depth-first:
+      if D contains *.scriptreering → emit those rings; STOP (don't
+                                       descend into D)
+      elif D contains *.scriptreetree → emit those trees; STOP
+      elif D contains *.scriptree    → emit those tools; STOP
+      else                            → recurse into D's subdirs
+
+Stop-descending is what gives "only add the highest-layer thing per
+folder" — a folder containing a ring file is treated as one self-
+contained unit; we don't pull individual tools out of it.
+
+The walker also enforces:
+  * The ``include`` filter from ``AutoDiscoverConfig`` (only emit
+    items whose ``kind`` is in the include list).  The priority
+    rule still picks the highest-available kind per folder, but
+    if that kind is filtered out we skip the folder entirely
+    rather than fall through to a lower kind.  Otherwise the
+    filter would silently demote a ring-folder to its individual
+    tools, which the user wouldn't expect.
+  * The ``excluded`` set — paths the user has explicitly removed.
+    Skipped at the path level: a single excluded ``.scriptree`` in
+    a folder of three doesn't stop the folder; the other two still
+    emit.  An excluded ring DOES stop the folder, since the ring
+    was the highest-priority match.
+  * Hidden folders (basename starting with ``.``) — skipped.
+
+Public API
+----------
+    discover(roots, include, excluded)        → list[DiscoveredItem]
+    diff_against(current_items, discovered, excluded)
+                                              → DiscoveryDiff
+"""
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable
+
+from scriptree.shell.forest_io import (
+    ForestItem, ItemKind, SUFFIX_PRIORITY, kind_for_suffix,
+)
+
+
+def _log(msg: str) -> None:
+    print(f"[forest_discover] {msg}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Result types
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DiscoveredItem:
+    """A file the priority-rule walker decided should be on the forest."""
+
+    path: str   # absolute path
+    kind: ItemKind
+
+
+@dataclass
+class DiscoveryDiff:
+    """Result of diffing a current forest against a fresh discovery
+    pass.  Used by the update-prompt dialog to show the user what
+    changed.
+
+    ``added``    — files newly satisfying the priority rule.
+    ``removed``  — files currently on the forest but no longer on
+                   disk (or no longer satisfying the priority rule
+                   because a higher-layer file was added next to
+                   them).
+    ``previously_excluded`` — files the user previously removed but
+                   that now satisfy the priority rule.  Surfaced
+                   in the prompt with a checkbox so the user can
+                   re-include if they want.
+    """
+
+    added: list[DiscoveredItem] = field(default_factory=list)
+    removed: list[ForestItem] = field(default_factory=list)
+    previously_excluded: list[DiscoveredItem] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.added or self.removed or self.previously_excluded)
+
+
+# ---------------------------------------------------------------------------
+# Path normalisation — all comparisons go through here so the
+# resolution / case-folding rules stay consistent across the module.
+# ---------------------------------------------------------------------------
+
+def _norm(path: str | Path) -> str:
+    """Normalised form used for set-membership comparisons."""
+    try:
+        return str(Path(path).resolve()).lower().replace("\\", "/")
+    except (OSError, ValueError, RuntimeError):
+        return str(path).lower().replace("\\", "/")
+
+
+# ---------------------------------------------------------------------------
+# Walker
+# ---------------------------------------------------------------------------
+
+def _emit_for_dir(
+    d: Path,
+    include: set[ItemKind],
+    excluded_norm: set[str],
+) -> tuple[list[DiscoveredItem], bool]:
+    """Decide what (if anything) to emit for directory ``d``.
+
+    Returns ``(emitted_items, should_stop_descending)``.
+
+    Priority + include + excluded interaction:
+      * Walk SUFFIX_PRIORITY in order (highest layer first).
+      * For each priority tier, glob ``d`` for matching files.
+      * If any file (excluded or not) matches AND the kind is in
+        ``include``, **emit ALL matches** (including excluded
+        ones) and return ``stop=True``.  The caller's
+        ``diff_against`` consults the excluded list to route
+        each emitted item to ``added`` vs ``previously_excluded``;
+        emitting them lets the prompt dialog offer re-inclusion.
+      * If matches exist but the kind is filtered out, return
+        ``stop=True`` with no emission — the user said "don't
+        consider this kind", and falling through would silently
+        demote.
+      * Excluded files still ``stop`` the descent — an excluded
+        ring blocks the same folder's tool sibling from being
+        picked up, matching the v0.3.14 design ("if user excluded
+        the ring, that folder is conceptually a ring-folder; we
+        don't fall back to its tool").
+      * If no priority tier matches, return ``stop=False`` so the
+        caller recurses into subdirs.
+    """
+    try:
+        entries = list(d.iterdir())
+    except OSError:
+        return [], False
+
+    by_suffix: dict[str, list[Path]] = {s: [] for s, _ in SUFFIX_PRIORITY}
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        for suffix, _ in SUFFIX_PRIORITY:
+            if str(entry.name).lower().endswith(suffix):
+                by_suffix[suffix].append(entry)
+                break
+
+    for suffix, kind in SUFFIX_PRIORITY:
+        matches = by_suffix.get(suffix) or []
+        if not matches:
+            continue
+        if kind not in include:
+            return [], True
+        # Emit every matching file — including excluded ones.
+        # ``diff_against`` will re-route excluded items into the
+        # ``previously_excluded`` bucket so the prompt dialog can
+        # offer re-inclusion.
+        emitted = [
+            DiscoveredItem(path=str(m.resolve()), kind=kind)
+            for m in matches
+        ]
+        return emitted, True
+
+    return [], False
+
+
+def _walk(
+    root: Path,
+    include: set[ItemKind],
+    excluded_norm: set[str],
+    *,
+    max_depth: int = 16,
+) -> Iterable[DiscoveredItem]:
+    """Depth-first traversal applying the priority rule at every dir.
+
+    ``max_depth`` is a defensive cap against pathological symlink
+    loops; ``ScripTreeApps`` trees are typically 2-4 deep.
+    """
+    if not root.is_dir():
+        return
+
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    while stack:
+        d, depth = stack.pop()
+        if depth > max_depth:
+            continue
+        # Skip hidden dirs (dotfiles).
+        if d.name.startswith(".") and d != root:
+            continue
+
+        emitted, stop = _emit_for_dir(d, include, excluded_norm)
+        for item in emitted:
+            yield item
+        if stop:
+            continue
+
+        # No priority match — recurse into subdirectories.
+        try:
+            for sub in d.iterdir():
+                if sub.is_dir() and not sub.name.startswith("."):
+                    stack.append((sub, depth + 1))
+        except OSError:
+            continue
+
+
+def discover(
+    roots: list[str | Path],
+    include: list[ItemKind] | None = None,
+    excluded: list[str] | None = None,
+) -> list[DiscoveredItem]:
+    """Run the priority-rule walker against ``roots``.
+
+    Each root is walked independently; results are merged.  If the
+    same path matches under multiple roots (overlapping config —
+    user error, but harmless), it's deduplicated by normalised
+    path with the FIRST hit kept.
+
+    ``include`` defaults to all three kinds.
+    ``excluded`` defaults to empty.
+    """
+    if include is None:
+        inc_set: set[ItemKind] = {"ring", "tree", "tool"}
+    else:
+        inc_set = set(include) or {"ring", "tree", "tool"}
+
+    excluded_norm = {_norm(p) for p in (excluded or [])}
+
+    seen: set[str] = set()
+    out: list[DiscoveredItem] = []
+    for r in roots:
+        rp = Path(r)
+        if not rp.is_absolute():
+            # Resolve relative to the project root, same rule as io.
+            from scriptree.shell.forest_io import _project_root
+            rp = (_project_root() / rp).resolve()
+        for item in _walk(rp, inc_set, excluded_norm):
+            key = _norm(item.path)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Diff
+# ---------------------------------------------------------------------------
+
+def diff_against(
+    current_items: list[ForestItem],
+    discovered: list[DiscoveredItem],
+    excluded: list[str],
+) -> DiscoveryDiff:
+    """Compute what should change to make ``current_items`` match
+    ``discovered``, respecting the user's ``excluded`` list.
+
+    See ``DiscoveryDiff`` docstring for field meanings.
+    """
+    cur_keys = {_norm(i.path): i for i in current_items}
+    disc_keys = {_norm(i.path): i for i in discovered}
+    excl_keys = {_norm(p) for p in excluded}
+
+    diff = DiscoveryDiff()
+
+    # Added: in discovery, not currently on the forest, not excluded.
+    for k, item in disc_keys.items():
+        if k in cur_keys:
+            continue
+        if k in excl_keys:
+            # Surface as previously-excluded so the user can opt in.
+            diff.previously_excluded.append(item)
+        else:
+            diff.added.append(item)
+
+    # Removed: on the forest, not in discovery (file deleted /
+    # higher-layer file appeared next to it), AND on disk doesn't
+    # exist.  We DO NOT remove items the user explicitly added
+    # outside the auto-discover roots (those won't appear in
+    # ``discovered`` but are still valid).  The disambiguator:
+    # if the file still exists on disk, leave it alone.
+    for k, item in cur_keys.items():
+        if k in disc_keys:
+            continue
+        if Path(item.path).exists():
+            continue  # user-added, outside discovery scope; keep it
+        diff.removed.append(item)
+
+    return diff

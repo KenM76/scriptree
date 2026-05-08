@@ -355,6 +355,65 @@ For master cells the merged tree is built lazily into `%TEMP%/scriptreering_merg
 
 ---
 
+## The forest layer (v0.3.14+)
+
+A **forest** is the top-level container that sits one layer above rings. It owns every ring, tree, and tool on screen, plus an auto-discovery configuration that can populate / refresh the workspace from configurable source folders.
+
+Launch with `run_scriptreeforest.bat` (Windows) / `run_scriptreeforest.py` (Unix) — same Python search and self-healing as the ring launcher; the only difference is it sets `SCRIPTREE_FOREST_MODE=1` so the cell shell builds a `ForestController` before showing any cells.
+
+### What you see
+
+A **larger 12-sided cell** in deep forest green near the top of the screen. That's the forest cell — the right-click target for forest operations. Cells, rings, and trees you spawn live "on" the forest; the forest cell stays above them and tracks the layout.
+
+### First run
+
+When the forest is empty (no `last_forest.scriptreeforest` to autoload), a welcome dialog asks:
+
+* Which folders should I scan for ScripTree files? (default: `ScripTreeApps/`)
+* What to add when found: rings, trees, single tools (default: all three)
+* When sources change later, should I auto-update? (default: prompt me)
+
+Click **Discover & populate** to one-click everything found, or **Skip** to keep an empty forest.
+
+### Discovery priority rule
+
+For each subdirectory, the walker picks the **highest available layer** and stops descending:
+
+```
+folder has a .scriptreering   → load the ring; ignore any sibling .scriptree files
+folder has a .scriptreetree   → load the tree; ignore any sibling .scriptree files
+folder has only .scriptree(s) → load each tool
+folder has none of the above  → recurse into its subdirs
+```
+
+This is what makes a "self-contained subdirectory" work — drop a folder containing one `.scriptreering` and a half-dozen `.scriptree` files into `ScripTreeApps`, and the forest sees one ring on its desktop, not seven random tools.
+
+### Excluded items (the "I removed it for a reason" memory)
+
+When you remove a ring/tree/tool from the forest (right-click → Remove from forest), its path goes into the forest's `excluded` list. **Auto-discovery remembers your removal** — the next refresh won't silently re-add it. If you later change your mind, the prompt dialog shows previously-excluded items in a separate section with a checkbox to re-include, or you can manage them from **Forest settings → Manage excluded items**.
+
+The excluded path still **blocks demotion**: an excluded ring keeps its folder from being scanned for individual tools (you removed the ring, not promoted the tool).
+
+### Update modes
+
+Right-click the forest cell → **Forest settings…** → Update mode:
+
+* **Off** — no automatic discovery; only manual Add and explicit Refresh.
+* **Prompt (default)** — on launch and on Refresh, walk the configured roots; if anything changed, show a checkbox dialog with three sections: To add / To remove / Previously excluded. Tick what you want, click Apply.
+* **Auto** — same walk, applied silently. Best when you trust the sources to track your intent.
+
+The **Auto-add from ScripTreeApps now** menu entry runs the prompt dialog **regardless of the configured mode** — useful when you keep the mode at "off" but want a one-off discovery.
+
+### Saving
+
+Forests can be saved to `.scriptreeforest` files via right-click → **Save forest as…**. Open multiple forests with **Open forest…** to swap between named workspaces (e.g. `engineering.scriptreeforest`, `dxf-only.scriptreeforest`). The active forest is also auto-saved to `<APPDATA>/ScripTree/last_forest.scriptreeforest` on every meaningful change so a process restart restores your session.
+
+### Why "forest"?
+
+Trees grow out of forests. The forest contains rings (which are arrangements), which contain cells (which can be bound to trees, which contain tools). Naming chained from `.scriptree` → `.scriptreetree` → `.scriptreering` → `.scriptreeforest` keeps the metaphor consistent with the file shape.
+
+---
+
 ## Out of scope for v3.x
 
 - 3+ way recursive docking (masters are pairwise; a triangle of cells produces three pairwise masters, not one 3-way master).

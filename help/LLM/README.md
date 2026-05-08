@@ -116,6 +116,12 @@ the declared sections.
   enforces.
 - [`scriptreetree_format.md`](scriptreetree_format.md) — tree launcher
   format, path resolution rules.
+- [`scriptreering_format.md`](scriptreering_format.md) — ring file
+  format (master + member cell layout for the cell shell).
+- [`scriptreeforest_format.md`](scriptreeforest_format.md) — top-level
+  forest container (v0.3.14+): one-per-session workspace that owns
+  rings, trees, and tools, with auto-discovery + the priority rule
+  + excluded-list semantics.
 - [`configurations_sidecar.md`](configurations_sidecar.md) — the sidecar
   JSON format (`<name>.scriptree.configs.json`), including env/PATH
   override fields, UI visibility, hidden parameters, credential prompt,

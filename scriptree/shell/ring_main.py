@@ -552,6 +552,35 @@ def main() -> int:
     # docking experiments without poking the harness.
     initial_specs = _parse_initial_specs(os.environ.get("SCRIPTREE2_INITIAL_HEXAGONS"))
 
+    # ---- Forest mode (V3 v0.3.14+) --------------------------------------
+    # When ``--forest`` is on argv (or SCRIPTREE_FOREST_MODE=1), we
+    # construct a ForestController BEFORE the default-spawn section.
+    # The forest is a singleton top-level container that owns all
+    # rings + cells on screen; its first-run dialog handles the
+    # "what to populate" question, so we want to skip the legacy
+    # single-cell default spawn that would otherwise leave a stray
+    # cell next to the forest.
+    _forest_controller = None
+    forest_mode = (
+        "--forest" in sys.argv
+        or os.environ.get("SCRIPTREE_FOREST_MODE", "").strip() == "1"
+    )
+    if forest_mode:
+        try:
+            from scriptree.shell.forest_controller import ForestController
+            _forest_controller = ForestController(branding, registry, _SNAP_ENGINE)
+            _forest_controller.start()
+            _log("Forest mode: ForestController started")
+            # Forest mode owns the initial population — no default
+            # single-hex spawn.  If the user wants a blank cell the
+            # forest's right-click menu has Add → Spawn cell.
+            _ring_loaded_any = True
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"Forest mode: ForestController.start failed: {exc!r}; "
+                f"falling back to legacy ring/cell behaviour"
+            )
+
     if not initial_specs and not _ring_loaded_any:
         # Default single-hex behaviour (unchanged).
         initial_specs = [{"x": 100, "y": 100}]
