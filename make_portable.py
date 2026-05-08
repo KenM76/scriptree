@@ -405,6 +405,91 @@ def smoke_test(dest: Path) -> bool:
 
 # ── Shortcut ──────────────────────────────────────────────────────────
 
+def bundle_python(dest: Path) -> bool:
+    """Run ``lib/install_python.ps1`` against the portable copy so a
+    real ``python.exe`` ends up at ``<dest>/lib/python/``.
+
+    This is what makes the build truly USB-portable: a clean Windows
+    machine with no Python installed can run the .bat directly from
+    the stick, no internet needed at run time.
+
+    Returns ``True`` on success.  On Windows we invoke PowerShell;
+    on macOS / Linux we run ``install_python.sh`` if it exists.
+    Either failure is reported but is non-fatal — the build still
+    works on systems that already have Python installed.
+    """
+    script_ps1 = dest / "lib" / "install_python.ps1"
+    script_sh = dest / "lib" / "install_python.sh"
+    target_dir = dest / "lib" / "python"
+
+    if target_dir.is_dir() and any(target_dir.iterdir()):
+        print(f"\nBundle Python: lib/python/ already populated — skipping.")
+        return True
+
+    print("\nBundling portable Python into lib/python/ ...")
+    if sys.platform == "win32":
+        if not script_ps1.is_file():
+            print(f"   SKIP {script_ps1} not present.")
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", str(script_ps1),
+                    "-ScripTreeHome", str(dest),
+                ],
+                cwd=str(dest), timeout=600,
+            )
+            if result.returncode != 0:
+                print(
+                    f"   FAIL install_python.ps1 exited "
+                    f"with code {result.returncode}."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001
+            print(f"   FAIL {e}")
+            return False
+    else:
+        if not script_sh.is_file():
+            print(f"   SKIP {script_sh} not present.")
+            return False
+        try:
+            result = subprocess.run(
+                ["bash", str(script_sh), str(dest)],
+                cwd=str(dest), timeout=600,
+            )
+            if result.returncode != 0:
+                print(
+                    f"   FAIL install_python.sh exited "
+                    f"with code {result.returncode}."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001
+            print(f"   FAIL {e}")
+            return False
+
+    if not target_dir.is_dir():
+        print(
+            f"   FAIL install script ran but {target_dir} does not exist."
+        )
+        return False
+
+    py_exe = (
+        target_dir / ("python.exe" if sys.platform == "win32" else "python3")
+    )
+    if not py_exe.is_file() and sys.platform != "win32":
+        # On *nix, the embed-style layout differs.  Just check for any
+        # python binary in target_dir.
+        py_exe = next(target_dir.glob("python*"), None)
+    if not (py_exe and py_exe.exists()):
+        print(f"   FAIL no python binary at {target_dir}")
+        return False
+
+    print(f"   OK bundled python at {py_exe}")
+    return True
+
+
 def _make_platform_shortcut(dest: Path) -> None:
     """Invoke make_shortcut.py *inside the portable build* so the
     shortcut points at the portable copy's launcher, not the source
@@ -467,6 +552,16 @@ def main() -> int:
         help="Skip launching the portable copy to verify it starts",
     )
     ap.add_argument(
+        "--bundle-python", action="store_true",
+        help=(
+            "Run lib/install_python.ps1 (Windows) or install_python.sh "
+            "(Unix) against the portable copy so a real python.exe ends "
+            "up at <dest>/lib/python/. This makes the build genuinely "
+            "USB-portable — no Python install needed on the target machine. "
+            "Requires internet access during the build."
+        ),
+    )
+    ap.add_argument(
         "--scriptreeapps",
         choices=["keep", "overwrite", "backup"],
         default=None,
@@ -487,6 +582,9 @@ def main() -> int:
     copy_portable(
         dest, force=args.force, protected_action=args.scriptreeapps
     )
+
+    if args.bundle_python:
+        bundle_python(dest)
 
     size_mb = _folder_size_mb(dest)
     print(f"\nPortable build: {dest}")
