@@ -54,6 +54,20 @@ Every cell in a master+members group shares the same **size**, **shape**, and **
 - After any geometry change, the ring is **repacked** so members stay edge-touching the master with no overlap. Members that would land off-screen at the new geometry are reassigned to a free, on-screen direction.
 - When you drag a master so part of the ring would slide off-screen, the off-edge members reattach to a different direction on release. They never end up clipped, hidden behind the taskbar, or stacked on top of each other.
 
+### Drag-drop dispatch (v0.3.6)
+
+The full matrix for dropping a `.scriptree`, `.scriptreetree`, or `.scriptreering` file from Explorer onto a cell:
+
+| Cell state | `.scriptree` / `.scriptreetree` | `.scriptreering` |
+|---|---|---|
+| **Empty standalone** (no catalog) | Binds the catalog to *this* cell. | Closes this cell, loads the ring in its place. |
+| **Bound standalone** (has a catalog) | Spawns a fresh sibling cell next to this one, bound to the dropped catalog. The source cell's binding is unchanged. | Loads the ring alongside (same as the right-click → **Load ring** action). |
+| **Master / ring** | Spawns a fresh member cell bound to the dropped catalog, **auto-joins it to this ring's group** at a free honeycomb slot, with the master's size / shape / orientation. The ring is marked dirty so closing without saving prompts. | Loads the ring alongside (a separate group — does NOT merge into this ring). |
+
+The dispatch is the same whether you trigger it via drag-drop OR the right-click → **Load…** menu actions; both routes share the v0.2.11 `_open_catalog_path` for standalones and the v0.3.6 `_drop_spawn_member_and_link` for masters.
+
+---
+
 ### Cell fill colour (v0.3.6)
 
 The right-click → **Settings** dialog has a **Cell fill colour** group with four mutually-synced controls:
