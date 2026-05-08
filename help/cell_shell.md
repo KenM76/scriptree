@@ -83,6 +83,18 @@ The chosen colour is stored in the catalog JSON's `cell.fill_color` field (e.g. 
 
 ---
 
+### Cell text colour (v0.3.8)
+
+Right below the fill-colour group, the **Settings** dialog now carries a matching **Cell text colour** group with the same four controls (hex, RGB spinboxes, hue rainbow slider, Reset). The override applies to whatever label the cell is showing — auto-derived letters or your custom-text override; icon labels are not tinted.
+
+- **Reset** — clears the override; the label colour falls back to the cell's stroke-derived default (palette-coordinated to remain readable against the fill).
+- **Alpha** is computed from `transparency × label_opacity` at paint time; the text-colour controls are RGB-only, exactly like the fill-colour group.
+- **Persistence** — stored in the catalog JSON's `cell.text_color` field (e.g. `"text_color": "#eeeeee"`), independent of `fill_color`. Pre-v0.3.8 catalogs round-trip byte-identical.
+
+Use it to colour-code tools in a ring even more aggressively (e.g. dark fills with light text vs. light fills with dark text).
+
+---
+
 ### Click-to-run cells (v0.3.5)
 
 By default, single-clicking a cell pops up a tool menu — pick a tool from the menu, V1's standalone runner opens. v0.3.5 adds a per-cell setting that **changes single-click into a Run button**:

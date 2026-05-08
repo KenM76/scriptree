@@ -162,7 +162,9 @@ Controls how the V3 cell shell paints a launcher cell bound to this
   "icon_format": "string, optional — \"png\" | \"jpg\" | \"svg\" | ...",
   "text_label": "string, optional — explicit text override",
   "icon_scale": "number, optional — relative scale, range 0.25–2.00, default 1.00",
-  "label_opacity": "number, optional — alpha, range 0.20–1.00, default 1.00"
+  "label_opacity": "number, optional — alpha, range 0.20–1.00, default 1.00",
+  "fill_color": "string, optional — \"#RRGGBB\" override for the cell fill (v0.3.6+)",
+  "text_color": "string, optional — \"#RRGGBB\" override for the label text colour (v0.3.8+)"
 }
 ```
 

@@ -743,6 +743,211 @@ class SettingsDialog(QDialog):
         self._color_hue_slider.valueChanged.connect(lambda _v: _on_hue_changed())
         self._color_reset_btn.clicked.connect(_on_color_reset)
 
+        # ---- 6.7 Cell text colour (V3 v0.3.8+) -----------------------------
+        # Mirror of the fill-colour group, but for the label text.
+        # Default ("Reset") clears the override so paint code falls
+        # back to the stroke-derived default.
+        text_color_grp = _QGroupBox2("Cell text colour")
+        text_color_layout = QVBoxLayout(text_color_grp)
+
+        # Initial RGB values: the override if set, else the stroke
+        # colour the paint code currently picks.  This way the
+        # dialog opens showing the *actual* colour on the cell, not
+        # a misleading "default of nothing".
+        if hexagon._text_color_hex:
+            tc0 = QColor(
+                int(hexagon._text_color_hex[1:3], 16),
+                int(hexagon._text_color_hex[3:5], 16),
+                int(hexagon._text_color_hex[5:7], 16),
+            )
+        else:
+            tc0 = QColor(hexagon._compute_stroke_color())
+        initial_tr = tc0.red()
+        initial_tg = tc0.green()
+        initial_tb = tc0.blue()
+        initial_thex = (
+            hexagon._text_color_hex
+            or f"#{initial_tr:02x}{initial_tg:02x}{initial_tb:02x}"
+        )
+
+        # Row 1: swatch + hex entry + reset.
+        trow1 = _QHBoxLayout2()
+        self._text_color_swatch = _QLabel2()
+        self._text_color_swatch.setFixedSize(28, 22)
+        self._text_color_swatch.setStyleSheet(
+            f"QLabel {{ background:{initial_thex}; "
+            f"border:1px solid #888; }}"
+        )
+        trow1.addWidget(self._text_color_swatch)
+        trow1.addWidget(_QLabel2("Hex:"))
+        self._text_color_hex_edit = _QLineEdit2(initial_thex)
+        self._text_color_hex_edit.setMaxLength(7)
+        self._text_color_hex_edit.setPlaceholderText("#RRGGBB")
+        trow1.addWidget(self._text_color_hex_edit, stretch=1)
+        self._text_color_reset_btn = _QPushButton2("Reset")
+        self._text_color_reset_btn.setToolTip(
+            "Revert to the default (stroke-derived) text colour."
+        )
+        trow1.addWidget(self._text_color_reset_btn)
+        text_color_layout.addLayout(trow1)
+
+        # Row 2: R / G / B spinboxes.
+        trow2 = _QHBoxLayout2()
+        trow2.addWidget(_QLabel2("R:"))
+        self._text_color_r_spin = _QSpinBox2()
+        self._text_color_r_spin.setRange(0, 255)
+        self._text_color_r_spin.setValue(initial_tr)
+        trow2.addWidget(self._text_color_r_spin)
+        trow2.addWidget(_QLabel2("G:"))
+        self._text_color_g_spin = _QSpinBox2()
+        self._text_color_g_spin.setRange(0, 255)
+        self._text_color_g_spin.setValue(initial_tg)
+        trow2.addWidget(self._text_color_g_spin)
+        trow2.addWidget(_QLabel2("B:"))
+        self._text_color_b_spin = _QSpinBox2()
+        self._text_color_b_spin.setRange(0, 255)
+        self._text_color_b_spin.setValue(initial_tb)
+        trow2.addWidget(self._text_color_b_spin)
+        trow2.addStretch(1)
+        text_color_layout.addLayout(trow2)
+
+        # Row 3: hue rainbow slider.  Same gradient as the fill row.
+        trow3 = _QHBoxLayout2()
+        trow3.addWidget(_QLabel2("Hue:"))
+        self._text_color_hue_slider = _QSlider2(Qt.Horizontal)
+        self._text_color_hue_slider.setMinimum(0)
+        self._text_color_hue_slider.setMaximum(359)
+        initial_thue = max(0, tc0.hsvHue())
+        self._text_color_hue_slider.setValue(initial_thue)
+        self._text_color_hue_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 12px; "
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:0, "
+            "stop:0    #ff0000, stop:0.166 #ffff00, "
+            "stop:0.333 #00ff00, stop:0.5   #00ffff, "
+            "stop:0.666 #0000ff, stop:0.833 #ff00ff, "
+            "stop:1    #ff0000); border-radius:3px; } "
+            "QSlider::handle:horizontal { width:10px; "
+            "background:#ffffff; border:1px solid #444; }"
+        )
+        trow3.addWidget(self._text_color_hue_slider, stretch=1)
+        text_color_layout.addLayout(trow3)
+
+        layout.addWidget(text_color_grp)
+
+        # Two-way sync logic for the text-colour group.  Same shape
+        # as the fill group; signal-blocking prevents feedback loops.
+        def _set_text_swatch(hex_rgb: str) -> None:
+            self._text_color_swatch.setStyleSheet(
+                f"QLabel {{ background:{hex_rgb}; "
+                f"border:1px solid #888; }}"
+            )
+
+        def _on_text_rgb_changed():
+            r = self._text_color_r_spin.value()
+            g = self._text_color_g_spin.value()
+            b = self._text_color_b_spin.value()
+            hex_rgb = f"#{r:02x}{g:02x}{b:02x}"
+            _block(
+                [self._text_color_hex_edit, self._text_color_hue_slider],
+                lambda: (
+                    self._text_color_hex_edit.setText(hex_rgb),
+                    self._text_color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_text_swatch(hex_rgb)
+            self._hex.apply_text_color_change(hex_rgb)
+
+        def _on_text_hex_changed():
+            txt = self._text_color_hex_edit.text()
+            from scriptree.core.cell_metadata import _normalise_hex_rgb
+            canonical = _normalise_hex_rgb(txt)
+            if not canonical:
+                return
+            r = int(canonical[1:3], 16)
+            g = int(canonical[3:5], 16)
+            b = int(canonical[5:7], 16)
+            _block(
+                [
+                    self._text_color_r_spin, self._text_color_g_spin,
+                    self._text_color_b_spin, self._text_color_hue_slider,
+                ],
+                lambda: (
+                    self._text_color_r_spin.setValue(r),
+                    self._text_color_g_spin.setValue(g),
+                    self._text_color_b_spin.setValue(b),
+                    self._text_color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_text_swatch(canonical)
+            self._hex.apply_text_color_change(canonical)
+
+        def _on_text_hue_changed():
+            hue = self._text_color_hue_slider.value()
+            new_color = QColor.fromHsv(hue, 255, 255)
+            r, g, b = new_color.red(), new_color.green(), new_color.blue()
+            hex_rgb = f"#{r:02x}{g:02x}{b:02x}"
+            _block(
+                [
+                    self._text_color_r_spin, self._text_color_g_spin,
+                    self._text_color_b_spin, self._text_color_hex_edit,
+                ],
+                lambda: (
+                    self._text_color_r_spin.setValue(r),
+                    self._text_color_g_spin.setValue(g),
+                    self._text_color_b_spin.setValue(b),
+                    self._text_color_hex_edit.setText(hex_rgb),
+                ),
+            )
+            _set_text_swatch(hex_rgb)
+            self._hex.apply_text_color_change(hex_rgb)
+
+        def _on_text_color_reset():
+            # Empty string clears the override; paint code reverts
+            # to stroke-derived colour.  Refresh controls to show
+            # the resulting default (so the dialog stays accurate).
+            self._hex.apply_text_color_change("")
+            new_c = QColor(self._hex._compute_stroke_color())
+            r, g, b = new_c.red(), new_c.green(), new_c.blue()
+            new_hex = f"#{r:02x}{g:02x}{b:02x}"
+            _block(
+                [
+                    self._text_color_r_spin, self._text_color_g_spin,
+                    self._text_color_b_spin, self._text_color_hex_edit,
+                    self._text_color_hue_slider,
+                ],
+                lambda: (
+                    self._text_color_r_spin.setValue(r),
+                    self._text_color_g_spin.setValue(g),
+                    self._text_color_b_spin.setValue(b),
+                    self._text_color_hex_edit.setText(new_hex),
+                    self._text_color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_text_swatch(new_hex)
+
+        self._text_color_r_spin.valueChanged.connect(
+            lambda _v: _on_text_rgb_changed()
+        )
+        self._text_color_g_spin.valueChanged.connect(
+            lambda _v: _on_text_rgb_changed()
+        )
+        self._text_color_b_spin.valueChanged.connect(
+            lambda _v: _on_text_rgb_changed()
+        )
+        self._text_color_hex_edit.editingFinished.connect(
+            _on_text_hex_changed
+        )
+        self._text_color_hue_slider.valueChanged.connect(
+            lambda _v: _on_text_hue_changed()
+        )
+        self._text_color_reset_btn.clicked.connect(_on_text_color_reset)
+
         # ---- 7. Cell label (icon / custom text / default auto) -------------
         # Per user spec (2026-05-07): the per-cell Settings dialog needs
         # to choose between three label modes (Default / Custom Text /
@@ -1895,6 +2100,12 @@ class CellWindow(QMainWindow):
         # Settings dialog round-trip the user's choice without
         # losing precision through the QColor encode.
         self._fill_color_hex: str = ""
+        # Cell text-colour override (V3 v0.3.8+).  Empty hex →
+        # paint code falls back to the stroke-derived default.
+        # Non-empty 6-digit ``#RRGGBB`` → that colour, modulated
+        # at paint time by (transparency × label_opacity).  Mirrors
+        # the fill-colour override pattern.
+        self._text_color_hex: str = ""
         self._stroke_color    = _parse_rgba_hex(palette.get("hexStroke",    "9ca3afff"))
         self._highlight_color = _parse_rgba_hex(palette.get("hexHighlight", "60a5faff"))
         self._accent_color    = _parse_rgba_hex(palette.get("accent",       "f59e0bff"))
@@ -2439,39 +2650,33 @@ class CellWindow(QMainWindow):
     def _reflow_members_after_master_move(self) -> None:
         """Re-evaluate every member's slot after the master has moved.
 
-        During a master drag, members are translated rigidly with the
-        master (cheap — no math).  When the drag ends, some members
-        may have been pushed past the screen edge.  This routine runs
-        a full repack so off-screen members reattach to a valid free
-        slot in a still-on-screen direction, while members already
-        sitting on canonical slots are left undisturbed (the repack
-        is a no-op for them).
+        v0.3.8 fix — pre-fix this routine forced a repack whenever
+        members weren't on canonical slots, even when their actual
+        positions were on-screen and intentionally placed by the
+        user (manual rearrangement after the corner-reflow snapped
+        them to default).  Now repack ONLY when at least one member
+        would actually be off-screen at its current preferred
+        position — manual rearrangements survive subsequent master
+        nudges.
+
+        During a master drag, members are translated rigidly with
+        the master (cheap — no math).  When the drag ends, this
+        routine runs a full repack only if the corner threw a member
+        off-screen; otherwise positions stick.
         """
         if self.role != "master" or not self._members:
             return
-        from scriptree.shell.group_layout import (
-            members_at_canonical_slots,
-            screen_rect_for_master,
-        )
+        from scriptree.shell.group_layout import screen_rect_for_master
         master_tl = (self.pos().x(), self.pos().y())
         screen_rect = screen_rect_for_master(master_tl, self._size_px)
-        # Cheap pre-check: are all members already on free, on-screen
-        # slots?  When yes (the common no-op case after a clean drag),
-        # skip the full repack and just refresh edge-fold visibility.
-        positions = {
-            mid: (qp.x(), qp.y()) for mid, qp in self._members.items()
-        }
-        on_screen_and_canonical = (
-            members_at_canonical_slots(
-                master_tl, self._size_px, self._shape, self._orientation,
-                positions,
-            )
-            and all(
-                self._slot_on_screen(qp.x(), qp.y(), screen_rect)
-                for qp in self._members.values()
-            )
+        # On-screen check: every member's top-left must be inside
+        # the master's screen.  If yes — leave the layout alone.
+        # If any member is off-screen, repack.
+        all_on_screen = all(
+            self._slot_on_screen(qp.x(), qp.y(), screen_rect)
+            for qp in self._members.values()
         )
-        if on_screen_and_canonical:
+        if all_on_screen:
             self._check_edge_fold()
             return
         self._repack_members()
@@ -2614,6 +2819,41 @@ class CellWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 _log(
                     f"apply_fill_color_change: write_for({self._catalog_path!r}) "
+                    f"failed: {exc!r}"
+                )
+
+    def apply_text_color_change(self, hex_rgb: str) -> None:
+        """Live-update the cell's label text colour (V3 v0.3.8+).
+
+        ``hex_rgb`` is either a 6-digit ``"#RRGGBB"`` string (any
+        case, ``#`` optional) or an empty string to clear the
+        override — paint code then falls back to the stroke-derived
+        default colour.
+
+        Alpha behaviour: the override is RGB-only.  Effective alpha
+        at paint time is ``transparency × label_opacity`` (same as
+        the default-stroke path), so the label always tracks the
+        cell's overall translucency settings.
+
+        Persistence: when the cell is bound to a catalog, the new
+        value is written through to ``cell.text_color`` via
+        ``cell_metadata.write_for``.  Cells without a catalog keep
+        the override in memory only.
+        """
+        from ..core.cell_metadata import _normalise_hex_rgb
+
+        canonical = _normalise_hex_rgb(hex_rgb)
+        self._text_color_hex = canonical
+
+        self.update()
+
+        if self._catalog_path:
+            try:
+                from scriptree.core.cell_metadata import write_for as _write_for
+                _write_for(self._catalog_path, text_color=canonical)
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"apply_text_color_change: write_for({self._catalog_path!r}) "
                     f"failed: {exc!r}"
                 )
 
@@ -2835,6 +3075,14 @@ class CellWindow(QMainWindow):
         else:
             self._fill_color = QColor(self._branding_fill_color)
             self._fill_color_hex = ""
+        # Text colour override (V3 v0.3.8+).  Same pattern; an empty
+        # value clears any prior override so re-binds don't leak.
+        if md.text_color:
+            from ..core.cell_metadata import _normalise_hex_rgb
+            canonical = _normalise_hex_rgb(md.text_color)
+            self._text_color_hex = canonical
+        else:
+            self._text_color_hex = ""
         self._label_cache = None
         self.update()
 
@@ -3153,10 +3401,20 @@ class CellWindow(QMainWindow):
                 break
             font_px = new_px
 
-        # Use the stroke colour at (cell transparency × label opacity).
-        # Stroke colour is already coordinated with the palette and
-        # readable against the fill.
-        col = QColor(self._compute_stroke_color())
+        # Pick the source colour:
+        #   * If the user set ``_text_color_hex`` (V3 v0.3.8+),
+        #     paint with that exact RGB — alpha still derives from
+        #     transparency × label_opacity so the label tracks the
+        #     cell's translucency.
+        #   * Otherwise fall back to the stroke colour, which is
+        #     palette-coordinated and readable against the fill.
+        if self._text_color_hex:
+            r = int(self._text_color_hex[1:3], 16)
+            g = int(self._text_color_hex[3:5], 16)
+            b = int(self._text_color_hex[5:7], 16)
+            col = QColor(r, g, b, 255)
+        else:
+            col = QColor(self._compute_stroke_color())
         effective_op = max(
             0.0, min(1.0, self._transparency * self._label_opacity),
         )
@@ -4689,29 +4947,33 @@ class CellWindow(QMainWindow):
     def _ring_needs_save_prompt(self) -> bool:
         """True iff closing this master should ask the user to save first.
 
-        The trigger conditions, per the v0.3.1 user spec:
+        Trigger conditions:
 
         * **Never saved** (``_saved_ring_path is None``) — no on-disk
           file exists yet.
         * **Membership changed** since last save (``_ring_dirty``) —
           a cell was added or removed.
+        * **G7 (v0.3.8+):** the previously-saved file no longer
+          exists on disk — treat as "needs prompt" so the user can
+          re-save (or pick Discard with full awareness that the
+          saved-path-they-trusted is gone).
 
-        Returns False for masters that have been saved AND haven't
-        had their membership change since (pure position drag,
-        repack, drift snap-back are deliberately NOT marked dirty).
-        Always False for non-masters (a standalone cell carries no
-        ring file).
+        Returns False for non-masters (a standalone cell carries no
+        ring file) and for empty masters (which are mid-teardown
+        from quorum loss — F3's separate prompt path handles that).
         """
+        from pathlib import Path
         if self.role != "master":
             return False
         if not self._members:
-            # Empty master is being closed by _check_master_validity —
-            # no content worth saving.
             return False
-        return (
-            self._ring_dirty
-            or getattr(self, "_saved_ring_path", None) is None
-        )
+        saved_path = getattr(self, "_saved_ring_path", None)
+        if saved_path is None:
+            return True
+        if not Path(saved_path).is_file():
+            # G7 — saved file vanished off disk.
+            return True
+        return self._ring_dirty
 
     def _confirm_discard_unsaved_ring(self) -> bool:
         """Show a Save / Discard / Cancel dialog for an unsaved ring.
@@ -4732,9 +4994,17 @@ class CellWindow(QMainWindow):
                 "Save it before closing?"
             )
         else:
+            # ``_saved_ring_path`` may be a Path or a plain str
+            # (legacy code paths set strings).  Normalise to a Path
+            # before reading .name so we don't AttributeError on str.
+            from pathlib import Path as _Path
+            try:
+                short = _Path(path).name
+            except (TypeError, ValueError):
+                short = str(path)
             text = (
                 f"This ring has unsaved changes since it was last "
-                f"saved to '{path.name}'.\n\n"
+                f"saved to '{short}'.\n\n"
                 "Save the changes before closing?"
             )
 
@@ -4848,9 +5118,30 @@ class CellWindow(QMainWindow):
 
         This is the "fire and exit" option — the same effect as
         clicking the X on each cell in turn, but in one click.
+
+        F1 (v0.3.8+): before closing anything, walk every master
+        in the registry and prompt for any that's dirty / unsaved.
+        Cancel on any prompt aborts the whole exit so the user
+        can keep working without losing data.  Save / Discard
+        proceed individually; only after every master has been
+        resolved do we tear down.
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
+
+        # F1 — gather and resolve dirty masters first.
+        masters = list(registry.masters())
+        for m in masters:
+            if not m._ring_needs_save_prompt():
+                continue
+            if not m._confirm_discard_unsaved_ring():
+                # User picked Cancel — abort the whole exit.
+                _log(
+                    f"Exit all: cancelled by user during "
+                    f"unsaved-ring prompt for master {m._id[:8]}"
+                )
+                return
+
         all_cells = list(registry.standalones()) + list(registry.masters())
         _log(f"Exit all: closing {len(all_cells)} cell(s)")
         for cell in all_cells:
@@ -6058,6 +6349,48 @@ def _check_master_validity(master: CellWindow, registry) -> None:
     )
 
     if member_count < 2:
+        # F3 (v0.3.8+) — save prompt for dirty/unsaved rings about
+        # to vanish from quorum loss.  Save / Discard only; no
+        # Cancel because the triggering member-close has already
+        # happened (we'd have nothing to roll back to).  The prompt
+        # fires BEFORE we clear ``_members`` so the save captures
+        # the last-known-good state.
+        if (
+            master._ring_needs_save_prompt()
+            and member_count >= 1  # something to save
+        ):
+            from PySide6.QtWidgets import QMessageBox
+            saved_path = getattr(master, "_saved_ring_path", None)
+            if saved_path is None:
+                msg = (
+                    "This ring has not been saved and is about to "
+                    "close because too few members remain.\n\n"
+                    "Save it before closing?"
+                )
+            else:
+                msg = (
+                    f"This ring has unsaved changes since it was "
+                    f"last saved to '{saved_path.name if hasattr(saved_path, 'name') else saved_path}'. "
+                    "It is about to close because too few members "
+                    "remain.\n\nSave the changes before closing?"
+                )
+            reply = QMessageBox.question(
+                None,
+                "Unsaved ring closing",
+                msg,
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard,
+                QMessageBox.StandardButton.Save,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                try:
+                    master._save_ring_dialog()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_check_master_validity: save-prompt save "
+                        f"failed: {exc!r} — proceeding to teardown"
+                    )
+
         # Clear group membership for any remaining members.
         from scriptree.shell.cell_registry import CellRegistry
         reg = CellRegistry.instance()
@@ -6067,12 +6400,23 @@ def _check_master_validity(master: CellWindow, registry) -> None:
                 member._group_master_id = None
                 member._docked_to.clear()
                 member._dock_partners.clear()
-                member.update()  # Bug 5: refresh outline (now unassociated â†’ green)
+                member.update()  # Bug 5: refresh outline (now unassociated → green)
         master._members.clear()
         master._positioned.clear()
         master._dock_partners.clear()
-        if master.isVisible():
-            master.hide()
-            _log(f"Master {master._id[:8]} closed â€” only {member_count} member(s) remain")
-            reg.masterDespawned.emit(master._id)
+        # V3 v0.3.8 fix — close the master fully (was: hide()).  Pre-fix
+        # the master was only hidden, so the registry kept it under the
+        # deterministic master_id.  Re-docking the original pair would
+        # compute the same id; ``CellRegistry.register`` short-circuits
+        # on the duplicate id and the new master never registers,
+        # leaving the user unable to "reassociate them again and get a
+        # respawned ring".  ``close()`` triggers ``closeEvent`` →
+        # ``unregister`` → emits ``masterDespawned`` and frees the id
+        # for a future spawn.
+        reg.masterDespawned.emit(master._id)
+        _log(
+            f"Master {master._id[:8]} closing — "
+            f"only {member_count} member(s) remain"
+        )
+        master.close()
 

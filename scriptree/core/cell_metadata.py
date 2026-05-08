@@ -59,6 +59,9 @@ class CellMetadata:
     # Per-cell fill colour override (V3 v0.3.6+).  Hex ``#RRGGBB``
     # or empty string (== branding default).
     fill_color: str = ""
+    # Per-cell text colour override (V3 v0.3.8+).  Hex ``#RRGGBB``
+    # or empty string (== "follow stroke-derived default").
+    text_color: str = ""
 
     def has_icon(self) -> bool:
         return bool(self.icon_resolved_path) or bool(self.icon_data)
@@ -107,6 +110,7 @@ def read_for(catalog_path: str | Path) -> CellMetadata:
             or "sequential"
         ),
         fill_color=str(getattr(obj, "cell_fill_color", "") or ""),
+        text_color=str(getattr(obj, "cell_text_color", "") or ""),
     )
 
     if md.icon and not md.icon_data:
@@ -151,6 +155,7 @@ def write_for(
     click_action: str | None = None,
     click_run_mode: str | None = None,
     fill_color: str | None = None,
+    text_color: str | None = None,
 ) -> CellMetadata:
     """Mutate the catalog file's cell-visual fields and persist.
 
@@ -217,6 +222,9 @@ def write_for(
         # else must look like a 6-digit hex; on parse failure we
         # silently clear so a typo can't poison the catalog file.
         obj.cell_fill_color = _normalise_hex_rgb(fill_color)
+    if text_color is not None:
+        # Same coercion rule as fill — typo silently clears.
+        obj.cell_text_color = _normalise_hex_rgb(text_color)
 
     if isinstance(obj, ToolDef):
         save_tool(obj, p)

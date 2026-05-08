@@ -307,6 +307,15 @@ class ToolDef:
     # group-uniform: a master + members can each have a different
     # fill so a ring can colour-code its tools.
     cell_fill_color: str = ""
+    # Cell text colour override (V3 v0.3.8+).  Hex string of the
+    # form ``"#RRGGBB"`` (lowercase, no alpha — paint code multiplies
+    # the cell's transparency × label_opacity into alpha at render
+    # time).  Empty string means "follow the stroke-derived default
+    # colour", preserving pre-v0.3.8 cells byte-identical on disk.
+    # Applies to both the auto-letter label and any custom text the
+    # user has set; icon labels are not tinted.  Per-cell, mirrors
+    # the fill-colour pattern.
+    cell_text_color: str = ""
     # Interactive stdin (V3 v0.3.0) — when True the runner exposes a
     # send-line widget below the output pane, so the tool can read
     # user input from stdin while running.  Used by tools that
@@ -472,6 +481,8 @@ class TreeDef:
     cell_click_run_mode: str = "sequential"  # "sequential" | "parallel"
     # Cell fill colour override (V3 v0.3.6+).  See ToolDef.
     cell_fill_color: str = ""
+    # Cell text colour override (V3 v0.3.8+).  See ToolDef.
+    cell_text_color: str = ""
     schema_version: int = SCHEMA_VERSION
 
 

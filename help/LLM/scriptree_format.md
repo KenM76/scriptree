@@ -215,7 +215,9 @@ legacy files stay byte-identical.
   "icon_format": "string, optional — \"png\" | \"jpg\" | \"jpeg\" | \"svg\" | ... — only meaningful when icon_data is set",
   "text_label": "string, optional — explicit text override for the cell label",
   "icon_scale": "number, optional — relative scale, range 0.25–2.00, default 1.00",
-  "label_opacity": "number, optional — alpha multiplier, range 0.20–1.00, default 1.00"
+  "label_opacity": "number, optional — alpha multiplier, range 0.20–1.00, default 1.00",
+  "fill_color": "string, optional — \"#RRGGBB\" override for the cell fill (v0.3.6+)",
+  "text_color": "string, optional — \"#RRGGBB\" override for the label text colour (v0.3.8+)"
 }
 ```
 
@@ -229,6 +231,8 @@ legacy files stay byte-identical.
 | `text_label` | string | `""` | — | Explicit label text. When non-empty, takes priority over auto-derived letters but loses to icons. |
 | `icon_scale` | float | `1.00` | `[0.25, 2.00]` | Relative — the painter resizes the icon proportionally to the cell's current `size_px`. So a 100 % icon "feels the same size" on a 56-px cell as on a 96-px cell. Out-of-range values are clamped silently at load. |
 | `label_opacity` | float | `1.00` | `[0.20, 1.00]` | Alpha multiplier on the painted label / icon. Out-of-range values are clamped. |
+| `fill_color` | string | `""` | `#RRGGBB` (v0.3.6+) | Override for the cell's fill colour. Empty = use branding default. Alpha is owned by the separate `transparency` slider; this field is RGB only. Invalid hex is silently dropped at load. |
+| `text_color` | string | `""` | `#RRGGBB` (v0.3.8+) | Override for the label text colour (auto-letters or `text_label`; icon labels are not tinted). Empty = follow stroke-derived default. Alpha is computed from `transparency × label_opacity` at paint time. Invalid hex is silently dropped. |
 
 ### Label-painting priority (recap)
 

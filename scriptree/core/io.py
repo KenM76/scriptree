@@ -95,6 +95,9 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
     # round-trip with legacy catalogs.
     if tool.cell_fill_color:
         cell_d["fill_color"] = str(tool.cell_fill_color)
+    # Cell text colour (V3 v0.3.8+).  Same default-omit rule.
+    if tool.cell_text_color:
+        cell_d["text_color"] = str(tool.cell_text_color)
     if cell_d:
         d["cell"] = cell_d
     # Interactive stdin (V3 v0.3.0) — emitted only when True so legacy
@@ -211,6 +214,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         cell_click_action=str(cell_d.get("click_action", "menu")),
         cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
         cell_fill_color=str(cell_d.get("fill_color", "")),
+        cell_text_color=str(cell_d.get("text_color", "")),
         interactive=bool(data.get("interactive", False)),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
@@ -362,6 +366,9 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
     # Cell fill colour (V3 v0.3.6+).  Same default-omit rule.
     if tree.cell_fill_color:
         cell_d["fill_color"] = str(tree.cell_fill_color)
+    # Cell text colour (V3 v0.3.8+).  Same default-omit rule.
+    if tree.cell_text_color:
+        cell_d["text_color"] = str(tree.cell_text_color)
     if cell_d:
         d["cell"] = cell_d
     return d
@@ -394,6 +401,7 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         cell_click_action=str(cell_d.get("click_action", "menu")),
         cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
         cell_fill_color=str(cell_d.get("fill_color", "")),
+        cell_text_color=str(cell_d.get("text_color", "")),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 
