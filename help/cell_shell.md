@@ -449,6 +449,37 @@ Trees grow out of forests. The forest contains rings (which are arrangements), w
 
 ---
 
+## Vocabulary (v0.3.17 — pinned by code contract)
+
+- **Associated** — a cell belongs to a group (a ring or the forest). It has `_group_master_id` set to that group's master.
+- **Docked** — physically adjacent to another element on a specific edge. Tracked in `_docked_to` / `_dock_partners`.
+- **Associatedocked** — both. Belongs to a group AND is on its master's honeycomb slot. Moves rigidly with the master during a master drag.
+
+Cells **don't associate with each other**. They dock to each other; docking causes both to associate with the same ring (a fresh ring if neither was associated, or the existing ring of whichever cell was already grouped).
+
+If you drag an associatedocked cell **away** from its group, it stays associated unless it gets within docking distance of an unassociated element (creating a new ring) or a member of a different group (transferring to that group).
+
+## No-reshift contract (v0.3.17)
+
+**Moving one element does not cause a reshift in the others.** When you dock or undock or close a cell, every other cell in every group keeps its widget position byte-identical to where you placed it. This applies to:
+
+- Dragging a member around within its own group (Case 5 dock).
+- A standalone joining a group via dock (Cases 2 / 3).
+- A member transferring between groups (Case 4).
+- Closing a member (the gap stays; you can manually drag a survivor in).
+- Drag-dropping a `.scriptree` / `.scriptreetree` onto a master (only the new cell takes a slot).
+- The forest auto-attaching a discovered ring (existing forest members stay put).
+
+The only path that **does** rearrange members is **`_repack_members(fixed=None)`**, used solely by the **fresh-ring spawn** (Case 1) when two standalones first dock. There the two new members get canonical honeycomb slots — they have no prior layout to preserve.
+
+## Home vs temp positions (v0.3.17)
+
+Each member has a **HOME** slot — the ordinary position it should occupy relative to its master. HOME is stored in `master._members[member_id]` and shifts rigidly when the master is dragged.
+
+When the master moves to a corner that pushes a member off-screen, the member's widget gets relocated to a **temp** slot adjacent to other on-screen elements (the "find a temporary space and edge to link onto" rule). HOME is **not** overwritten — the surgical repack only updates the widget position, not `_members[id]`.
+
+When the master returns to a position where HOME is back on-screen, the next reflow pass restores the member to HOME. Members **take precedence for their own ordinary space** over any temp arrangement; only members whose HOME is genuinely off-screen at the master's current position settle for a temp slot.
+
 ## Out of scope for v3.x
 
 - 3+ way recursive docking (masters are pairwise; a triangle of cells produces three pairwise masters, not one 3-way master).

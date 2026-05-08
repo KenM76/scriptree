@@ -2677,34 +2677,72 @@ class CellWindow(QMainWindow):
     def _reflow_members_after_master_move(self) -> None:
         """Re-evaluate every member's slot after the master has moved.
 
-        v0.3.16 — surgical reflow.  Members that are still on-screen
-        at their current position **stay where they are**; only
-        off-screen members get reassigned to a fresh slot.  This
-        protects the user's manual layout (e.g. they spread cells
-        across two screen quadrants and only one corner-pushes
-        anyone off the edge — the others must not move).
+        v0.3.17 — try HOME first, then temp.
 
-        Pre-v0.3.16 history:
+        ``self._members[mid]`` is the member's HOME slot — the
+        position the user explicitly placed it at, expressed in the
+        master's reference frame and shifted rigidly during master
+        drag.  Member widget positions can DIVERGE from HOME when
+        a previous reflow had to relocate them to a temp slot
+        because HOME was off-screen.  This routine reconciles both:
+
+          1. Move every member's widget to its HOME (``_members[mid]``).
+             Members previously living at temp slots get the chance
+             to return.
+          2. Partition by on-/off-screen at HOME.
+          3. For off-screen members, run a surgical repack — pass
+             the on-screen ones as ``fixed`` so they retain HOME,
+             and let off-screen members find a temp slot adjacent
+             to other elements.
+
+        Crucially, the surgical repack does NOT overwrite
+        ``_members[mid]`` for non-fixed members; HOME is preserved
+        across temp relocations so a future master move that brings
+        HOME back on-screen restores the original layout.
+
+        Pre-v0.3.17 history:
           * pre-v0.3.8: any non-canonical layout triggered a full
             repack on every master nudge.
           * v0.3.8:     repack only when AT LEAST ONE member was
             off-screen — but it was still a FULL repack of every
             member, blowing away on-screen ones too.
-          * v0.3.16:    repack only the off-screen members; pass the
-            on-screen ones to ``repack`` via the ``fixed`` argument
-            so their slots are pre-claimed.
+          * v0.3.16:    repack only the off-screen members; pass
+            the on-screen ones to ``repack`` via the ``fixed``
+            argument so their slots are pre-claimed.  Still
+            overwrote ``_members`` for relocated members, so HOME
+            was lost on the first temp relocation.
+          * v0.3.17:    HOME preserved.  Step 1 above gives every
+            member a chance to return to HOME on each master move;
+            only those whose HOME is genuinely off-screen go to
+            temp.
 
         During a master drag, members are translated rigidly with
         the master (cheap — no math).  When the drag ends, this
-        routine runs a selective repack only on the off-screen
-        members; otherwise positions stick.
+        routine runs the home-then-temp reconciliation.
         """
         if self.role != "master" or not self._members:
             return
+        from scriptree.shell.cell_registry import CellRegistry
         from scriptree.shell.group_layout import screen_rect_for_master
+
+        registry = CellRegistry.instance()
+
+        # Step 1: try to restore each member to its HOME slot.
+        # During a master drag the rigid-translation kept widget
+        # and HOME in sync; after a previous temp relocation they
+        # may have drifted apart.  Move the widget back so the
+        # on-screen check below sees the HOME position.
+        for mid, home_pt in list(self._members.items()):
+            member = registry.get(mid)
+            if member is None:
+                continue
+            cur = member.pos()
+            if cur.x() != home_pt.x() or cur.y() != home_pt.y():
+                member.move(home_pt.x(), home_pt.y())
+
+        # Step 2: partition by on-/off-screen at HOME.
         master_tl = (self.pos().x(), self.pos().y())
         screen_rect = screen_rect_for_master(master_tl, self._size_px)
-        # Partition members by on-/off-screen.
         off_screen: list[str] = []
         on_screen: list[str] = []
         for mid, qp in self._members.items():
@@ -2713,14 +2751,10 @@ class CellWindow(QMainWindow):
             else:
                 off_screen.append(mid)
         if not off_screen:
-            # Everything's on-screen — just refresh the edge-fold
-            # badge (members might have crossed the inner-ring radius
-            # threshold without going off-screen; the fold check
-            # handles those cases).
             self._check_edge_fold()
             return
-        # Pass the on-screen ids as ``fixed`` so the repack leaves
-        # them in place and only reassigns off-screen members.
+
+        # Step 3: surgical repack for off-screen members only.
         self._repack_members(fixed=set(on_screen))
 
     @staticmethod
@@ -2797,7 +2831,15 @@ class CellWindow(QMainWindow):
             fixed=fixed,
         )
 
-        # Apply the new positions to each member widget + update _members.
+        # Apply the new positions.  v0.3.17: in SURGICAL mode
+        # (``fixed`` is non-None), this is a temp relocation —
+        # widget moves but ``_members[mid]`` (HOME) must NOT be
+        # overwritten so a future reflow can restore the member to
+        # its original slot.  In CANONICAL mode (``fixed`` is
+        # None — used by Case 1 of ``_try_spawn_master`` for fresh
+        # ring spawn), the new positions ARE the HOME slots and
+        # ``_members[mid]`` updates accordingly.
+        is_surgical = fixed is not None
         for mid, new_tl in new_positions.items():
             member = registry.get(mid)
             if new_tl is None:
@@ -2808,7 +2850,8 @@ class CellWindow(QMainWindow):
                     member.setVisible(False)
                 continue
             new_x, new_y = new_tl
-            self._members[mid] = QPoint(new_x, new_y)
+            if not is_surgical:
+                self._members[mid] = QPoint(new_x, new_y)
             if member is not None:
                 # Move to new position and ensure visible.
                 member.move(new_x, new_y)
@@ -3694,10 +3737,17 @@ class CellWindow(QMainWindow):
             f"(now {len(self._members)} member(s))"
         )
 
-        # Re-pack the group so the new cell lands on a free slot
-        # and any displaced cells move to their next-best direction.
+        # Re-pack ONLY the new cell — existing members keep their
+        # positions verbatim (per user contract: "moving one element
+        # does not cause a reshift in the others").  The new cell
+        # was placed at a tentative spot next to the master and
+        # needs to find a real free slot; the ``fixed`` argument
+        # tells repack to leave every other member where it is.
         try:
-            self._repack_members()
+            existing_ids = {
+                mid for mid in self._members.keys() if mid != new_cell._id
+            }
+            self._repack_members(fixed=existing_ids)
         except Exception as exc:  # noqa: BLE001
             _log(
                 f"  _repack_members after drop-join failed: "
@@ -5070,16 +5120,13 @@ class CellWindow(QMainWindow):
                 master._auto_hidden.discard(self._id)
                 # Member removed — ring is dirty (membership changed).
                 master._ring_dirty = True
-                # Repack the surviving members so they fill the gap
-                # the closed cell left behind, then re-evaluate
-                # whether the master should still exist.
-                try:
-                    master._repack_members()
-                except Exception as exc:  # noqa: BLE001
-                    _log(
-                        f"_close_this: master._repack_members raised "
-                        f"{exc!r} — continuing"
-                    )
+                # V3 v0.3.17 — DO NOT repack survivors.  Per user
+                # contract, "moving one element does not cause a
+                # reshift in the others" extends to closures: the
+                # closed cell leaves a gap, and the rest of the
+                # group stays exactly where the user placed them.
+                # The user can manually drag a survivor into the
+                # gap if they want to fill it.
                 _check_master_validity(master, registry)
 
         # ── Master case — closing the master itself ──────────────────
@@ -6215,7 +6262,11 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             master._members[a._id] = QPoint(a.pos())
             master._positioned.add(a._id)
             _update_docked_to(a, b, registry)
-            master._repack_members()
+            # V3 v0.3.17 — DO NOT repack.  Per user contract:
+            # moving one element within a group must NOT reshift
+            # the others.  ``a`` is at the position the snap engine
+            # committed to (edge-adjacent to ``b``), and ``b`` and
+            # the rest of the group stay where they are.
         _log(f"Case 5 (same group): {a._id[:8]} repositioned within group {tgt_master_id[:8]}")
         return
 
@@ -6245,11 +6296,12 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             f"to {tgt_master_id[:8]}"
         )
         # Close old master if it now has fewer than 2 members.
+        # V3 v0.3.17 — DO NOT repack remaining members of the old
+        # master; per user contract, the survivors stay where they
+        # are.  The new master also doesn't repack — ``a`` already
+        # sits at the snap-committed edge of ``b``.
         if old_master is not None:
             _check_master_validity(old_master, registry)
-            old_master._repack_members()
-        if new_master is not None:
-            new_master._repack_members()
         return
 
     # ---- Case 2: tgt in group, src standalone ------------------------------
@@ -6266,8 +6318,9 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             a.update()  # Bug 5: refresh outline colour (now associated)
             if not master.isVisible():
                 master.show()
-            master._repack_members()
-            # New member joined — ring is dirty.
+            # V3 v0.3.17 — DO NOT repack.  ``a`` arrives at the
+            # snap-committed edge of ``b``; existing members of
+            # the ring keep their positions.
             master._ring_dirty = True
         _log(f"Case 2 (src joins tgt group): {a._id[:8]} -> group {tgt_master_id[:8]}")
         return
@@ -6286,8 +6339,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             b.update()  # Bug 5: refresh outline colour (now associated)
             if not master.isVisible():
                 master.show()
-            master._repack_members()
-            # New member joined — ring is dirty.
+            # V3 v0.3.17 — DO NOT repack (same rationale as Case 2).
             master._ring_dirty = True
         _log(f"Case 3 (tgt joins src group): {b._id[:8]} -> group {src_master_id[:8]}")
         return

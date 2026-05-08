@@ -321,8 +321,14 @@ class ForestController(QObject):
         # _compute_stroke_color is unchanged but the assoc state
         # paint code reads _group_master_id).
         ring_master.update()
+        # Repack only the newcomer — pre-existing forest members
+        # keep their positions verbatim (per the v0.3.17 "no
+        # reshift" contract).
         try:
-            forest._repack_members()
+            existing_ids = {
+                mid for mid in forest._members.keys() if mid != ring_master._id
+            }
+            forest._repack_members(fixed=existing_ids)
         except Exception as exc:  # noqa: BLE001
             _log(f"_attach_existing_master_as_member: repack failed: {exc!r}")
 
