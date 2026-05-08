@@ -62,7 +62,58 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "each sub-tool to its own config. Implies -standalone."
         ),
     )
+    parser.add_argument(
+        "-run",
+        action="store_true",
+        default=False,
+        help=(
+            "After the standalone window opens, immediately click "
+            "Run on the active tool.  Implies -standalone.  Used by "
+            "the V3 cell shell when a cell is configured for "
+            "click-to-run (cell.click_action = \"run\" in the "
+            "catalog JSON)."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def _autorun_active_tool(win) -> None:  # noqa: ANN001
+    """Click the Run button on the standalone window's active tool.
+
+    V3 v0.3.5+ — invoked via ``QTimer.singleShot(0, ...)`` so the
+    window's construction-time signals (config loaded, form populated,
+    visibility hooks) finish before we synthesise the click.
+
+    The standalone window can host either a single ``ToolRunnerView``
+    (for a ``.scriptree`` file) or a tabbed window of runners (for
+    a ``.scriptreetree`` file launched in flat mode).  We trigger
+    ``_btn_run.click()`` on whichever runner is currently visible —
+    that respects the same code path as a real human click,
+    including sanitisation warnings, run-tools capability gates,
+    and credential prompts.
+    """
+    try:
+        # Lazy attribute lookup — avoids a hard import dep on
+        # standalone_window from main's top-of-file.
+        runner = None
+        # StandaloneWindow.from_tool stashes the runner directly.
+        if hasattr(win, "_runner") and getattr(win, "_runner", None):
+            runner = win._runner
+        # StandaloneWindow.from_tree uses a tab widget — pick the
+        # currently-visible tab's runner.
+        elif hasattr(win, "_tabs"):
+            current = win._tabs.currentWidget()
+            if current is not None and hasattr(current, "_btn_run"):
+                runner = current
+        if runner is not None and hasattr(runner, "_btn_run"):
+            if runner._btn_run.isEnabled():
+                runner._btn_run.click()
+    except Exception as exc:  # noqa: BLE001
+        import sys
+        print(
+            f"[scriptree -run] auto-click failed: {exc!r}",
+            file=sys.stderr,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,8 +135,10 @@ def main(argv: list[str] | None = None) -> int:
             app.setStyle(style)
             break
 
-    # -configuration implies -standalone.
-    standalone = args.standalone or args.configuration is not None
+    # -configuration AND -run both imply -standalone.
+    standalone = (
+        args.standalone or args.configuration is not None or args.run
+    )
 
     if args.file and standalone:
         # Standalone mode — lightweight window with optional config.
@@ -104,6 +157,14 @@ def main(argv: list[str] | None = None) -> int:
                 tool, file_path, config_name=args.configuration
             )
         win.show()
+        # ``-run`` (V3 v0.3.5+) — auto-click the Run button on the
+        # active runner once the window is up.  We defer via a 0-ms
+        # ``QTimer.singleShot`` so the window finishes its
+        # construction-time signals (config loaded, form populated)
+        # before we synthesise the click.
+        if args.run:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: _autorun_active_tool(win))
     else:
         # Normal IDE window.
         from .ui.main_window import MainWindow

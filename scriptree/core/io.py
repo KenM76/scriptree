@@ -81,6 +81,15 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         cell_d["icon_scale"] = float(tool.cell_icon_scale)
     if tool.cell_label_opacity != 1.0:
         cell_d["label_opacity"] = float(tool.cell_label_opacity)
+    # Cell click action (V3 v0.3.5+).  Emitted only when off the
+    # default ("menu") so legacy tools round-trip byte-identical.
+    if tool.cell_click_action and tool.cell_click_action != "menu":
+        cell_d["click_action"] = str(tool.cell_click_action)
+    if (
+        tool.cell_click_run_mode
+        and tool.cell_click_run_mode != "sequential"
+    ):
+        cell_d["click_run_mode"] = str(tool.cell_click_run_mode)
     if cell_d:
         d["cell"] = cell_d
     # Interactive stdin (V3 v0.3.0) — emitted only when True so legacy
@@ -194,6 +203,8 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         cell_text_label=str(cell_d.get("text_label", "")),
         cell_icon_scale=_cell_float("icon_scale", 1.0),
         cell_label_opacity=_cell_float("label_opacity", 1.0),
+        cell_click_action=str(cell_d.get("click_action", "menu")),
+        cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
         interactive=bool(data.get("interactive", False)),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
@@ -333,6 +344,15 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
         cell_d["icon_scale"] = float(tree.cell_icon_scale)
     if tree.cell_label_opacity != 1.0:
         cell_d["label_opacity"] = float(tree.cell_label_opacity)
+    # Cell click action (V3 v0.3.5+).  Same default-omit rule as
+    # ToolDef so legacy trees round-trip byte-identical.
+    if tree.cell_click_action and tree.cell_click_action != "menu":
+        cell_d["click_action"] = str(tree.cell_click_action)
+    if (
+        tree.cell_click_run_mode
+        and tree.cell_click_run_mode != "sequential"
+    ):
+        cell_d["click_run_mode"] = str(tree.cell_click_run_mode)
     if cell_d:
         d["cell"] = cell_d
     return d
@@ -362,6 +382,8 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         cell_text_label=str(cell_d.get("text_label", "")),
         cell_icon_scale=_cell_float("icon_scale", 1.0),
         cell_label_opacity=_cell_float("label_opacity", 1.0),
+        cell_click_action=str(cell_d.get("click_action", "menu")),
+        cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

@@ -412,6 +412,111 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self._rotate_btn)
 
+        # ---- 6.5 Click action (V3 v0.3.5+) ---------------------------------
+        # Two dropdowns:
+        #   - Click action:   "Show menu" (default) | "Run tool(s)"
+        #   - Run mode:        "Sequential" | "Parallel" (only meaningful
+        #                       when click action is "Run tool(s)" AND the
+        #                       bound catalog is a .scriptreetree)
+        #
+        # Both are gated by the ``cell_click_to_run`` capability — when
+        # denied, both controls are disabled with an explanatory tooltip
+        # and any catalog-side click_action="run" is overridden to
+        # "menu" at click-dispatch time anyway.
+        # Local re-import of QGroupBox + QComboBox so this section
+        # is independent of the cell-label section's lazy imports
+        # below — Python's lexical scoping treats those imports as
+        # local-binding-creators that would otherwise shadow our
+        # uses here with an UnboundLocalError.
+        from PySide6.QtWidgets import (
+            QGroupBox as _QGroupBox,
+            QComboBox as _QComboBox,
+        )
+        click_grp = _QGroupBox("Single-click action")
+        click_layout = QVBoxLayout(click_grp)
+
+        click_action_row = QHBoxLayout()
+        click_action_row.addWidget(QLabel("Click action:"))
+        self._click_action_combo = _QComboBox()
+        self._click_action_combo.addItem("Show menu", "menu")
+        self._click_action_combo.addItem("Run tool(s)", "run")
+        # Initial state from the catalog (or "menu" when unbound).
+        from scriptree.core.cell_metadata import read_for as _read_for
+        try:
+            initial_md = (
+                _read_for(hexagon._catalog_path)
+                if hexagon._catalog_path else None
+            )
+        except Exception:  # noqa: BLE001
+            initial_md = None
+        initial_action = (
+            initial_md.click_action if initial_md is not None else "menu"
+        )
+        idx = self._click_action_combo.findData(initial_action)
+        self._click_action_combo.setCurrentIndex(max(idx, 0))
+        click_action_row.addWidget(self._click_action_combo)
+        click_layout.addLayout(click_action_row)
+
+        run_mode_row = QHBoxLayout()
+        run_mode_row.addWidget(QLabel("Run mode:"))
+        self._click_run_mode_combo = _QComboBox()
+        self._click_run_mode_combo.addItem("Sequential", "sequential")
+        self._click_run_mode_combo.addItem("Parallel", "parallel")
+        initial_mode = (
+            initial_md.click_run_mode if initial_md is not None else "sequential"
+        )
+        idx = self._click_run_mode_combo.findData(initial_mode)
+        self._click_run_mode_combo.setCurrentIndex(max(idx, 0))
+        run_mode_row.addWidget(self._click_run_mode_combo)
+        click_layout.addLayout(run_mode_row)
+
+        layout.addWidget(click_grp)
+
+        # Capability gate (V3 v0.3.5).  The dropdowns disable when
+        # ``cell_click_to_run`` is denied so the user can't change
+        # the action away from "menu".  A tooltip explains why.
+        try:
+            from scriptree.ui.permission_guards import perm_check
+            click_perm_ok = perm_check("cell_click_to_run")
+        except Exception:  # noqa: BLE001
+            click_perm_ok = True
+        if not click_perm_ok:
+            self._click_action_combo.setEnabled(False)
+            self._click_run_mode_combo.setEnabled(False)
+            tip = (
+                "Disabled by IT — cell click-to-run is not permitted "
+                "(capability: cell_click_to_run)."
+            )
+            self._click_action_combo.setToolTip(tip)
+            self._click_run_mode_combo.setToolTip(tip)
+
+        # Run-mode is only meaningful when the catalog is a tree AND
+        # the click action is "run".  We disable the run-mode combo
+        # outside that case to avoid confusing the user.
+        def _refresh_run_mode_enabled() -> None:
+            action = self._click_action_combo.currentData()
+            cat = hexagon._catalog_path or ""
+            is_tree = cat.lower().endswith(".scriptreetree")
+            self._click_run_mode_combo.setEnabled(
+                click_perm_ok and action == "run" and is_tree
+            )
+            if not self._click_run_mode_combo.isEnabled() and click_perm_ok:
+                if action != "run":
+                    self._click_run_mode_combo.setToolTip(
+                        "Run mode only applies when Click action is "
+                        "'Run tool(s)'."
+                    )
+                elif not is_tree:
+                    self._click_run_mode_combo.setToolTip(
+                        "Run mode only applies to .scriptreetree "
+                        "catalogs (single tools have only one thing "
+                        "to run)."
+                    )
+        _refresh_run_mode_enabled()
+        self._click_action_combo.currentIndexChanged.connect(
+            lambda _i: _refresh_run_mode_enabled()
+        )
+
         # ---- 7. Cell label (icon / custom text / default auto) -------------
         # Per user spec (2026-05-07): the per-cell Settings dialog needs
         # to choose between three label modes (Default / Custom Text /
@@ -572,6 +677,14 @@ class SettingsDialog(QDialog):
         self._rotate_btn.clicked.connect(self._on_rotate)
         self._reset_btn.clicked.connect(self._on_reset)
         self._close_btn.clicked.connect(self.close)
+        # Click-action dropdowns (V3 v0.3.5+) — write through to the
+        # catalog on every change so the choice survives a restart.
+        self._click_action_combo.currentIndexChanged.connect(
+            self._on_click_action_changed
+        )
+        self._click_run_mode_combo.currentIndexChanged.connect(
+            self._on_click_run_mode_changed
+        )
 
         # Cell-label group connections (live preview).  Every value
         # change calls into the hex's apply_*_label_change methods
@@ -631,6 +744,41 @@ class SettingsDialog(QDialog):
     def _on_always_on_top_changed(self, checked: bool) -> None:
         self._hex.apply_always_on_top_change(checked)
         self._hex._save_settings()
+
+    # ---- Click-action slots (V3 v0.3.5+) ---------------------------------
+
+    def _on_click_action_changed(self, _idx: int) -> None:
+        """Persist the chosen click action to the bound catalog's
+        ``cell.click_action`` field.  No-op when the cell has no
+        catalog (the dropdown was a transient choice without a
+        place to write to)."""
+        action = str(self._click_action_combo.currentData() or "menu")
+        cat = self._hex._catalog_path
+        if not cat:
+            return
+        try:
+            from scriptree.core.cell_metadata import write_for
+            write_for(cat, click_action=action)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_on_click_action_changed: write_for({cat!r}) failed: "
+                f"{exc!r}"
+            )
+
+    def _on_click_run_mode_changed(self, _idx: int) -> None:
+        """Persist the run-mode choice to the bound catalog."""
+        mode = str(self._click_run_mode_combo.currentData() or "sequential")
+        cat = self._hex._catalog_path
+        if not cat:
+            return
+        try:
+            from scriptree.core.cell_metadata import write_for
+            write_for(cat, click_run_mode=mode)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_on_click_run_mode_changed: write_for({cat!r}) failed: "
+                f"{exc!r}"
+            )
 
     # ---- Cell-label slots ------------------------------------------------
 
@@ -2293,6 +2441,51 @@ class CellWindow(QMainWindow):
                 f"{exc!r} — falling back to QSettings"
             )
             self._save_settings()
+
+    def _read_click_action(self) -> str:
+        """Return the cell's effective click action ("menu" or "run").
+
+        Resolution (V3 v0.3.5+):
+
+        * ``cell_click_to_run`` capability is denied → always "menu".
+          The capability is the org-level kill switch — without it,
+          single-click can never auto-run regardless of catalog
+          settings.
+        * Catalog has ``cell.click_action == "run"`` and the cell
+          has a bound catalog → "run".
+        * Anything else → "menu" (default, pre-v0.3.5 behaviour).
+        """
+        try:
+            from ..ui.permission_guards import perm_check
+            if not perm_check("cell_click_to_run"):
+                return "menu"
+        except Exception:  # noqa: BLE001
+            return "menu"
+        catalog = self._catalog_path
+        if not catalog:
+            return "menu"
+        try:
+            from scriptree.core.cell_metadata import read_for
+            md = read_for(catalog)
+        except Exception:  # noqa: BLE001
+            return "menu"
+        return "run" if md.click_action == "run" else "menu"
+
+    def _read_click_run_mode(self) -> str:
+        """Return the cell's effective run mode ("sequential" or
+        "parallel"), defaulting to "sequential" if anything goes
+        wrong loading the catalog."""
+        catalog = self._catalog_path
+        if not catalog:
+            return "sequential"
+        try:
+            from scriptree.core.cell_metadata import read_for
+            md = read_for(catalog)
+        except Exception:  # noqa: BLE001
+            return "sequential"
+        return (
+            "parallel" if md.click_run_mode == "parallel" else "sequential"
+        )
 
     def _refresh_label_from_catalog(self) -> None:
         """Pull cell label state from the currently-bound catalog file
@@ -4553,6 +4746,42 @@ class CellWindow(QMainWindow):
                     f"click(single) id={self._id[:8]} — popup just "
                     f"closed; treating second click as toggle-hide"
                 )
+                return
+
+            # Click-to-run dispatch (V3 v0.3.5+).  The bound catalog's
+            # ``cell.click_action`` field decides whether single-left-
+            # click shows the popup menu (default, pre-v0.3.5 behaviour)
+            # or fires the tool(s) directly via click_to_run.
+            #
+            # The capability ``cell_click_to_run`` is checked at the
+            # Settings-dialog level (the dropdown is locked when
+            # denied), so an action of "run" reaching this dispatch
+            # means the admin previously allowed it.  We still
+            # short-circuit to "menu" when the catalog hasn't been
+            # loaded yet (no ``click_action`` to read).
+            click_action = self._read_click_action()
+            if click_action == "run" and self._catalog_path:
+                run_mode = self._read_click_run_mode()
+                _log(
+                    f"click(single) id={self._id[:8]} — click-to-run "
+                    f"(mode={run_mode}, catalog={Path(self._catalog_path).name})"
+                )
+                try:
+                    from scriptree.shell.click_to_run import run_catalog_on_click
+                    run_catalog_on_click(self._catalog_path, run_mode)
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"click(single): click-to-run failed: {exc!r} "
+                        f"— falling back to menu"
+                    )
+                    try:
+                        from scriptree.shell.v1_launcher import show_tree_for
+                        show_tree_for(self, mode="standalone")
+                    except Exception as exc2:  # noqa: BLE001
+                        _log(
+                            f"click(single): menu fallback also failed: "
+                            f"{exc2!r}"
+                        )
                 return
 
             _log(f"click(single) id={self._id} — opening tree standalone")

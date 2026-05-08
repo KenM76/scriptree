@@ -143,3 +143,9 @@ gives the per-topic slice.
   `suppress_sanitization_warnings` capability.  QSettings storage
   + Edit ▸ Sanitization warnings... re-enable dialog.
   → `rags/lessons/sanitization_warning_suppression.md`
+- [v3-architecture] **cell_click_to_run**: v0.3.5 made cells
+  configurable as single-click run buttons.  Two new catalog
+  fields (`cell.click_action` / `cell.click_run_mode`), new
+  `cell_click_to_run` capability, V1 `-run` flag for auto-click,
+  Popen-polling sequencer for tree sequential mode.
+  → `rags/lessons/cell_click_to_run.md`

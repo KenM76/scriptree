@@ -103,3 +103,11 @@ design.
   QSettings via `core/sanitize_suppression.py`; re-enable dialog
   under Edit ▸ Sanitization warnings...  +22 tests.
   → `rags/lessons/sanitization_warning_suppression.md`
+- [v3-architecture] **cell_click_to_run**: v0.3.5 added a per-cell
+  setting that turns single-click into a Run button.  Two new
+  catalog fields (`cell.click_action`, `cell.click_run_mode`) +
+  new `cell_click_to_run` capability + V1 `-run` flag for auto-
+  click.  Sequential mode uses Popen polling; parallel iterates
+  `launch_tool`.  +24 tests.  Lazy-import-shadowing trap in
+  SettingsDialog noted.
+  → `rags/lessons/cell_click_to_run.md`

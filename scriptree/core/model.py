@@ -281,6 +281,24 @@ class ToolDef:
     cell_text_label: str = ""
     cell_icon_scale: float = 1.0
     cell_label_opacity: float = 1.0
+    # Cell single-click behaviour (V3 v0.3.5+).  When the cell shell
+    # binds this catalog to a hex / square cell, ``cell_click_action``
+    # determines what a single-left-click does:
+    #
+    #   "menu" (default) — show the popup tool menu (pre-v0.3.5 behaviour).
+    #   "run"            — directly run the tool; for ``.scriptreetree``
+    #                      catalogs, every leaf runs.  ``cell_click_run_mode``
+    #                      then controls whether they fire sequentially
+    #                      (one after the previous closes) or in parallel
+    #                      (all spawned at once).
+    #
+    # The ``cell_click_to_run`` capability gates whether the user
+    # can flip the action to ``"run"`` from the cell Settings
+    # dialog — when denied, the dropdown is locked at ``"menu"``.
+    # Always serialised verbatim to the catalog JSON's ``cell``
+    # sub-object so the choice travels with the file.
+    cell_click_action: str = "menu"        # "menu" | "run"
+    cell_click_run_mode: str = "sequential"  # "sequential" | "parallel"
     # Interactive stdin (V3 v0.3.0) — when True the runner exposes a
     # send-line widget below the output pane, so the tool can read
     # user input from stdin while running.  Used by tools that
@@ -437,6 +455,13 @@ class TreeDef:
     cell_text_label: str = ""
     cell_icon_scale: float = 1.0
     cell_label_opacity: float = 1.0
+    # Cell single-click action (V3 v0.3.5+).  See the matching
+    # docstring on ``ToolDef.cell_click_action`` for the full
+    # contract — when set to ``"run"`` on a TreeDef, single-click
+    # on the bound cell runs every leaf in the tree according to
+    # ``cell_click_run_mode`` (sequential or parallel).
+    cell_click_action: str = "menu"        # "menu" | "run"
+    cell_click_run_mode: str = "sequential"  # "sequential" | "parallel"
     schema_version: int = SCHEMA_VERSION
 
 

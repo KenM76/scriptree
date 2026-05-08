@@ -113,12 +113,18 @@ def _log(msg: str) -> None:
     print(f"[v1_launcher] {msg}", file=sys.stderr, flush=True)
 
 
-def launch_tool(scriptree_path: str | Path, configuration: str | None = None) -> None:
+def launch_tool(
+    scriptree_path: str | Path,
+    configuration: str | None = None,
+    *,
+    run_on_open: bool = False,
+) -> None:
     """Spawn V1 with a single ``.scriptree`` file in **standalone mode**.
 
     Used when a user clicks a tool inside a cell's menu.  V1's CLI:
 
-        python run_scriptree.py <tool.scriptree> -standalone [-configuration <name>]
+        python run_scriptree.py <tool.scriptree> -standalone
+            [-configuration <name>] [-run]
 
     The ``-standalone`` flag is critical — without it V1 opens its
     full editor (MainWindow) instead of the lightweight standalone
@@ -126,15 +132,23 @@ def launch_tool(scriptree_path: str | Path, configuration: str | None = None) ->
     implies ``-standalone`` already, but we pass both explicitly so
     the intent is unambiguous in launch logs.
 
+    ``run_on_open`` (V3 v0.3.5+) — when True, append ``-run`` so V1
+    auto-clicks the Run button after the standalone window opens.
+    Used by the cell shell when a cell is configured for click-to-run
+    (catalog ``cell.click_action == "run"``).
+
     Fire-and-forget — we do not wait for V1 to exit.
     """
     p = Path(scriptree_path)
     cmd = _v1_launcher_cmd() + [str(p), "-standalone"]
     if configuration:
         cmd.extend(["-configuration", configuration])
+    if run_on_open:
+        cmd.append("-run")
     _log(
         f"launch_tool: leaf={p.name!r}  exists={p.is_file()}  "
-        f"configuration={configuration!r}  standalone=True"
+        f"configuration={configuration!r}  standalone=True  "
+        f"run_on_open={run_on_open}"
     )
     if not p.is_file():
         _log(

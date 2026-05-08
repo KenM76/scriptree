@@ -245,6 +245,17 @@ CAPABILITIES: dict[str, str] = {
         "Allow the user to dismiss future sanitization warnings "
         "(per-field / per-tool / global checkboxes in the warning dialog)"
     ),
+    # Cell click-to-run mode (v0.3.5).  Gates the "Click action"
+    # and "Run mode" dropdowns in the cell Settings dialog so an
+    # admin can prevent users from configuring cells to fire tools
+    # on a single click — the default ``"menu"`` behaviour stays in
+    # force regardless of what the catalog JSON says.  Default
+    # ALLOWED so the feature is usable out of the box.
+    "cell_click_to_run": (
+        "Allow cells to be configured as single-click run buttons "
+        "(catalog cell.click_action = \"run\", with sequential or "
+        "parallel run mode for trees)"
+    ),
 }
 
 

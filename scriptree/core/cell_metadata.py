@@ -52,6 +52,10 @@ class CellMetadata:
     icon_scale: float = 1.0
     label_opacity: float = 1.0
     icon_resolved_path: str = ""  # absolute path (computed) or "" if embedded/none
+    # Click-to-run fields (V3 v0.3.5+).  See ``ToolDef.cell_click_action``
+    # / ``ToolDef.cell_click_run_mode`` for the contract.
+    click_action: str = "menu"
+    click_run_mode: str = "sequential"
 
     def has_icon(self) -> bool:
         return bool(self.icon_resolved_path) or bool(self.icon_data)
@@ -94,6 +98,11 @@ def read_for(catalog_path: str | Path) -> CellMetadata:
         text_label=getattr(obj, "cell_text_label", "") or "",
         icon_scale=float(getattr(obj, "cell_icon_scale", 1.0) or 1.0),
         label_opacity=float(getattr(obj, "cell_label_opacity", 1.0) or 1.0),
+        click_action=str(getattr(obj, "cell_click_action", "menu") or "menu"),
+        click_run_mode=str(
+            getattr(obj, "cell_click_run_mode", "sequential")
+            or "sequential"
+        ),
     )
 
     if md.icon and not md.icon_data:
@@ -135,11 +144,19 @@ def write_for(
     text_label: str | None = None,
     icon_scale: float | None = None,
     label_opacity: float | None = None,
+    click_action: str | None = None,
+    click_run_mode: str | None = None,
 ) -> CellMetadata:
     """Mutate the catalog file's cell-visual fields and persist.
 
     Pass ``None`` for any field to LEAVE IT UNCHANGED.  Pass empty
     string / 1.0 to clear / reset to default.
+
+    ``click_action`` / ``click_run_mode`` (V3 v0.3.5+) — gate the
+    cell's single-click behaviour.  Valid ``click_action`` values
+    are ``"menu"`` and ``"run"``; valid ``click_run_mode`` values
+    are ``"sequential"`` and ``"parallel"``.  Unknown values are
+    coerced to defaults at load time.
 
     Path normalisation: when ``icon`` is a non-empty absolute path,
     we rewrite it relative to the catalog directory whenever the
@@ -179,6 +196,17 @@ def write_for(
         obj.cell_icon_scale = float(icon_scale)
     if label_opacity is not None:
         obj.cell_label_opacity = float(label_opacity)
+    if click_action is not None:
+        # Coerce to a known value.  Unknown values fall back to
+        # the safe default ("menu") so mistyped JSON can't unlock
+        # auto-run.
+        obj.cell_click_action = (
+            "run" if str(click_action) == "run" else "menu"
+        )
+    if click_run_mode is not None:
+        obj.cell_click_run_mode = (
+            "parallel" if str(click_run_mode) == "parallel" else "sequential"
+        )
 
     if isinstance(obj, ToolDef):
         save_tool(obj, p)

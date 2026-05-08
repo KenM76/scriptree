@@ -54,6 +54,27 @@ Every cell in a master+members group shares the same **size**, **shape**, and **
 - After any geometry change, the ring is **repacked** so members stay edge-touching the master with no overlap. Members that would land off-screen at the new geometry are reassigned to a free, on-screen direction.
 - When you drag a master so part of the ring would slide off-screen, the off-edge members reattach to a different direction on release. They never end up clipped, hidden behind the taskbar, or stacked on top of each other.
 
+### Click-to-run cells (v0.3.5)
+
+By default, single-clicking a cell pops up a tool menu — pick a tool from the menu, V1's standalone runner opens. v0.3.5 adds a per-cell setting that **changes single-click into a Run button**:
+
+- **Click action** (`Show menu` / `Run tool(s)`) — set in the cell's right-click → **Settings** dialog. When set to **Run tool(s)**:
+  - For a `.scriptree` cell → single-click opens V1's standalone with the tool, immediately auto-clicking Run.
+  - For a `.scriptreetree` cell → single-click runs every leaf (depth-first through folders).
+- **Run mode** (`Sequential` / `Parallel`) — only meaningful for trees:
+  - **Sequential** (default) — opens leaves one at a time. Each leaf's V1 standalone window opens, auto-runs, and stays open until the user closes it. The next leaf opens only after the previous closes.
+  - **Parallel** — every leaf's V1 standalone spawns simultaneously. Each window auto-runs in its own process. The user ends up with N independent windows running concurrently.
+
+The choice is stored in the catalog JSON's `cell` sub-object (`cell.click_action`, `cell.click_run_mode`) so the configuration travels with the file. Rebinding the cell to a different catalog reads back that catalog's preference.
+
+**Permission gate.** The `cell_click_to_run` capability gates this feature — when the file is missing or read-only, the **Click action** dropdown in the Settings dialog is locked at "Show menu" and the Run-mode dropdown stays disabled. Even if a catalog's JSON specifies `click_action: "run"`, the cell falls back to the menu-popup behaviour at click-dispatch time when the capability is denied.
+
+Implementation note: V1 gained a `-run` CLI flag in v0.3.5 that auto-clicks the Run button after the standalone window finishes loading. Click-to-run cells append `-run` to the V1 launch command. The same flag is available from the command line for scripting:
+
+```
+run_scriptree.bat path/to/tool.scriptree -run
+```
+
 ---
 
 ## Drag-drop file support (v0.2.5)
