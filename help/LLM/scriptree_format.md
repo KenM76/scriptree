@@ -79,6 +79,30 @@ disagree, the code wins — open an issue and fix the docs.
 - `env` / `path_prepend` — tool-level environment overrides, applied to
   every run regardless of active configuration. Omitted from the on-disk
   form when empty.
+- **Sibling imports (Python tools).**  If your tool is a Python script
+  laid out as a folder with `_helper.py` / `_common.py` siblings the
+  entry script imports, ScripTree v0.3.12+ makes those imports work
+  reliably across:
+    * the bundled embeddable Python that ships in `lib/python/` (whose
+      `python<ver>._pth` file would otherwise disable script-dir
+      auto-prepending),
+    * system Python with `-P` or `PYTHONSAFEPATH=1` set,
+    * `runpy`-style invocations.
+
+  The runner injects two environment variables before spawn:
+    * `SCRIPTREE_TOOL_DIR` — absolute path of the `.scriptree` file's
+      parent folder.  Read by the bundled Python's `sitecustomize.py`
+      (at `lib/python/Lib/site-packages/sitecustomize.py`) and
+      prepended to `sys.path`.
+    * `PYTHONPATH` — same directory prepended (any pre-existing
+      PYTHONPATH entries are preserved at the tail).
+
+  **You do not need to add any boilerplate** to your tool scripts —
+  `import _helper` from a sibling module simply works.  If you have
+  a wrapper script that needs to set `SCRIPTREE_TOOL_DIR` to a
+  different directory (e.g. a meta-tool that runs sub-tools), the
+  wrapper-set value is preserved (the runner only fills the var
+  when it isn't already set).
 - `source` — provenance. Always present; `help_text_cached` is null for
   manually-built tools.
 

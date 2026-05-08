@@ -181,9 +181,27 @@ class TestBuildEnv:
 
 
 class TestBuildFullArgvPassesEnv:
-    def test_no_env_gives_none(self) -> None:
+    def test_no_user_env_still_carries_tool_dir_injection(self) -> None:
+        """V3 v0.3.12+ — even when the tool has no env / path overrides,
+        the runner injects ``SCRIPTREE_TOOL_DIR`` + ``PYTHONPATH`` so
+        sibling imports work under the bundled embeddable Python.
+        See ``runner.inject_tool_dir_env`` for the full rationale.
+
+        Pre-v0.3.12 this returned ``None``; the contract is now
+        "always inject if we can derive a tool dir."
+        """
         tool = _tool()
         cmd = build_full_argv(tool, {"name": "x"}, [])
+        assert cmd.env is not None
+        assert "SCRIPTREE_TOOL_DIR" in cmd.env
+        assert "PYTHONPATH" in cmd.env
+
+    def test_no_tool_dir_derivable_keeps_env_none(self) -> None:
+        """Sanity: a tool with neither ``loaded_from`` nor a derivable
+        executable parent (bare ``"echo"`` resolves via PATH at spawn
+        time) still gets ``None`` because there's no folder to inject."""
+        tool = ToolDef(name="x", executable="echo")  # PATH-resolved name
+        cmd = build_full_argv(tool, {}, [])
         assert cmd.env is None
 
     def test_with_tool_env_env_present(self) -> None:

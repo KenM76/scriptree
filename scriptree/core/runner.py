@@ -519,6 +519,107 @@ def build_env(
     return env
 
 
+def inject_tool_dir_env(
+    env: dict[str, str] | None,
+    tool: ToolDef,
+    *,
+    base_env: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Add ``SCRIPTREE_TOOL_DIR`` and ``PYTHONPATH`` entries to ``env``
+    so sibling imports inside the tool's folder always resolve.
+
+    The problem this fixes (V3 v0.3.12+):
+
+      * The Windows embeddable Python ships with a ``python<ver>._pth``
+        file that puts the interpreter in restricted-``sys.path`` mode.
+        ``PYTHONPATH`` is ignored, ``PYTHONHOME`` is ignored, and the
+        script's own directory is **not** auto-prepended to
+        ``sys.path[0]``.  A multi-file tool that does ``import _foo``
+        from a sibling module will fail with ``ModuleNotFoundError``
+        even though the same code runs fine on a system Python.
+
+        Fix on the bundled side: ``lib/python/Lib/site-packages/
+        sitecustomize.py`` reads ``SCRIPTREE_TOOL_DIR`` and prepends
+        it to ``sys.path``.  This function sets that env var here.
+
+      * System Python invocations get the script-dir auto-prepend by
+        default — but Python 3.11+ ``-P`` and ``PYTHONSAFEPATH=1``
+        disable it, and ``runpy``-style invocations have never had
+        it.  Setting ``PYTHONPATH`` covers those cases too.
+
+    Both env keys are set to the directory containing the
+    ``.scriptree`` file (i.e. ``Path(tool.loaded_from).parent``).
+    When ``loaded_from`` is unavailable the function falls back to
+    the executable's resolved parent directory; if even that's
+    not derivable, the function returns ``env`` unchanged.
+
+    Idempotent: if ``SCRIPTREE_TOOL_DIR`` is already set we don't
+    clobber it (a wrapper script may have set a more authoritative
+    value).  ``PYTHONPATH`` gets the tool dir prepended; any
+    existing entries are preserved.
+
+    Returns the (possibly-mutated) ``env`` dict, or a fresh dict
+    derived from ``base_env`` (or ``os.environ``) if ``env`` was
+    ``None`` and we have something to add.  Returns ``None`` only
+    if there's nothing to add and ``env`` was ``None`` to start.
+    """
+    # Resolve the tool's own folder.
+    tool_dir: str | None = None
+    if tool.loaded_from:
+        try:
+            tool_dir = str(Path(tool.loaded_from).resolve().parent)
+        except (OSError, ValueError, RuntimeError):
+            tool_dir = None
+    if not tool_dir and tool.executable:
+        # Fall back to the executable's parent — but only when the
+        # executable is a path-shaped reference (contains a separator
+        # or a drive prefix).  A bare name like ``echo`` is resolved
+        # by Popen via PATH at spawn time; there's no meaningful
+        # "tool directory" for those and using CWD would be a bug
+        # magnet.  We don't require the file to actually exist on
+        # disk — the .scriptree's intended folder layout is a static
+        # fact regardless of whether the binary happens to be present
+        # on the current machine.
+        exe_str = tool.executable
+        looks_pathy = (
+            "/" in exe_str or "\\" in exe_str or
+            (len(exe_str) >= 2 and exe_str[1] == ":")  # C:..., D:...
+        )
+        if looks_pathy:
+            try:
+                exe_resolved = resolve_tool_path(exe_str, tool.loaded_from)
+                tool_dir = str(Path(exe_resolved).resolve().parent)
+            except (OSError, ValueError, RuntimeError):
+                tool_dir = None
+    if not tool_dir:
+        # Nothing actionable — leave env exactly as the caller passed it.
+        return env
+
+    # Materialise an env dict to mutate.  When env is None we'd
+    # otherwise inherit the parent's verbatim; now that we DO have
+    # something to add, copy from base_env (or os.environ) so the
+    # final block is complete.
+    if env is None:
+        env = dict(base_env if base_env is not None else os.environ)
+
+    # SCRIPTREE_TOOL_DIR — only set if the caller / tool didn't already.
+    if not env.get("SCRIPTREE_TOOL_DIR"):
+        env["SCRIPTREE_TOOL_DIR"] = tool_dir
+
+    # PYTHONPATH — prepend the tool dir (preserving any existing entries).
+    existing_pp = env.get("PYTHONPATH", "")
+    if not existing_pp:
+        env["PYTHONPATH"] = tool_dir
+    else:
+        # Avoid duplicating if the tool dir is already at the front.
+        first = existing_pp.split(os.pathsep, 1)[0]
+        if os.path.normcase(os.path.abspath(first or ".")) != \
+                os.path.normcase(os.path.abspath(tool_dir)):
+            env["PYTHONPATH"] = os.pathsep.join([tool_dir, existing_pp])
+
+    return env
+
+
 def spawn_streaming(
     cmd: ResolvedCommand,
     on_stdout_line: Callable[[str], None],
@@ -1125,6 +1226,13 @@ def build_full_argv(
         global_path_overrides=global_path_overrides,
         tree_path_prepend=tree_path_prepend,
     )
+    # V3 v0.3.12+ — make sibling imports work bulletproof for Python
+    # tools laid out as a folder with ``.scriptree`` + helper modules
+    # (``import _outlook_common`` from a sibling file, etc.).  See
+    # ``inject_tool_dir_env`` for the full rationale.  Applied AFTER
+    # ``build_env`` so user-supplied PYTHONPATH overrides win at the
+    # head of the path.
+    env = inject_tool_dir_env(env, tool)
     return ResolvedCommand(
         argv=[*cmd.argv, *extras], cwd=cmd.cwd, env=env
     )
