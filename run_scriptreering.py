@@ -325,9 +325,99 @@ def _check_dependencies():
 
 # ── Launch ─────────────────────────────────────────────────────────────
 
+
+def _self_heal_bundled_python():
+    """Repair the bundled ``lib/python/`` directory if a user has
+    overwritten it with a fresh python.org embed.
+
+    See ``run_scriptree.py``'s identical helper for the full
+    rationale; this is a verbatim copy because the two launchers
+    must stay independently runnable (each can be invoked without
+    the other being on ``sys.path``).
+    """
+    here = Path(__file__).resolve().parent
+    py_dir = here / "lib" / "python"
+    if not py_dir.is_dir():
+        return
+
+    # 1. Patch python<ver>._pth so `import site` is enabled.
+    try:
+        for pth in py_dir.glob("python*._pth"):
+            text = pth.read_text(encoding="utf-8")
+            patched_lines = []
+            saw_uncommented = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped == "import site":
+                    saw_uncommented = True
+                    patched_lines.append(line)
+                elif stripped in ("#import site", "# import site"):
+                    patched_lines.append("import site")
+                    saw_uncommented = True
+                else:
+                    patched_lines.append(line)
+            if not saw_uncommented:
+                patched_lines.append("import site")
+                saw_uncommented = True
+            new_text = "\n".join(patched_lines)
+            if not new_text.endswith("\n"):
+                new_text += "\n"
+            if new_text != text:
+                pth.write_text(new_text, encoding="utf-8")
+    except OSError:
+        pass
+
+    # 2. Restore Lib/site-packages/sitecustomize.py.
+    try:
+        sp_dir = py_dir / "Lib" / "site-packages"
+        sp_dir.mkdir(parents=True, exist_ok=True)
+        sc_path = sp_dir / "sitecustomize.py"
+        marker = "ScripTree bundled-Python site customisation"
+        need_rewrite = (
+            not sc_path.is_file()
+            or marker not in sc_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        )
+        if need_rewrite:
+            # Inline minimal sitecustomize — same logic as the
+            # full file, just compressed.  See run_scriptree.py's
+            # ``_write_minimal_sitecustomize`` for the rationale.
+            sc_path.write_text(
+                '"""ScripTree bundled-Python site customisation '
+                '(self-healed minimal copy)."""\n'
+                "import os, sys\n\n"
+                "def _scriptree_fix_sys_path():\n"
+                "    seen = {os.path.normcase(os.path.abspath(p or '.')) "
+                "for p in sys.path}\n"
+                "    def _prepend(d):\n"
+                "        if not d: return\n"
+                "        try: a = os.path.abspath(d)\n"
+                "        except (OSError, ValueError): return\n"
+                "        k = os.path.normcase(a)\n"
+                "        if k in seen: return\n"
+                "        sys.path.insert(0, a); seen.add(k)\n"
+                "    td = os.environ.get('SCRIPTREE_TOOL_DIR', '').strip()\n"
+                "    if td and os.path.isdir(td): _prepend(td)\n"
+                "    if sys.argv and sys.argv[0]:\n"
+                "        try:\n"
+                "            a = os.path.abspath(sys.argv[0])\n"
+                "            if os.path.isfile(a): _prepend(os.path.dirname(a))\n"
+                "        except (OSError, ValueError): pass\n\n"
+                "try:\n"
+                "    _scriptree_fix_sys_path()\n"
+                "except Exception:\n"
+                "    pass\n",
+                encoding="utf-8",
+            )
+    except OSError:
+        pass
+
+
 _check_python_version()
 _inject_vendored_libs()
 _check_dependencies()
+_self_heal_bundled_python()
 
 # The ``scriptree`` package normally lives directly at the repo
 # root, so adding the launcher's own directory to ``sys.path`` is

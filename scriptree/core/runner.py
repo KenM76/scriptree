@@ -217,7 +217,112 @@ def resolve(
         exe_parent = Path(exe).parent
         cwd = str(exe_parent) if exe_parent.as_posix() else None
 
+    # V3 v0.3.13+ — when the tool spawns Python, splice in the
+    # ScripTree runtime shim so sibling imports (`import _foo` from
+    # a sibling .py file) work reliably.  See ``_inject_runtime_shim``
+    # for the detection rules and the rationale.
+    argv = _inject_runtime_shim(argv)
+
     return ResolvedCommand(argv=argv, cwd=cwd)
+
+
+# Filename patterns that mark a Python interpreter — used by
+# ``_inject_runtime_shim`` to decide whether to splice the shim in.
+# We match by basename (case-folded on Windows) so ``python``,
+# ``python3``, ``python.exe``, ``pythonw.exe``, ``python3.13.exe``
+# all qualify.  Bare ``py`` (the Windows launcher) is intentionally
+# excluded because it has its own argv parsing rules — splicing
+# into ``py -3 script.py`` would land the shim in the wrong slot.
+_PYTHON_EXE_PREFIXES = ("python", "pythonw")
+
+
+def _looks_like_python_interpreter(arg: str) -> bool:
+    """Return True if ``arg`` looks like a Python interpreter path.
+
+    Matches ``python``, ``python3``, ``python.exe``, ``pythonw.exe``,
+    ``python3.13.exe``, and various absolute / relative path forms
+    of the same.  Doesn't match ``py.exe`` (the Windows launcher) —
+    that one has its own argv conventions and would need separate
+    handling if we ever decided to support it.
+    """
+    if not arg:
+        return False
+    name = os.path.basename(arg).lower()
+    # Strip a trailing ``.exe`` for the prefix check.
+    if name.endswith(".exe"):
+        name = name[:-4]
+    for prefix in _PYTHON_EXE_PREFIXES:
+        if name == prefix or name.startswith(prefix + "3") or name.startswith(prefix + "2"):
+            return True
+    # Bare ``python`` / ``pythonw`` exact matches handled above.
+    return False
+
+
+def _looks_like_script_path(arg: str) -> bool:
+    """Return True when ``arg`` looks like a Python source script
+    rather than a flag or option-value the user happens to put first.
+
+    The rule is conservative: we only splice the shim BEFORE a real
+    script reference.  If argv[1] is ``-c``, ``-m``, ``-`` (stdin),
+    or ``-X foo``, we leave the command alone — the shim only
+    handles the ``python script.py args`` shape.
+    """
+    if not arg:
+        return False
+    if arg.startswith("-"):
+        return False
+    # Accept any path-shaped reference.  The shim itself defends
+    # against bogus paths (FileNotFoundError → clear error).
+    return arg.endswith(".py") or arg.endswith(".pyw") or os.sep in arg or "/" in arg
+
+
+def _inject_runtime_shim(argv: list[str]) -> list[str]:
+    """Splice the ScripTree runtime shim between the Python
+    interpreter and the script it's about to run.
+
+    Input shape (no shim)::
+
+        [python.exe, tool.py, --flag, value, ...]
+
+    Output shape (shim spliced in)::
+
+        [python.exe, <abs path to _runtime_shim.py>, tool.py,
+         --flag, value, ...]
+
+    The shim then handles ``sys.path`` setup before delegating to
+    the real tool via ``runpy.run_path``.  See
+    ``scriptree/core/_runtime_shim.py`` for what runs inside the
+    spawned process.
+
+    No-op cases (argv is returned unchanged):
+      * argv has fewer than 2 entries.
+      * argv[0] doesn't look like a Python interpreter (the tool
+        is a native exe, .bat, etc. — sibling-import quirks don't
+        apply).
+      * argv[1] is a Python flag like ``-c``, ``-m``, ``-X opt`` —
+        the shim only handles the ``python script.py`` shape, and
+        splicing it elsewhere would break the user's CLI.
+      * The shim file itself can't be located on disk (e.g. a
+        broken install).  Failing safe: skip splicing and let the
+        tool run with whatever path setup Python provides natively;
+        sibling imports may fail but the tool still launches.
+    """
+    if len(argv) < 2:
+        return argv
+    if not _looks_like_python_interpreter(argv[0]):
+        return argv
+    if not _looks_like_script_path(argv[1]):
+        return argv
+
+    # Locate the shim.  This file lives at scriptree/core/runner.py;
+    # the shim is its sibling.
+    shim_path = Path(__file__).resolve().parent / "_runtime_shim.py"
+    if not shim_path.is_file():
+        # Broken install — the shim should always be next to the
+        # runner.  Skip splicing rather than fail the run.
+        return argv
+
+    return [argv[0], str(shim_path), *argv[1:]]
 
 
 def _resolve_token(

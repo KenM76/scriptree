@@ -334,9 +334,145 @@ def _check_dependencies():
 
 # ── Launch ─────────────────────────────────────────────────────────────
 
+
+def _self_heal_bundled_python():
+    """Repair the bundled ``lib/python/`` directory if a user has
+    overwritten it with a fresh python.org embed (which strips out
+    our patches).
+
+    What we restore:
+
+      * ``Lib/site-packages/sitecustomize.py`` — re-creates the
+        directory tree if the fresh embed didn't ship with one,
+        and writes our path-fixing sitecustomize back into place.
+      * ``python<ver>._pth`` — uncomments the ``import site`` line
+        so ``site.main()`` runs at interpreter startup (the fresh
+        embed ships with it commented).
+
+    We DON'T attempt to re-bootstrap pip — that requires an
+    internet round-trip and a whole get-pip.py download.  If
+    pip is missing the user can re-run ``lib/install_python.ps1``
+    or ``lib/update_lib.py``.  The self-heal here covers only
+    what's required to keep tools-with-sibling-imports working.
+
+    No-op when:
+      * ``lib/python/`` doesn't exist (user is on system Python).
+      * The expected files are already in place AND look correct
+        (we verify by content marker, not just existence).
+
+    Failures are logged-and-ignored — this is best-effort repair,
+    not a critical-path operation.  The v0.3.13+ runtime shim is
+    the durable fix; the self-heal is belt-and-suspenders for
+    callers who run the bundled python.exe directly.
+    """
+    here = Path(__file__).resolve().parent
+    py_dir = here / "lib" / "python"
+    if not py_dir.is_dir():
+        return  # System Python — nothing for us to repair.
+
+    # 1. Patch python<ver>._pth so `import site` is enabled.
+    try:
+        for pth in py_dir.glob("python*._pth"):
+            text = pth.read_text(encoding="utf-8")
+            # Match commented OR missing `import site`.
+            patched_lines = []
+            saw_uncommented = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped == "import site":
+                    saw_uncommented = True
+                    patched_lines.append(line)
+                elif stripped in ("#import site", "# import site"):
+                    patched_lines.append("import site")
+                    saw_uncommented = True
+                else:
+                    patched_lines.append(line)
+            if not saw_uncommented:
+                # Neither commented nor uncommented — append it.
+                patched_lines.append("import site")
+                saw_uncommented = True
+            new_text = "\n".join(patched_lines)
+            if not new_text.endswith("\n"):
+                new_text += "\n"
+            if new_text != text:
+                pth.write_text(new_text, encoding="utf-8")
+    except OSError:
+        pass
+
+    # 2. Restore Lib/site-packages/sitecustomize.py.
+    try:
+        sp_dir = py_dir / "Lib" / "site-packages"
+        sp_dir.mkdir(parents=True, exist_ok=True)
+        sc_path = sp_dir / "sitecustomize.py"
+        # The canonical sitecustomize source lives next to this
+        # launcher; it's the same file shipped under lib/python/
+        # in normal installs.  We copy from one to the other when
+        # the destination is missing or its content has drifted.
+        canonical = here / "lib" / "python" / "Lib" / "site-packages" \
+                                                  / "sitecustomize.py"
+        # If canonical and sc_path are the same file (normal install
+        # where nothing was disturbed), nothing to do.  We detect a
+        # broken state by absence or by missing marker comment.
+        marker = "ScripTree bundled-Python site customisation"
+        need_rewrite = (
+            not sc_path.is_file()
+            or marker not in sc_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        )
+        if need_rewrite:
+            # Try the canonical location first.  If that's ALSO
+            # missing (e.g. running from a partial source tree),
+            # fall back to a minimal inline copy of the path-fix
+            # logic so we self-heal even in degraded states.
+            if canonical.is_file() and canonical.resolve() != sc_path.resolve():
+                sc_path.write_bytes(canonical.read_bytes())
+            else:
+                _write_minimal_sitecustomize(sc_path)
+    except OSError:
+        pass
+
+
+def _write_minimal_sitecustomize(target: Path) -> None:
+    """Write a self-contained sitecustomize.py — used when even the
+    canonical source is missing.  Smaller than the full version
+    because it's the last-resort fallback; just enough to make
+    sibling imports work."""
+    target.write_text(
+        '"""ScripTree bundled-Python site customisation '
+        '(self-healed minimal copy).\n\n'
+        'See lib/python/Lib/site-packages/sitecustomize.py in the '
+        'source\nrepo for the full version with comments.\n"""\n'
+        "import os, sys\n\n"
+        "def _scriptree_fix_sys_path():\n"
+        "    seen = {os.path.normcase(os.path.abspath(p or '.')) "
+        "for p in sys.path}\n"
+        "    def _prepend(d):\n"
+        "        if not d: return\n"
+        "        try: a = os.path.abspath(d)\n"
+        "        except (OSError, ValueError): return\n"
+        "        k = os.path.normcase(a)\n"
+        "        if k in seen: return\n"
+        "        sys.path.insert(0, a); seen.add(k)\n"
+        "    td = os.environ.get('SCRIPTREE_TOOL_DIR', '').strip()\n"
+        "    if td and os.path.isdir(td): _prepend(td)\n"
+        "    if sys.argv and sys.argv[0]:\n"
+        "        try:\n"
+        "            a = os.path.abspath(sys.argv[0])\n"
+        "            if os.path.isfile(a): _prepend(os.path.dirname(a))\n"
+        "        except (OSError, ValueError): pass\n\n"
+        "try:\n"
+        "    _scriptree_fix_sys_path()\n"
+        "except Exception:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+
 _check_python_version()
 _inject_vendored_libs()
 _check_dependencies()
+_self_heal_bundled_python()
 
 # The ``scriptree`` package normally lives directly at the repo
 # root, so adding the launcher's own directory to ``sys.path`` is
