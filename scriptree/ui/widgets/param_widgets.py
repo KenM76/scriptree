@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -244,10 +244,33 @@ class CheckboxWidget(ParamWidget):
         self._box = QCheckBox()
         self._box.setChecked(bool(param.default))
         self._box.toggled.connect(self.valueChanged.emit)
-        layout.addWidget(self._box, alignment=Qt.AlignmentFlag.AlignTop)
 
         self._desc_label = QLabel(param.description or param.label)
         self._desc_label.setWordWrap(True)
+        # v0.3.9 — align the checkbox indicator with the FIRST text
+        # line's vertical centre (matches native QCheckBox behaviour
+        # for wrapped-text labels).  Without this the box top-aligns
+        # to the row while the QLabel's default AlignVCenter pushes
+        # the text down, leaving the box visibly higher than the
+        # text it labels.  We compute a top pad equal to
+        # ``(line_height − box_height) // 2`` and apply it via a
+        # tiny vertical wrapper layout — ``setContentsMargins`` on
+        # a leaf QCheckBox doesn't honour the padding the way
+        # wrapping it inside a layout does.
+        self._desc_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        fm = QFontMetrics(self._desc_label.font())
+        line_h = fm.lineSpacing()
+        box_h = self._box.sizeHint().height()
+        top_pad = max(0, (line_h - box_h) // 2)
+        box_holder = QWidget()
+        box_holder_layout = QVBoxLayout(box_holder)
+        box_holder_layout.setContentsMargins(0, top_pad, 0, 0)
+        box_holder_layout.setSpacing(0)
+        box_holder_layout.addWidget(self._box)
+        box_holder_layout.addStretch(1)
+        layout.addWidget(box_holder, alignment=Qt.AlignmentFlag.AlignTop)
         # Clicking the label toggles the checkbox — matches native
         # QCheckBox behavior where the whole "checkbox + text" area
         # is clickable.
@@ -430,7 +453,17 @@ class RadioWidget(ParamWidget):
 # --- file / folder pickers -------------------------------------------------
 
 class _PathPickerBase(ParamWidget):
-    """Line edit + Browse button. Subclasses supply the dialog call."""
+    """Line edit + Browse button + Open button.
+
+    The Open button (v0.3.9+) opens the *containing folder* of the
+    current path in the OS file browser.  If the path doesn't exist,
+    it walks up the parent chain until it finds an ancestor that
+    does — so even a half-typed or planned-but-not-yet-created path
+    lands the user near the right neighbourhood.  The path text in
+    the line edit is **never** modified by Open.
+
+    Subclasses supply the dialog call invoked by Browse.
+    """
 
     def __init__(self, param: ParamDef, button_label: str = "Browse...") -> None:
         super().__init__()
@@ -443,8 +476,19 @@ class _PathPickerBase(ParamWidget):
         self._edit.textChanged.connect(self.valueChanged.emit)
         self._btn = QPushButton(button_label)
         self._btn.clicked.connect(self._open_dialog)
+        # Open button — locate the path (or its nearest existing
+        # ancestor) in the platform file browser.  Non-mutating:
+        # the line-edit text is never touched.
+        self._btn_open = QPushButton("Open")
+        self._btn_open.setToolTip(
+            "Open this path's location in the system file browser. "
+            "If the path doesn't exist, opens the closest ancestor "
+            "folder that does. Does not change the value."
+        )
+        self._btn_open.clicked.connect(self._open_in_explorer)
         layout.addWidget(self._edit, stretch=1)
         layout.addWidget(self._btn)
+        layout.addWidget(self._btn_open)
 
     def get_value(self) -> str:
         return self._edit.text()
@@ -457,8 +501,142 @@ class _PathPickerBase(ParamWidget):
     def _open_dialog(self) -> None:  # pragma: no cover
         raise NotImplementedError
 
+    # Subclasses may override to change "containing folder" semantics
+    # for folder-pickers (where the field IS already a folder).
+    def _resolve_open_target(self) -> str | None:
+        """Return the directory to open for the current field value.
+
+        Default rule (used by file-pickers):
+          * empty field → ``None`` (Open is a no-op)
+          * existing file → the file's parent directory
+          * existing directory → the directory itself
+          * non-existing path → walk up the parent chain to the
+            closest ancestor that exists; ``None`` only if even the
+            drive / filesystem root is missing (genuinely impossible
+            on a healthy system).
+
+        The line-edit text is never modified — this method only
+        reads it.
+        """
+        from pathlib import Path as _Path
+        text = self._edit.text().strip()
+        if not text:
+            return None
+        try:
+            p = _Path(text).expanduser()
+        except (OSError, ValueError, RuntimeError):
+            return None
+        # Walk up until we find something that exists.  Cap the
+        # walk at a sane depth so a malformed path can't loop us.
+        for _ in range(64):
+            if p.exists():
+                if p.is_file():
+                    return str(p.parent)
+                return str(p)
+            parent = p.parent
+            if parent == p:
+                # Reached the root and still nothing exists.
+                return None
+            p = parent
+        return None
+
+    def _open_in_explorer(self) -> None:
+        target = self._resolve_open_target()
+        if not target:
+            return
+        import subprocess as _sp
+        import sys as _sys
+        try:
+            if _sys.platform == "win32":
+                _sp.Popen(["explorer", target])
+            elif _sys.platform == "darwin":
+                _sp.Popen(["open", target])
+            else:
+                _sp.Popen(["xdg-open", target])
+        except OSError:
+            # File browser unavailable — silently no-op.  Open is
+            # a convenience; failure should never abort form work.
+            pass
+
+    def _open_file_in_default_app(self) -> None:
+        """Launch the file at the current field value with its OS
+        default application — same effect as double-clicking the
+        file in Explorer / Finder / a Linux file manager.
+
+        Used by ``FileOpenWidget`` / ``FileSaveWidget``'s "Open file"
+        button (v0.3.9+).  No-op when the field is empty or the
+        path doesn't point at an existing file (we never auto-create
+        and never modify the line-edit text).  Folders fall through
+        to ``_open_in_explorer`` semantics so the button still does
+        *something* sensible if a folder path lands here.
+        """
+        from pathlib import Path as _Path
+        text = self._edit.text().strip()
+        if not text:
+            return
+        try:
+            p = _Path(text).expanduser()
+        except (OSError, ValueError, RuntimeError):
+            return
+        if not p.exists():
+            return
+        if p.is_dir():
+            # Folder semantics: same as the location button.
+            self._open_in_explorer()
+            return
+        import subprocess as _sp
+        import sys as _sys
+        try:
+            if _sys.platform == "win32":
+                # ``os.startfile`` is the canonical "double-click"
+                # equivalent on Windows — it dispatches via the
+                # shell's file-association registry the same way
+                # Explorer does.
+                import os as _os
+                _os.startfile(str(p))  # type: ignore[attr-defined]
+            elif _sys.platform == "darwin":
+                _sp.Popen(["open", str(p)])
+            else:
+                _sp.Popen(["xdg-open", str(p)])
+        except OSError:
+            pass
+
+
+def _attach_open_file_button(picker: "_PathPickerBase") -> QPushButton:
+    """Add an "Open file" button to a file-picker widget.
+
+    File fields (``FILE_OPEN`` / ``FILE_SAVE``) get TWO buttons next
+    to Browse:
+
+      * **Open**       — opens the path's location in the OS file
+                         browser (walks up to the closest existing
+                         ancestor if the path doesn't exist).
+      * **Open file**  — launches the file with its OS default
+                         application (the equivalent of double-
+                         clicking it in Explorer).  No-op when the
+                         file doesn't exist; never modifies the
+                         line-edit text.
+
+    Folder fields keep their single Open button (which opens the
+    folder itself).
+    """
+    btn = QPushButton("Open file")
+    btn.setToolTip(
+        "Open this file with its default application — same as "
+        "double-clicking it in Explorer / Finder. No-op when the "
+        "file does not exist; the field's value is never changed."
+    )
+    btn.clicked.connect(picker._open_file_in_default_app)
+    picker._btn_open_file = btn  # type: ignore[attr-defined]
+    picker.layout().addWidget(btn)
+    return btn
+
 
 class FileOpenWidget(_PathPickerBase):
+    def __init__(self, param: ParamDef) -> None:
+        super().__init__(param)
+        _attach_open_file_button(self)
+
     def _open_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -471,6 +649,10 @@ class FileOpenWidget(_PathPickerBase):
 
 
 class FileSaveWidget(_PathPickerBase):
+    def __init__(self, param: ParamDef) -> None:
+        super().__init__(param)
+        _attach_open_file_button(self)
+
     def _open_dialog(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
