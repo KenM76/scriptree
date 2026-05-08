@@ -10,9 +10,18 @@ __pycache__/
 *.log
 *.tmp
 
-# Vendored / portable Python — repopulated by lib/install_python.ps1
-lib/python/
-lib/pypi/
+# Vendored / portable Python and pinned wheels are COMMITTED to the
+# repo (v0.3.10+) so a fresh ``git clone`` Just Works on a clean
+# machine — no system Python, no internet, no ``pip install`` step.
+# Total cost: ~93 MB (Python embed + PySide6 wheels), regeneratable
+# by ``lib/install_python.ps1`` and ``lib/update_lib.py --trim``
+# whenever the bundled versions need to roll forward.
+#
+# We still ignore compiled bytecode under those trees — it gets
+# regenerated on first run and doesn't round-trip cleanly through
+# git (mtime-sensitive, OS-specific paths in some headers).
+lib/python/**/__pycache__/
+lib/pypi/**/__pycache__/
 
 # Per-user state
 *.configs.json

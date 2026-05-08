@@ -1,0 +1,75 @@
+Metadata-Version: 2.4
+Name: PySide6-QtAds
+Version: 4.5.0.2
+Summary: PySide6 bindings to Qt Advanced Docking System
+License: PySide6-QtAds is licensed under GNU LGPL v2.1.
+        
+        Based on PySide6 binding work by CJ Niemira via https://github.com/cniemira/pyside6_qtads
+        
+        	MIT License
+        
+        	Copyright (c) 2022 cniemira
+        
+        	Permission is hereby granted, free of charge, to any person obtaining a copy
+        	of this software and associated documentation files (the "Software"), to deal
+        	in the Software without restriction, including without limitation the rights
+        	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        	copies of the Software, and to permit persons to whom the Software is
+        	furnished to do so, subject to the following conditions:
+        
+        	The above copyright notice and this permission notice shall be included in all
+        	copies or substantial portions of the Software.
+        
+        	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        	SOFTWARE.
+        
+        With bindings.xml improvements via https://github.com/metgem/PySide2Ads also under LGPL v2.1
+        
+Project-URL: Homepage, https://github.com/mborgerson/pyside6_qtads/
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE.txt
+Requires-Dist: PySide6-Essentials==6.10.2
+Requires-Dist: shiboken6==6.10.2
+Dynamic: license-file
+Dynamic: requires-dist
+
+# PySide6-QtAds
+[![Latest Release](https://img.shields.io/pypi/v/Pyside6-QtAds.svg)](https://pypi.python.org/pypi/Pyside6-QtAds/)
+![Monthly Downloads](https://img.shields.io/pypi/dm/PySide6-QtAds)
+
+Python/PySide6 bindings to the [Qt Advanced Docking System](https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System) library.
+
+Install with:
+
+```bash
+pip install PySide6-QtAds
+```
+
+You may also build from source. Example build from source on Ubuntu 24.04:
+
+```bash
+# Install Qt (for example, using aqtinstall)
+pip install aqtinstall
+aqt install-qt linux desktop 6.10.2 --outputdir qt
+
+# Build PySide6-QtAds
+LD_LIBRARY_PATH=$PWD/qt/6.10.2/gcc_64/lib \
+CMAKE_PREFIX_PATH=$PWD/qt/6.10.2/gcc_64/lib/cmake/ \
+pip install -v .
+```
+
+# Examples
+https://github.com/mborgerson/Qt-Advanced-Docking-System/tree/pyside6
+
+# Credits
+- Original PySide6 binding work by CJ Niemira via https://github.com/cniemira/pyside6_qtads
+- With bindings.xml improvements via https://github.com/metgem/PySide2Ads

@@ -22,15 +22,37 @@ lib/
     └── ...
 ```
 
-The `pypi/` subfolder is **intentionally gitignored** — binary wheels
-for PySide6 alone are ~300 MB and platform-specific, so committing them
-to git would bloat the repo and only help one OS. This directory
-structure and the update script are committed; the actual binary files
-are not.
+As of v0.3.10 the `python/` and `pypi/` subfolders are **committed to
+the repo** — about 86 MB total, trimmed.  This is a deliberate trade:
+ScripTree is a launcher platform meant to be `git clone`'d onto a
+clean machine and run, so the friction of "first run a bootstrap
+script then maybe also a wheel install" was making the wider value
+proposition (one folder, drop on a USB stick, double-click) fail in
+exactly the situations the project exists to solve.  The cost is
+predictable and bounded; the alternative — a self-bootstrapping
+launcher that downloads Python and wheels on demand — turned out to
+be the ongoing source of the "terminal flashes and exits" support
+load.
+
+If you want to roll the bundled versions forward, `install_python.ps1`
+(refreshes `python/`) and `update_lib.py --trim` (refreshes `pypi/`)
+still work exactly as before.  The only difference is that those
+scripts are no longer required for a working install — they're a
+bump-the-version maintenance flow rather than a setup gate.
 
 ## First-time setup
 
-On a freshly cloned repo (or any machine where `lib/pypi/` is empty):
+A fresh `git clone` already includes everything needed — just run
+`run_scriptree.bat` (Windows) or `run_scriptree.sh` (Linux/macOS)
+and the launcher picks up `lib/python/pythonw.exe` and the wheels
+under `lib/pypi/` automatically.
+
+The notes below only matter if you're rebuilding the bundled deps
+(new Python release, refreshed PySide6, dropping a wheel because of
+a CVE) — i.e. development of `ScripTree itself`, not normal use.
+
+If `lib/pypi/` is empty (you wiped it deliberately, or you're
+re-bundling for a new architecture):
 
 ```bash
 # Install + trim to the ~64 MB minimum footprint (recommended).

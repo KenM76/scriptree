@@ -1,0 +1,16 @@
+# Default: cross-platform clones stay byte-identical for source code.
+* text=auto eol=lf
+
+# Standard Windows-only files use CRLF.
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+*.ps1        text eol=crlf
+
+# Vendored / portable trees — never touch line endings or run merge
+# diff against them. They ship verbatim and any churn from CRLF/LF
+# auto-conversion would cause spurious diffs and risk breaking
+# binary signatures / hashes inside the bundled wheels.  These rules
+# come AFTER the global `* text=auto` so they take precedence (later
+# matches win in .gitattributes, the opposite of .gitignore).
+lib/python/** -text -diff
+lib/pypi/**   -text -diff
