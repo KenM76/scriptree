@@ -90,6 +90,11 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         and tool.cell_click_run_mode != "sequential"
     ):
         cell_d["click_run_mode"] = str(tool.cell_click_run_mode)
+    # Cell fill colour (V3 v0.3.6+).  Empty string is the default
+    # (branding fill) and stays out of the JSON for byte-identical
+    # round-trip with legacy catalogs.
+    if tool.cell_fill_color:
+        cell_d["fill_color"] = str(tool.cell_fill_color)
     if cell_d:
         d["cell"] = cell_d
     # Interactive stdin (V3 v0.3.0) — emitted only when True so legacy
@@ -205,6 +210,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         cell_label_opacity=_cell_float("label_opacity", 1.0),
         cell_click_action=str(cell_d.get("click_action", "menu")),
         cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
+        cell_fill_color=str(cell_d.get("fill_color", "")),
         interactive=bool(data.get("interactive", False)),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
@@ -353,6 +359,9 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
         and tree.cell_click_run_mode != "sequential"
     ):
         cell_d["click_run_mode"] = str(tree.cell_click_run_mode)
+    # Cell fill colour (V3 v0.3.6+).  Same default-omit rule.
+    if tree.cell_fill_color:
+        cell_d["fill_color"] = str(tree.cell_fill_color)
     if cell_d:
         d["cell"] = cell_d
     return d
@@ -384,6 +393,7 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         cell_label_opacity=_cell_float("label_opacity", 1.0),
         cell_click_action=str(cell_d.get("click_action", "menu")),
         cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
+        cell_fill_color=str(cell_d.get("fill_color", "")),
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

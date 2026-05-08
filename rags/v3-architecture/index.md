@@ -111,3 +111,11 @@ design.
   `launch_tool`.  +24 tests.  Lazy-import-shadowing trap in
   SettingsDialog noted.
   → `rags/lessons/cell_click_to_run.md`
+- [v3-architecture] **cell_fill_color_picker**: v0.3.6 added
+  per-cell `cell.fill_color` (`#RRGGBB`) override + Settings
+  dialog group with synced hex / R-G-B spinboxes / hue rainbow
+  slider / reset.  Alpha-preservation rule keeps transparency
+  independent.  Hue slider always picks fully-saturated full-V
+  colour (not a full HSV editor — power users type hex directly).
+  +28 tests.
+  → `rags/lessons/cell_fill_color_picker.md`

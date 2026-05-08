@@ -56,6 +56,9 @@ class CellMetadata:
     # / ``ToolDef.cell_click_run_mode`` for the contract.
     click_action: str = "menu"
     click_run_mode: str = "sequential"
+    # Per-cell fill colour override (V3 v0.3.6+).  Hex ``#RRGGBB``
+    # or empty string (== branding default).
+    fill_color: str = ""
 
     def has_icon(self) -> bool:
         return bool(self.icon_resolved_path) or bool(self.icon_data)
@@ -103,6 +106,7 @@ def read_for(catalog_path: str | Path) -> CellMetadata:
             getattr(obj, "cell_click_run_mode", "sequential")
             or "sequential"
         ),
+        fill_color=str(getattr(obj, "cell_fill_color", "") or ""),
     )
 
     if md.icon and not md.icon_data:
@@ -146,6 +150,7 @@ def write_for(
     label_opacity: float | None = None,
     click_action: str | None = None,
     click_run_mode: str | None = None,
+    fill_color: str | None = None,
 ) -> CellMetadata:
     """Mutate the catalog file's cell-visual fields and persist.
 
@@ -207,6 +212,11 @@ def write_for(
         obj.cell_click_run_mode = (
             "parallel" if str(click_run_mode) == "parallel" else "sequential"
         )
+    if fill_color is not None:
+        # Coerce: empty string clears (== branding default).  Anything
+        # else must look like a 6-digit hex; on parse failure we
+        # silently clear so a typo can't poison the catalog file.
+        obj.cell_fill_color = _normalise_hex_rgb(fill_color)
 
     if isinstance(obj, ToolDef):
         save_tool(obj, p)
@@ -214,6 +224,34 @@ def write_for(
         save_tree(obj, p)
 
     return read_for(p)
+
+
+def _normalise_hex_rgb(text: str) -> str:
+    """Return a canonical lowercase ``"#rrggbb"`` for ``text``, or
+    ``""`` if it can't be parsed.
+
+    Accepted inputs:
+      ``"#RRGGBB"`` / ``"RRGGBB"`` (any case),
+      ``"#RGB"``    / ``"RGB"``    (3-digit shorthand expanded to 6).
+
+    A 4 or 8-digit alpha-included variant is rejected — alpha for
+    cells is owned by the ``transparency`` slider, not the fill
+    colour.  Empty / whitespace-only input clears the override.
+    """
+    if not text:
+        return ""
+    s = text.strip().lstrip("#").lower()
+    if not s:
+        return ""
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return ""
+    try:
+        int(s, 16)
+    except ValueError:
+        return ""
+    return f"#{s}"
 
 
 # ---------------------------------------------------------------------------

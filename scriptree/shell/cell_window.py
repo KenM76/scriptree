@@ -517,6 +517,232 @@ class SettingsDialog(QDialog):
             lambda _i: _refresh_run_mode_enabled()
         )
 
+        # ---- 6.6 Cell colour (V3 v0.3.6+) ----------------------------------
+        # Three synced controls + reset:
+        #
+        #   - Hex entry (QLineEdit, 6-digit ``#RRGGBB``)
+        #   - R / G / B QSpinBoxes (0-255 each)
+        #   - Hue rainbow slider (0-359, full saturation/value)
+        #   - Reset to default button
+        #
+        # All four controls reflect the same underlying ``_fill_color``
+        # state.  Editing any one updates the others (with signal
+        # blocking to avoid feedback loops) and writes the new hex
+        # through to the bound catalog via
+        # ``apply_fill_color_change``.
+        from PySide6.QtWidgets import (
+            QGroupBox as _QGroupBox2,
+            QHBoxLayout as _QHBoxLayout2,
+            QLabel as _QLabel2,
+            QLineEdit as _QLineEdit2,
+            QPushButton as _QPushButton2,
+            QSpinBox as _QSpinBox2,
+            QSlider as _QSlider2,
+        )
+        color_grp = _QGroupBox2("Cell fill colour")
+        color_layout = QVBoxLayout(color_grp)
+
+        # Initial RGB values from the cell's current fill colour.
+        c0 = hexagon._fill_color
+        initial_r = c0.red()
+        initial_g = c0.green()
+        initial_b = c0.blue()
+        initial_hex = (
+            hexagon._fill_color_hex
+            or f"#{initial_r:02x}{initial_g:02x}{initial_b:02x}"
+        )
+
+        # Row 1: swatch + hex entry + reset button.
+        row1 = _QHBoxLayout2()
+        self._color_swatch = _QLabel2()
+        self._color_swatch.setFixedSize(28, 22)
+        self._color_swatch.setStyleSheet(
+            f"QLabel {{ background:{initial_hex}; "
+            f"border:1px solid #888; }}"
+        )
+        row1.addWidget(self._color_swatch)
+        row1.addWidget(_QLabel2("Hex:"))
+        self._color_hex_edit = _QLineEdit2(initial_hex)
+        self._color_hex_edit.setMaxLength(7)
+        self._color_hex_edit.setPlaceholderText("#RRGGBB")
+        row1.addWidget(self._color_hex_edit, stretch=1)
+        self._color_reset_btn = _QPushButton2("Reset")
+        self._color_reset_btn.setToolTip(
+            "Revert to the branding default fill colour."
+        )
+        row1.addWidget(self._color_reset_btn)
+        color_layout.addLayout(row1)
+
+        # Row 2: R / G / B spinboxes.
+        row2 = _QHBoxLayout2()
+        row2.addWidget(_QLabel2("R:"))
+        self._color_r_spin = _QSpinBox2()
+        self._color_r_spin.setRange(0, 255)
+        self._color_r_spin.setValue(initial_r)
+        row2.addWidget(self._color_r_spin)
+        row2.addWidget(_QLabel2("G:"))
+        self._color_g_spin = _QSpinBox2()
+        self._color_g_spin.setRange(0, 255)
+        self._color_g_spin.setValue(initial_g)
+        row2.addWidget(self._color_g_spin)
+        row2.addWidget(_QLabel2("B:"))
+        self._color_b_spin = _QSpinBox2()
+        self._color_b_spin.setRange(0, 255)
+        self._color_b_spin.setValue(initial_b)
+        row2.addWidget(self._color_b_spin)
+        row2.addStretch(1)
+        color_layout.addLayout(row2)
+
+        # Row 3: hue rainbow slider.  Stylesheet draws an HSL
+        # rainbow gradient under the groove so the user can see
+        # which hue they're picking.
+        row3 = _QHBoxLayout2()
+        row3.addWidget(_QLabel2("Hue:"))
+        self._color_hue_slider = _QSlider2(Qt.Horizontal)
+        self._color_hue_slider.setMinimum(0)
+        self._color_hue_slider.setMaximum(359)
+        # Initial hue = HSV-hue of the current fill (if any).
+        initial_hue = max(0, c0.hsvHue())  # -1 for greys → clamp to 0
+        self._color_hue_slider.setValue(initial_hue)
+        # Inline rainbow gradient under the groove.  qlineargradient
+        # syntax with stops at every 60° = clean six-stop rainbow.
+        self._color_hue_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 12px; "
+            "background: qlineargradient(x1:0,y1:0,x2:1,y2:0, "
+            "stop:0    #ff0000, stop:0.166 #ffff00, "
+            "stop:0.333 #00ff00, stop:0.5   #00ffff, "
+            "stop:0.666 #0000ff, stop:0.833 #ff00ff, "
+            "stop:1    #ff0000); border-radius:3px; } "
+            "QSlider::handle:horizontal { width:10px; "
+            "background:#ffffff; border:1px solid #444; }"
+        )
+        row3.addWidget(self._color_hue_slider, stretch=1)
+        color_layout.addLayout(row3)
+
+        layout.addWidget(color_grp)
+
+        # Two-way sync logic.  Each control writes to the cell's
+        # fill via ``apply_fill_color_change`` and refreshes the
+        # other controls — signals are blocked during programmatic
+        # updates so the chain doesn't loop.
+        def _set_swatch(hex_rgb: str) -> None:
+            self._color_swatch.setStyleSheet(
+                f"QLabel {{ background:{hex_rgb}; "
+                f"border:1px solid #888; }}"
+            )
+
+        def _block(widgets, fn):
+            blockers = [w.blockSignals(True) for w in widgets]
+            try:
+                fn()
+            finally:
+                for w, prev in zip(widgets, blockers):
+                    w.blockSignals(prev)
+
+        def _on_rgb_changed():
+            r = self._color_r_spin.value()
+            g = self._color_g_spin.value()
+            b = self._color_b_spin.value()
+            hex_rgb = f"#{r:02x}{g:02x}{b:02x}"
+            # Sync hex + slider (signal-blocked to prevent feedback).
+            _block(
+                [self._color_hex_edit, self._color_hue_slider],
+                lambda: (
+                    self._color_hex_edit.setText(hex_rgb),
+                    self._color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_swatch(hex_rgb)
+            self._hex.apply_fill_color_change(hex_rgb)
+
+        def _on_hex_changed():
+            txt = self._color_hex_edit.text()
+            from scriptree.core.cell_metadata import _normalise_hex_rgb
+            canonical = _normalise_hex_rgb(txt)
+            if not canonical:
+                # Don't sync to incomplete typing — wait until the
+                # user lands on a 6-digit hex.
+                return
+            r = int(canonical[1:3], 16)
+            g = int(canonical[3:5], 16)
+            b = int(canonical[5:7], 16)
+            _block(
+                [
+                    self._color_r_spin, self._color_g_spin,
+                    self._color_b_spin, self._color_hue_slider,
+                ],
+                lambda: (
+                    self._color_r_spin.setValue(r),
+                    self._color_g_spin.setValue(g),
+                    self._color_b_spin.setValue(b),
+                    self._color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_swatch(canonical)
+            self._hex.apply_fill_color_change(canonical)
+
+        def _on_hue_changed():
+            hue = self._color_hue_slider.value()
+            # Hue slider always picks a fully-saturated full-value
+            # colour at the chosen hue.  S/V variation isn't exposed
+            # here intentionally — the rainbow slider is a quick
+            # picker, not a full HSV editor.
+            new_color = QColor.fromHsv(hue, 255, 255)
+            r, g, b = new_color.red(), new_color.green(), new_color.blue()
+            hex_rgb = f"#{r:02x}{g:02x}{b:02x}"
+            _block(
+                [
+                    self._color_r_spin, self._color_g_spin,
+                    self._color_b_spin, self._color_hex_edit,
+                ],
+                lambda: (
+                    self._color_r_spin.setValue(r),
+                    self._color_g_spin.setValue(g),
+                    self._color_b_spin.setValue(b),
+                    self._color_hex_edit.setText(hex_rgb),
+                ),
+            )
+            _set_swatch(hex_rgb)
+            self._hex.apply_fill_color_change(hex_rgb)
+
+        def _on_color_reset():
+            # Empty string clears the override.  After applying we
+            # re-read the cell's now-default fill to refresh the
+            # controls.
+            self._hex.apply_fill_color_change("")
+            new_c = self._hex._fill_color
+            r, g, b = new_c.red(), new_c.green(), new_c.blue()
+            new_hex = f"#{r:02x}{g:02x}{b:02x}"
+            _block(
+                [
+                    self._color_r_spin, self._color_g_spin,
+                    self._color_b_spin, self._color_hex_edit,
+                    self._color_hue_slider,
+                ],
+                lambda: (
+                    self._color_r_spin.setValue(r),
+                    self._color_g_spin.setValue(g),
+                    self._color_b_spin.setValue(b),
+                    self._color_hex_edit.setText(new_hex),
+                    self._color_hue_slider.setValue(
+                        max(0, QColor(r, g, b).hsvHue())
+                    ),
+                ),
+            )
+            _set_swatch(new_hex)
+
+        # Wire up the signals.
+        self._color_r_spin.valueChanged.connect(lambda _v: _on_rgb_changed())
+        self._color_g_spin.valueChanged.connect(lambda _v: _on_rgb_changed())
+        self._color_b_spin.valueChanged.connect(lambda _v: _on_rgb_changed())
+        self._color_hex_edit.editingFinished.connect(_on_hex_changed)
+        self._color_hue_slider.valueChanged.connect(lambda _v: _on_hue_changed())
+        self._color_reset_btn.clicked.connect(_on_color_reset)
+
         # ---- 7. Cell label (icon / custom text / default auto) -------------
         # Per user spec (2026-05-07): the per-cell Settings dialog needs
         # to choose between three label modes (Default / Custom Text /
@@ -1651,7 +1877,24 @@ class CellWindow(QMainWindow):
         self._transparency: float = hex_cfg.get("defaultTransparency", 0.85)
         self._always_on_top: bool = bool(hex_cfg.get("defaultAlwaysOnTop", True))
 
-        self._fill_color      = _parse_rgba_hex(palette.get("hexFill",      "1f2937e6"))
+        # Branding-default fill — held separately so the user's
+        # per-cell override can be reset back to it without re-
+        # reading the branding config (V3 v0.3.6+).
+        self._branding_fill_color = _parse_rgba_hex(
+            palette.get("hexFill", "1f2937e6")
+        )
+        # Active fill — defaults to branding fill until the cell
+        # binds a catalog whose ``cell.fill_color`` overrides it
+        # (or until ``apply_fill_color_change`` runs from the
+        # Settings dialog).  Alpha is preserved from the branding
+        # default; see ``apply_fill_color_change`` for why.
+        self._fill_color      = QColor(self._branding_fill_color)
+        # User-set hex override (V3 v0.3.6+).  Empty when no
+        # override is active — paint code uses ``_fill_color``
+        # directly either way.  ``_fill_color_hex`` lets the
+        # Settings dialog round-trip the user's choice without
+        # losing precision through the QColor encode.
+        self._fill_color_hex: str = ""
         self._stroke_color    = _parse_rgba_hex(palette.get("hexStroke",    "9ca3afff"))
         self._highlight_color = _parse_rgba_hex(palette.get("hexHighlight", "60a5faff"))
         self._accent_color    = _parse_rgba_hex(palette.get("accent",       "f59e0bff"))
@@ -2324,6 +2567,56 @@ class CellWindow(QMainWindow):
         self._transparency = max(0.30, min(1.00, alpha))
         self.update()
 
+    def apply_fill_color_change(self, hex_rgb: str) -> None:
+        """Live-update the cell's fill colour (V3 v0.3.6+).
+
+        ``hex_rgb`` is either a 6-digit ``"#RRGGBB"`` string (any
+        case, ``#`` optional) or an empty string to clear the
+        override and revert to the branding default.
+
+        Alpha behaviour: the user's RGB controls *just* the colour.
+        The cell's existing ``_fill_color`` alpha (typically ``e6``
+        from the branding default) is preserved — that way an
+        existing transparency slider doesn't drift just because the
+        user picked a new hue.  The ``transparency`` slider in the
+        Settings dialog controls alpha as a separate axis.
+
+        Persistence: the new value is written through to the bound
+        catalog's ``cell.fill_color`` field via
+        ``cell_metadata.write_for`` so the choice travels with the
+        file.  Cells with no catalog keep the override in memory
+        only.
+        """
+        from ..core.cell_metadata import _normalise_hex_rgb
+
+        canonical = _normalise_hex_rgb(hex_rgb)
+        # Compute the new QColor.  Empty canonical == revert.
+        if canonical:
+            r = int(canonical[1:3], 16)
+            g = int(canonical[3:5], 16)
+            b = int(canonical[5:7], 16)
+            existing_alpha = self._fill_color.alpha()
+            self._fill_color = QColor(r, g, b, existing_alpha)
+        else:
+            # Reset: copy the branding default verbatim.
+            self._fill_color = QColor(self._branding_fill_color)
+        self._fill_color_hex = canonical
+
+        self.update()
+
+        # Persist to the bound catalog if any.  Failures log + no-op
+        # so the in-memory change still takes effect for this session.
+        if self._catalog_path:
+            try:
+                from scriptree.core import cell_metadata as _cm  # noqa: F401
+                from scriptree.core.cell_metadata import write_for as _write_for
+                _write_for(self._catalog_path, fill_color=canonical)
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"apply_fill_color_change: write_for({self._catalog_path!r}) "
+                    f"failed: {exc!r}"
+                )
+
     # ------------------------------------------------------------------
     # Cell-label apply_* (live-update from Settings dialog)
     # ------------------------------------------------------------------
@@ -2524,6 +2817,24 @@ class CellWindow(QMainWindow):
         self._text_label = md.text_label or None
         self._icon_scale = md.icon_scale
         self._label_opacity = md.label_opacity
+        # Fill colour override (V3 v0.3.6+).  Empty hex → revert to
+        # branding default; non-empty → apply.  We touch
+        # ``_fill_color`` directly here (not via
+        # ``apply_fill_color_change``) because the catalog already
+        # carries the value — re-writing it would be redundant.
+        if md.fill_color:
+            from ..core.cell_metadata import _normalise_hex_rgb
+            canonical = _normalise_hex_rgb(md.fill_color)
+            if canonical:
+                r = int(canonical[1:3], 16)
+                g = int(canonical[3:5], 16)
+                b = int(canonical[5:7], 16)
+                existing_alpha = self._fill_color.alpha()
+                self._fill_color = QColor(r, g, b, existing_alpha)
+                self._fill_color_hex = canonical
+        else:
+            self._fill_color = QColor(self._branding_fill_color)
+            self._fill_color_hex = ""
         self._label_cache = None
         self.update()
 
@@ -2936,12 +3247,23 @@ class CellWindow(QMainWindow):
     def _handle_dropped_file(self, path: str) -> None:
         """Dispatch a dropped file based on extension + this cell's role.
 
-        See the matrix in the section header above.  Always emits a
-        ``[CellWindow] drop ...`` log line so the dispatch is
-        observable from stderr.
+        v0.3.6 unifies the drop-dispatch with the menu-driven Load
+        actions (``_open_catalog_path``).  The user-facing matrix
+        (per the v0.3.6 spec):
+
+        ============== ====================== =========================
+        Source state   .scriptree / .tree     .scriptreering
+        ============== ====================== =========================
+        Empty cell     bind to self           close cell + load ring
+        Bound cell     spawn sibling cell     load ring alongside
+        Master / ring  spawn member, JOIN     load ring alongside
+                       group + slot it
+        ============== ====================== =========================
+
+        Always emits a ``[CellWindow] drop ...`` log line so the
+        dispatch is observable from stderr.
         """
         from pathlib import Path as _Path
-        from scriptree.shell import recent_files as _rf
 
         p = _Path(path)
         if not p.is_file():
@@ -2953,49 +3275,78 @@ class CellWindow(QMainWindow):
             f"drop {ext!r} on {self.role} {self._id[:8]}: {p.name!r}"
         )
 
-        if ext in (".scriptree", ".scriptreetree"):
-            if self.role == "master":
-                self._drop_spawn_docked_member(p)
-            else:
-                # Standalone cell: bind the catalog to THIS cell.
-                self._catalog_path = str(p.resolve())
-                self._save_settings()
-                _rf.add(str(p.resolve()))
-                # Invalidate cached label so the new catalog's name
-                # gets used on the next paint.
-                self._label_cache = None
-                # Pull cell-visual fields from the new catalog (per
-                # V3 v0.2.7: icon settings live in the catalog JSON).
-                self._refresh_label_from_catalog()
-                self.update()
-                _log(f"  bound to cell {self._id[:8]}")
-        elif ext == ".scriptreering":
-            self._drop_open_related_ring(p)
-        else:
+        if ext not in (".scriptree", ".scriptreetree", ".scriptreering"):
             _log(f"  unsupported extension: {ext}")
+            return
 
-    def _drop_spawn_docked_member(self, path) -> None:  # noqa: ANN001
-        """Master case: spawn a fresh standalone cell bound to the
-        dropped catalog, position it adjacent to the master, and
-        register it in the master's group so it joins the ring.
+        # Master / ring case (v0.3.6 spec):
+        #   tool/tree → spawn a NEW member cell, auto-link it into
+        #               the master's group, position via the repack
+        #               so it lands on a free slot.
+        #   ring     → "just opens" (load_ring loads alongside).
+        if self.role == "master":
+            if ext == ".scriptreering":
+                self._drop_open_related_ring(p)
+            else:
+                self._drop_spawn_member_and_link(p)
+            return
 
-        For now we don't programmatically dock the new cell to an
-        exact honeycomb slot — we drop it ~1 cell width to the right
-        of the master and let the user nudge it into position.  A
-        future refinement could call ``snap_engine.try_attach`` to
-        pick the first free honeycomb slot.
+        # Standalone case — empty / bound logic mirrors the menu
+        # Load-X handlers via the v0.2.11 ``_open_catalog_path``
+        # dispatcher (which already implements: empty + tool/tree
+        # → bind-self; bound + tool/tree → spawn sibling; empty +
+        # ring → close-self + load; bound + ring → load alongside).
+        self._open_catalog_path(str(p.resolve()))
+
+    def _drop_spawn_member_and_link(self, path) -> None:  # noqa: ANN001
+        """Master case (v0.3.6+): spawn a fresh cell bound to the
+        dropped catalog AND auto-join it to this master's group.
+
+        Replaces the older ``_drop_spawn_docked_member`` which only
+        positioned the new cell adjacent and required the user to
+        manually drag it into a slot.  The user's v0.3.6 spec:
+
+            "if it is a scriptree or scriptreetree dropped on a ring
+             it gets linked and located attached to the group"
+
+        Implementation:
+
+        1. Construct a ``CellWindow`` bound to ``path``.
+        2. Adopt the master's group geometry (size / shape /
+           orientation) via ``_adopt_member_geometry`` so the new
+           member matches the ring's look immediately.
+        3. Wire it into the SnapEngine.
+        4. Add to ``master._members`` / ``_positioned`` /
+           ``_dock_partners`` and set its ``_group_master_id``.
+        5. Mark the ring dirty (membership changed — close-prompt
+           will fire if the user closes the ring without saving).
+        6. Run ``master._repack_members()`` so the new cell lands
+           on a free honeycomb slot around the master with the rest
+           of the group rearranged as needed.
         """
+        from PySide6.QtCore import QPoint
         from scriptree.shell.cell_registry import CellRegistry
         from scriptree.shell import recent_files as _rf
 
-        new_x = self.pos().x() + self.width() + 12
-        new_y = self.pos().y()
         new_cell = CellWindow(
             self._branding,
             catalog_path=str(path.resolve()),
         )
-        new_cell.move(new_x, new_y)
-        # Wire to the snap engine if available.
+        # Geometry + visibility come first so the cell exists and
+        # can adopt the master's appearance before the repack
+        # decides where to put it.
+        try:
+            _adopt_member_geometry(new_cell, self)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"  _adopt_member_geometry failed for {new_cell._id[:8]}: "
+                f"{exc!r} — proceeding anyway"
+            )
+        # Initial position next to the master so the repack has a
+        # sensible starting direction to assign.
+        start_x = self.pos().x() + self.width() + 12
+        start_y = self.pos().y()
+        new_cell.move(start_x, start_y)
         try:
             from scriptree.shell.ring_main import _wire_hex_to_snap
             _wire_hex_to_snap(new_cell)
@@ -3003,14 +3354,40 @@ class CellWindow(QMainWindow):
             _log(f"  could not wire new cell to snap engine: {exc!r}")
         new_cell.show()
         _rf.add(str(path.resolve()))
+
+        # Wire ring membership.  Mirrors ``_try_spawn_master`` Case 2
+        # (standalone joining an existing master's group), minus
+        # the docked_to bookkeeping that requires a specific peer
+        # cell — the repack right after will set positions cleanly.
+        self._members[new_cell._id] = QPoint(new_cell.pos())
+        self._positioned.add(new_cell._id)
+        self._dock_partners.add(new_cell._id)
+        new_cell._group_master_id = self._id
+        new_cell.update()  # Bug 5: refresh outline (now associated).
+        # Membership changed — flag dirty so the close-prompt fires
+        # if the user closes the ring without saving (v0.3.1).
+        self._ring_dirty = True
         _log(
             f"  spawned new cell {new_cell._id[:8]} bound to "
-            f"{path.name!r} adjacent to master {self._id[:8]}"
+            f"{path.name!r}, joined ring {self._id[:8]} "
+            f"(now {len(self._members)} member(s))"
         )
-        # Note: actual ring membership (group_master_id, _members[id])
-        # is set by the snap-commit pathway when the user drags this
-        # cell into a real honeycomb slot adjacent to the master.
-        # Until then it's a free standalone next to the ring.
+
+        # Re-pack the group so the new cell lands on a free slot
+        # and any displaced cells move to their next-best direction.
+        try:
+            self._repack_members()
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"  _repack_members after drop-join failed: "
+                f"{exc!r} — leaving new cell at its initial position"
+            )
+
+    # Legacy alias — kept so any out-of-tree caller (V2 polyfills,
+    # third-party patches) that called the old name still works.
+    # Internally we now route every drop-on-master to the linking
+    # variant.
+    _drop_spawn_docked_member = _drop_spawn_member_and_link
 
     def _drop_open_related_ring(self, path) -> None:  # noqa: ANN001
         """Open a .scriptreering file in the current process.

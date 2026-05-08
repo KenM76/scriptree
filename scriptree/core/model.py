@@ -299,6 +299,14 @@ class ToolDef:
     # sub-object so the choice travels with the file.
     cell_click_action: str = "menu"        # "menu" | "run"
     cell_click_run_mode: str = "sequential"  # "sequential" | "parallel"
+    # Cell fill colour override (V3 v0.3.6+).  Hex string of the
+    # form ``"#RRGGBB"`` (lowercase, no alpha — the cell's own
+    # ``transparency`` slider controls alpha separately).  Empty
+    # string means "use the branding default fill", preserving
+    # pre-v0.3.6 cells byte-identical on disk.  Per-cell, NOT
+    # group-uniform: a master + members can each have a different
+    # fill so a ring can colour-code its tools.
+    cell_fill_color: str = ""
     # Interactive stdin (V3 v0.3.0) — when True the runner exposes a
     # send-line widget below the output pane, so the tool can read
     # user input from stdin while running.  Used by tools that
@@ -462,6 +470,8 @@ class TreeDef:
     # ``cell_click_run_mode`` (sequential or parallel).
     cell_click_action: str = "menu"        # "menu" | "run"
     cell_click_run_mode: str = "sequential"  # "sequential" | "parallel"
+    # Cell fill colour override (V3 v0.3.6+).  See ToolDef.
+    cell_fill_color: str = ""
     schema_version: int = SCHEMA_VERSION
 
 

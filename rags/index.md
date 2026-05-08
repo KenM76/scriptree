@@ -149,3 +149,8 @@ gives the per-topic slice.
   `cell_click_to_run` capability, V1 `-run` flag for auto-click,
   Popen-polling sequencer for tree sequential mode.
   → `rags/lessons/cell_click_to_run.md`
+- [v3-architecture] **cell_fill_color_picker**: v0.3.6 added
+  per-cell colour override with synced hex / R-G-B / hue rainbow
+  controls in the Settings dialog.  Alpha preserved across
+  changes; hue slider always full S/V.
+  → `rags/lessons/cell_fill_color_picker.md`

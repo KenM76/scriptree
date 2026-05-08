@@ -54,6 +54,21 @@ Every cell in a master+members group shares the same **size**, **shape**, and **
 - After any geometry change, the ring is **repacked** so members stay edge-touching the master with no overlap. Members that would land off-screen at the new geometry are reassigned to a free, on-screen direction.
 - When you drag a master so part of the ring would slide off-screen, the off-edge members reattach to a different direction on release. They never end up clipped, hidden behind the taskbar, or stacked on top of each other.
 
+### Cell fill colour (v0.3.6)
+
+The right-click → **Settings** dialog has a **Cell fill colour** group with four mutually-synced controls:
+
+- **Hex entry** — `#RRGGBB` text input.
+- **R / G / B spinboxes** — 0–255 each.
+- **Hue rainbow slider** — drag the thumb across the rainbow gradient to pick a fully-saturated colour at that hue.
+- **Reset** — revert to the branding default.
+
+Editing any one control updates the others. The hue slider always picks a fully-saturated, full-value colour at the chosen hue; if you want a muted colour, type the hex directly. Alpha (transparency) is owned by the separate **Transparency** slider — picking a new fill colour never changes transparency.
+
+The chosen colour is stored in the catalog JSON's `cell.fill_color` field (e.g. `"fill_color": "#ff8800"`) so it travels with the file. Per-cell, not group-uniform — a master and its members can each have a different colour, useful for colour-coding the tools in a ring.
+
+---
+
 ### Click-to-run cells (v0.3.5)
 
 By default, single-clicking a cell pops up a tool menu — pick a tool from the menu, V1's standalone runner opens. v0.3.5 adds a per-cell setting that **changes single-click into a Run button**:
