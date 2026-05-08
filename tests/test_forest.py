@@ -43,7 +43,6 @@ from scriptree.shell.forest_discover import (
     diff_against,
     discover,
 )
-from scriptree.shell.forest_window import ForestWindow
 
 
 def _fresh_registry() -> CellRegistry:
@@ -320,29 +319,68 @@ class TestDiff:
 
 
 # ===========================================================================
-# forest_window — visible cell construction
+# Forest cell — same shape/size as a regular CellWindow, role="master",
+# with the ``_is_forest_master`` flag set.
 # ===========================================================================
 
-class TestForestWindow:
+class TestForestCell:
 
-    def test_constructs_with_branding(self) -> None:
-        fw = ForestWindow(load_branding())
-        assert fw.size().width() == 96
-        assert fw._label_text == "F"
-        fw.close()
+    def test_forest_cell_is_master_with_flag(self) -> None:
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import CellWindow
 
-    def test_set_label_truncates_to_three(self) -> None:
-        fw = ForestWindow(load_branding())
-        fw.set_label("Engineering")
-        assert fw._label_text == "Eng"
-        fw.close()
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        assert isinstance(ctrl.forest_window, CellWindow)
+        assert ctrl.forest_window.role == "master"
+        assert ctrl.forest_window._is_forest_master is True
+        ctrl.forest_window.close()
 
-    def test_set_size_recomputes_geometry(self) -> None:
-        fw = ForestWindow(load_branding())
-        fw.set_size(120)
-        assert fw.size().width() == 120
-        assert len(fw._vertices) == 12
-        fw.close()
+    def test_forest_cell_uses_branding_default_size(self) -> None:
+        from scriptree.shell.forest_controller import ForestController
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        # Same default size as any other CellWindow.
+        expected = load_branding().get(
+            "hexagon", {}
+        ).get("defaultSizePx", 56)
+        assert ctrl.forest_window.size().width() == expected
+        ctrl.forest_window.close()
+
+    def test_forest_cell_quorum_exempt(self) -> None:
+        """A normal master with < 2 members tears itself down via
+        ``_check_master_validity``.  The forest must persist even
+        with 0 members."""
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import _check_master_validity
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        forest = ctrl.forest_window
+        assert len(forest._members) == 0
+        # Should NOT close.
+        _check_master_validity(forest, CellRegistry.instance())
+        assert forest.isVisible()
+        assert forest._id in {c._id for c in CellRegistry.instance().all()}
+        ctrl.forest_window.close()
+
+    def test_forest_cell_has_menu_extension_hook(self) -> None:
+        from scriptree.shell.forest_controller import ForestController
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        assert ctrl.forest_window._forest_menu_extension is not None
+        # The hook should be callable with a QMenu.
+        from PySide6.QtWidgets import QMenu
+        m = QMenu()
+        ctrl.forest_window._forest_menu_extension(m)
+        # At least the Forest submenu was inserted.
+        labels = [a.text() for a in m.actions() if a.text()]
+        assert any("Forest" in label for label in labels)
+        ctrl.forest_window.close()
 
 
 # ===========================================================================
@@ -352,23 +390,100 @@ class TestForestWindow:
 class TestForestController:
 
     def _make(self):
+        """Fresh, started controller with an empty forest.
+
+        v0.3.15+ — the controller's ``add_item`` path now docks new
+        cells as members of the forest's group via the master
+        infrastructure, so it requires the forest cell to already
+        exist.  We call ``start()`` here with an explicit empty
+        ``ForestDef`` (avoids polluting / being polluted by the
+        per-user autoload file)."""
         from scriptree.shell.forest_controller import ForestController
         _fresh_registry()
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
         return ctrl
 
     def test_construct_no_window_until_start(self) -> None:
-        ctrl = self._make()
+        """Bare construction (no ``start()``) does NOT create a
+        forest cell — that happens lazily so an embedding caller
+        can configure the controller before the window appears."""
+        from scriptree.shell.forest_controller import ForestController
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
         assert ctrl.forest_window is None
         assert isinstance(ctrl.forest, ForestDef)
 
     def test_add_item_de_duplicates(self, tmp_path: Path) -> None:
         ctrl = self._make()
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
         path = str(tmp_path / "x.scriptree")
         Path(path).write_text("{}", encoding="utf-8")
         ctrl.add_item(path, "tool")
         ctrl.add_item(path, "tool")
         assert len(ctrl.forest.items) == 1
+
+    def test_leave_forest_keeps_ring_master_intact(
+        self, tmp_path: Path,
+    ) -> None:
+        """A ring-master attached to the forest must be able to
+        leave the forest WITHOUT disbanding its own ring.  This is
+        the v0.3.15 ``_leave_forest_keep_ring`` contract — the
+        whole point of the menu split between "Leave forest" and
+        "Disband group".
+        """
+        from scriptree.shell.cell_window import CellWindow, _try_spawn_master
+        ctrl = self._make()
+        forest = ctrl.forest_window
+        # Build a real 2-member ring outside the forest.
+        a = CellWindow(load_branding())
+        a.move(800, 400)
+        a.show()
+        b = CellWindow(load_branding())
+        b.move(856, 400)
+        b.show()
+        _try_spawn_master(a, b)
+        ring_master_id = CellRegistry.instance().master_of(a._id)
+        ring_master = CellRegistry.instance().get(ring_master_id)
+        assert ring_master is not None
+        # Attach the ring-master as a forest member (this is what
+        # the controller's _attach_existing_master_as_member does).
+        ctrl._attach_existing_master_as_member(ring_master)
+        assert ring_master._group_master_id == forest._id
+        ring_member_count_before = len(ring_master._members)
+        assert ring_member_count_before == 2
+
+        # Now leave the forest — keep the ring intact.
+        ring_master._leave_forest_keep_ring()
+        # Forest no longer holds the ring-master.
+        assert ring_master._id not in forest._members
+        # Ring-master no longer points at the forest.
+        assert ring_master._group_master_id is None
+        # The ring's own members are STILL grouped under it.
+        assert len(ring_master._members) == ring_member_count_before
+        for member_id in ring_master._members:
+            member = CellRegistry.instance().get(member_id)
+            assert member is not None
+            assert member._group_master_id == ring_master._id
+
+    def test_add_tool_docks_as_forest_member(
+        self, tmp_path: Path,
+    ) -> None:
+        """Adding a tool to the forest must wire it as a member of
+        the forest's group — same semantics as a ring drop."""
+        ctrl = self._make()
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        forest = ctrl.forest_window
+        path = str(tmp_path / "tool.scriptree")
+        Path(path).write_text("{}", encoding="utf-8")
+        ctrl.add_item(path, "tool")
+        # Forest now has 1 member.
+        assert len(forest._members) == 1
+        member_id = next(iter(forest._members.keys()))
+        member = CellRegistry.instance().get(member_id)
+        assert member is not None
+        # The member is grouped under the forest.
+        assert member._group_master_id == forest._id
 
     def test_remove_item_with_exclude(self, tmp_path: Path) -> None:
         ctrl = self._make()

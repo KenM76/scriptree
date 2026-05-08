@@ -457,7 +457,12 @@ class ForestSettingsDialog(QDialog):
         f.auto_discover.update_mode = self._mode.value()
         if self._controller.forest_window is not None:
             from scriptree.shell.forest_controller import _derive_label
-            self._controller.forest_window.set_label(_derive_label(f.name))
+            try:
+                self._controller.forest_window.apply_label_change(
+                    text_label=_derive_label(f.name),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         self._controller.save()
         self.accept()
 

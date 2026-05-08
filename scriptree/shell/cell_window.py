@@ -2036,6 +2036,7 @@ class CellWindow(QMainWindow):
         source_b_id: str | None = None,
         hexagon_id: str | None = None,
         catalog_path: str | None = None,
+        is_forest_master: bool = False,
     ) -> None:
         # ----------------------------------------------------------------
         # Window flags â€” exact set from ADR-001 Â§sub-decision-2
@@ -2067,6 +2068,32 @@ class CellWindow(QMainWindow):
         self.role: Literal["standalone", "master"] = role
         self.source_a_id: str | None = source_a_id
         self.source_b_id: str | None = source_b_id
+        # ----------------------------------------------------------------
+        # Forest-master flag (V3 v0.3.15+)
+        # ----------------------------------------------------------------
+        # When True, this cell IS the top-level forest container
+        # (see ``scriptree.shell.forest_controller``).  It looks and
+        # behaves like a master cell — same size, shape, repack,
+        # reflow, edge-fold, drag-translation — except for two
+        # specific exemptions:
+        #
+        #   1. ``_check_master_validity``'s quorum check skips it.
+        #      A normal master with < 2 members tears itself down;
+        #      the forest persists even with 0 members because it's
+        #      the workspace root, not a transient docking artefact.
+        #
+        #   2. The right-click menu adds forest-specific entries
+        #      (Save forest, Auto-add, Forest settings, …) on top
+        #      of the standard master menu.
+        #
+        # Set by ``ForestController`` when constructing the forest
+        # cell; never True for cells spawned via standalone /
+        # ``_try_spawn_master`` / ``_drop_spawn_member_and_link``.
+        self._is_forest_master: bool = bool(is_forest_master)
+        # Hook the ForestController registers when this cell is the
+        # forest master — prepends forest-specific items to the
+        # context menu.  See ``_show_context_menu`` for invocation.
+        self._forest_menu_extension = None  # type: ignore[assignment]
 
         # ----------------------------------------------------------------
         # Branding
@@ -3114,6 +3141,10 @@ class CellWindow(QMainWindow):
         """Return the correct stroke colour based on role and association state.
 
         Bug 5 â€” green outline rule:
+          - Forest master:                   forest-green leaf colour
+                                             (V3 v0.3.15+ — visually
+                                             distinct from a normal
+                                             ring master).
           - Master hex:                      accent colour (visual differentiator).
           - Standalone with no group (unassociated): unassociatedStroke from branding
             (defaults to Tailwind emerald-500 #10b981).
@@ -3122,6 +3153,12 @@ class CellWindow(QMainWindow):
         Call update() after any state change that affects group membership so
         the repaint picks up the new colour.
         """
+        if getattr(self, "_is_forest_master", False):
+            # Bright leaf-green so the forest reads as the workspace
+            # root.  Same RGB as the previous standalone ForestWindow
+            # used, kept for visual continuity.
+            return QColor(108, 196, 138, 255)
+
         if self.role == "master":
             return self._accent_color
 
@@ -3980,6 +4017,20 @@ class CellWindow(QMainWindow):
 
         menu.addSeparator()
 
+        # V3 v0.3.15+ — forest hook.  When the cell is the forest
+        # master, ``ForestController`` registers a callback here
+        # that prepends a ``Forest`` submenu with workspace-wide
+        # actions (Save forest, Auto-add, Forest settings, …)
+        # alongside the standard cell context menu.  Non-forest
+        # cells skip this entirely.
+        forest_hook = getattr(self, "_forest_menu_extension", None)
+        if forest_hook is not None:
+            try:
+                forest_hook(menu)
+                menu.addSeparator()
+            except Exception as _exc:  # noqa: BLE001
+                _log(f"forest_menu_extension failed: {_exc!r}")
+
         # ── ScripTree submenu ─────────────────────────────────────
         # Groups all load / save / clear catalog actions plus the
         # Open recent sub-sub-menu.  Per user direction (2026-05-07):
@@ -4104,17 +4155,55 @@ class CellWindow(QMainWindow):
         cell_menu = QMenu("Cell", menu)
         spawn_action = cell_menu.addAction("Spawn another cell")
 
-        # "Leave group" — shown when this hex belongs to a master's
-        # group.  Masters show "Disband group" instead (releases all
-        # members).  Visible only when relevant — keeps the submenu
-        # tidy when not part of any group.
+        # Group membership actions.  Three possible entries:
+        #   * Leave forest  — when this cell is grouped under the
+        #     forest master.  For a ring-master attached to the
+        #     forest, leaves ONLY the forest membership (the ring's
+        #     own members stay intact).  v0.3.15+.
+        #   * Leave group   — for a non-master cell grouped under
+        #     a regular ring master.
+        #   * Disband group — for any master with members (including
+        #     a ring-master that's also a forest member, where it
+        #     means "tear down THIS ring's members" while the ring
+        #     itself stays attached to the forest).
         leave_group_action = None
-        if self._group_master_id is not None or (self.role == "master" and self._members):
+        leave_forest_action = None
+        disband_action = None
+        # Detect forest membership: our group_master is the forest.
+        _is_forest_member = False
+        if self._group_master_id is not None:
+            from scriptree.shell.cell_registry import CellRegistry as _CR
+            _master = _CR.instance().get(self._group_master_id)
+            if _master is not None and getattr(
+                _master, "_is_forest_master", False
+            ):
+                _is_forest_member = True
+
+        if self._group_master_id is not None or (
+            self.role == "master" and self._members
+        ):
             cell_menu.addSeparator()
             if self.role == "master":
-                leave_group_action = cell_menu.addAction("Disband group")
+                # Master cell.
+                if _is_forest_member:
+                    # Ring-master attached to the forest — offer
+                    # both "Leave forest" (sever forest membership,
+                    # keep ring) and "Disband group" (tear down
+                    # the ring's own members).
+                    leave_forest_action = cell_menu.addAction(
+                        "Leave forest (keep ring intact)"
+                    )
+                if self._members:
+                    disband_action = cell_menu.addAction("Disband group")
+                    # Preserve the legacy variable name so existing
+                    # downstream dispatch keeps working unchanged.
+                    leave_group_action = disband_action
             else:
-                leave_group_action = cell_menu.addAction("Leave group")
+                # Non-master cell in a group.
+                if _is_forest_member:
+                    leave_group_action = cell_menu.addAction("Leave forest")
+                else:
+                    leave_group_action = cell_menu.addAction("Leave group")
 
         menu.addMenu(cell_menu)
 
@@ -4183,6 +4272,8 @@ class CellWindow(QMainWindow):
             self._close_all_related()
         elif chosen == exit_all_action:
             self._exit_all()
+        elif leave_forest_action is not None and chosen == leave_forest_action:
+            self._leave_forest_keep_ring()
         elif leave_group_action is not None and chosen == leave_group_action:
             self._explicit_leave_group()
         elif chosen == about_action:
@@ -4724,6 +4815,60 @@ class CellWindow(QMainWindow):
         # Close master if fewer than 2 members remain.
         if master is not None:
             _check_master_validity(master, registry)
+
+    def _leave_forest_keep_ring(self) -> None:
+        """Detach this cell from the FOREST's group while keeping
+        its own ring intact (V3 v0.3.15+).
+
+        For a ring-master that's currently a forest member:
+          * Removes self from forest._members / _positioned /
+            _dock_partners.
+          * Clears self._group_master_id.
+          * Does NOT touch self._members (the ring's own members
+            stay grouped under this master — the ring lives on as
+            a top-level standalone ring).
+          * Repacks the forest so its remaining members rearrange.
+
+        For a non-master cell whose group_master is the forest, the
+        existing ``_explicit_leave_group`` already does the right
+        thing — this method is the master-specific variant that
+        protects the ring's children from being disbanded.
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        forest_id = self._group_master_id
+        if forest_id is None:
+            _log(
+                f"_leave_forest_keep_ring: {self._id[:8]} not in "
+                f"any group — no-op"
+            )
+            return
+
+        forest = registry.get(forest_id)
+        if forest is not None and getattr(
+            forest, "_is_forest_master", False
+        ):
+            forest._members.pop(self._id, None)
+            forest._positioned.discard(self._id)
+            forest._dock_partners.discard(self._id)
+            try:
+                forest._repack_members()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"_leave_forest_keep_ring: forest repack "
+                    f"failed: {exc!r}"
+                )
+
+        self._group_master_id = None
+        # Don't clear self._docked_to / _dock_partners across the
+        # board — those track the ring's INTERNAL dock graph, not
+        # the forest membership.  We only severed the forest tie.
+        self.update()
+        _log(
+            f"_leave_forest_keep_ring: {self._id[:8]} left forest "
+            f"(was master of {len(self._members)} member(s))"
+        )
 
     def _on_shake_detected(self) -> None:
         """Shake gesture handler: fully unassociate this hex from its master's group.
@@ -6339,6 +6484,16 @@ def _check_master_validity(master: CellWindow, registry) -> None:
     which preserves membership).
     """
     if master.role != "master":
+        return
+
+    # V3 v0.3.15+ — the forest cell is a master that persists even
+    # with zero members.  It's the workspace root, not a transient
+    # docking artefact, so the quorum-close rule must NOT apply.
+    if getattr(master, "_is_forest_master", False):
+        _log(
+            f"_check_master_validity {master._id[:8]}: forest master, "
+            f"skipping quorum check (member_count={len(master._members)})"
+        )
         return
 
     member_count = len(master._members)

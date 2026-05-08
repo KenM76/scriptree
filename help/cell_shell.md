@@ -363,7 +363,28 @@ Launch with `run_scriptreeforest.bat` (Windows) / `run_scriptreeforest.py` (Unix
 
 ### What you see
 
-A **larger 12-sided cell** in deep forest green near the top of the screen. That's the forest cell — the right-click target for forest operations. Cells, rings, and trees you spawn live "on" the forest; the forest cell stays above them and tracks the layout.
+A **regular cell** (same hexagonal shape and default size as any other cell) with a **bright leaf-green stroke** to mark it as the forest. The forest cell IS a master cell — it sits at the center of the workspace, with rings, trees, and individual tools docked to it as members on the surrounding honeycomb slots.
+
+The forest cell behaves like any other ring master:
+
+- Has the same right-click menu (load catalog, settings, transparency, shape, color, etc.)
+- Plus a `Forest` submenu at the top with workspace-level actions (save / open / refresh / settings).
+- Drag the forest → its members translate with it (existing master-drag behaviour).
+- Edge-fold + on-screen reflow + per-member position memory — all the same as a ring master.
+- The same hexagon shape and size as every other cell, themed only in stroke colour.
+
+When something gets added to the forest (manually or via auto-discovery), it docks to a free honeycomb slot adjacent to the forest cell, the same way a `.scriptreetree` dropped onto a ring takes the next free slot. Drag it manually afterwards and the position sticks.
+
+### Rings attached to the forest
+
+A ring (master + its own members) attached to the forest is a **two-level group**:
+
+- The ring's **master cell** is a member of the forest.
+- The ring's own members are members of the ring's master.
+
+The ring-master's right-click menu carries an extra option: **Leave forest (keep ring intact)**. This severs the forest membership but leaves the ring's own members alone — useful when you want to move the ring out of the workspace temporarily or save it as a separate `.scriptreering`. **Disband group** in the same submenu means the existing thing (tear down the ring's own members), independent of forest membership.
+
+A standalone cell attached directly to the forest gets the same menu it'd have when attached to any ring, but **Leave group** is renamed to **Leave forest** so the action label matches what the user is actually doing.
 
 ### First run
 

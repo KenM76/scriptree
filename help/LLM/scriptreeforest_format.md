@@ -163,9 +163,41 @@ session.
 
 ## Visual
 
-The forest cell is a 12-sided polygon (dodecagon) sized 96 px by
-default — visibly larger than a normal 56 px hex cell, themed in
-deep forest green with a brighter leaf-green stroke.  Renders
-above all other cells (`Qt.WindowStaysOnTopHint`); doesn't
-participate in `SnapEngine` (it's a layer above rings, not a peer
-of them).
+As of v0.3.15 the forest cell is a **regular `CellWindow`** with
+`role="master"` and the `is_forest_master=True` flag set.  Same
+default shape (hexagon / square per branding), same default size
+(56 px), same drag and snap and repack behaviour as any ring
+master.  The only visual difference is the stroke colour — bright
+leaf-green (`#6cc48a`) so the forest cell reads as the workspace
+root rather than another tool.
+
+Two specific exemptions distinguish it from a regular master:
+
+  1. ``_check_master_validity`` skips it (forest persists with 0
+     members; a normal master with < 2 members tears itself down).
+  2. The right-click menu prepends a ``Forest`` submenu via the
+     ``_forest_menu_extension`` hook — workspace-level actions
+     (Save forest, Auto-add, Forest settings, …) on top of the
+     standard cell menu.
+
+### Two-level groups
+
+A ring attached to the forest forms a two-level group:
+
+  * The forest master at the top — contains the ring's master cell
+    among its members.
+  * The ring master in the middle — contains the ring's own
+    members.
+
+The ring-master's `_group_master_id` points at the forest's id,
+while the ring-master's own members have `_group_master_id`
+pointing at the ring-master's id.  Dragging the forest translates
+the ring-master (existing master-drag), which in turn cascades
+into translating the ring's own members via
+`_reflow_members_after_master_move`.
+
+The ring-master's right-click menu offers **Leave forest (keep
+ring intact)** — a v0.3.15 action (`_leave_forest_keep_ring`) that
+severs forest membership without disbanding the ring.  **Disband
+group** in the same submenu retains its existing meaning (tear
+down the ring's own members), independent of forest membership.
