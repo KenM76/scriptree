@@ -293,6 +293,7 @@ def repack(
     members: dict[str, tuple[int, int]],
     *,
     screen_rect: tuple[int, int, int, int] | None = None,
+    fixed: set[str] | None = None,
 ) -> dict[str, tuple[int, int] | None]:
     """Compute new top-left positions for every member of a group.
 
@@ -314,6 +315,15 @@ def repack(
         Optional ``(left, top, right, bottom)`` to filter slots that
         would push a member off-screen.  ``None`` skips the filter
         (every slot is considered valid).
+    fixed
+        Optional set of member ids whose **current position is
+        preserved verbatim** (V3 v0.3.16+).  Their nearest-slot is
+        also marked as taken so non-fixed members cannot be assigned
+        to overlap.  Use this when a master moves and only some of
+        its members are off-screen — the on-screen ones stay where
+        the user placed them; only the off-screen ones get new slots.
+        ``None`` (default) reproduces pre-v0.3.16 behaviour: every
+        member is up for reassignment.
 
     Returns
     -------
@@ -354,9 +364,12 @@ def repack(
     # ------------------------------------------------------------------
     # Per-member preferred-slot index + distance from master.
     # ------------------------------------------------------------------
+    fixed = fixed or set()
     member_ids = list(members.keys())
     rows = []
     for mid in member_ids:
+        if mid in fixed:
+            continue  # fixed members are not part of the assignment loop
         mtl = members[mid]
         mcx = mtl[0] + size_px / 2
         mcy = mtl[1] + size_px / 2
@@ -375,6 +388,34 @@ def repack(
     inner_taken: set[int] = set()
     outer_taken: set[int] = set()
     out: dict[str, tuple[int, int] | None] = {}
+
+    # Pre-claim slots occupied by fixed members so the assignment loop
+    # avoids overlapping them.  Fixed members keep their current
+    # top-left verbatim — we don't snap them to a slot, only mark the
+    # nearest slot as taken.  A fixed member's nearest slot might be
+    # in the inner OR outer ring; we reserve whichever is closer.
+    for mid in fixed:
+        if mid not in members:
+            continue
+        mtl = members[mid]
+        mcx = mtl[0] + size_px / 2
+        mcy = mtl[1] + size_px / 2
+        pref_inner = _nearest_slot_index(mcx, mcy, inner) if inner else None
+        pref_outer = _nearest_slot_index(mcx, mcy, outer) if outer else None
+        # Pick whichever ring's nearest slot is closest to the member.
+        d_inner = (
+            (mcx - inner[pref_inner][0]) ** 2 + (mcy - inner[pref_inner][1]) ** 2
+            if pref_inner is not None else float("inf")
+        )
+        d_outer = (
+            (mcx - outer[pref_outer][0]) ** 2 + (mcy - outer[pref_outer][1]) ** 2
+            if pref_outer is not None else float("inf")
+        )
+        if d_inner <= d_outer and pref_inner is not None:
+            inner_taken.add(pref_inner)
+        elif pref_outer is not None:
+            outer_taken.add(pref_outer)
+        out[mid] = mtl  # keep position unchanged
 
     for mid, pref, _ in rows:
         chosen: tuple[int, int] | None = None

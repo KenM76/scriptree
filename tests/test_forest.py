@@ -533,9 +533,11 @@ class TestForestController:
         target = tmp_path / "f.scriptreeforest"
         ctrl.save_as(target)
 
-        # Make a fresh controller, open the file.
+        # Make a fresh controller, open the file.  ``_make()``
+        # already calls ``start(suppress_first_run=True)`` so a
+        # second start would create a duplicate forest cell + queue
+        # a first-run dialog — the test would hang on the modal.
         ctrl2 = self._make()
-        ctrl2.start()  # spawns the forest_window
         ctrl2.open(str(target))
         assert ctrl2.forest.name == "RoundTrip"
         assert len(ctrl2.forest.items) == 1
@@ -647,6 +649,46 @@ class TestDialogs:
         dlg._reinclude(path)
         assert len(ctrl.forest.excluded) == 0
         assert len(ctrl.forest.items) == 1
+
+    def test_settings_dialog_has_run_button(self) -> None:
+        """v0.3.16: ForestSettingsDialog gains a "Save && Run
+        discovery" button so the user can configure scan folders
+        and immediately run a pass without right-clicking → Refresh."""
+        ctrl = self._make_ctrl()
+        from scriptree.shell.forest_dialogs import ForestSettingsDialog
+        dlg = ForestSettingsDialog(ctrl)
+        assert hasattr(dlg, "_btn_run")
+        from PySide6.QtWidgets import QPushButton
+        assert isinstance(dlg._btn_run, QPushButton)
+        assert "Run" in dlg._btn_run.text()
+        dlg.close()
+
+    def test_diff_dialog_uses_tree_view(self, tmp_path: Path) -> None:
+        """v0.3.16: UpdateDiffDialog renders the added / removed /
+        previously-excluded sections as ``QTreeWidget`` rows so the
+        user can see ring → tree → tool hierarchy."""
+        from scriptree.shell.forest_dialogs import UpdateDiffDialog
+        from scriptree.shell.forest_discover import (
+            DiscoveredItem, DiscoveryDiff,
+        )
+        from PySide6.QtWidgets import QTreeWidget
+
+        # Build a DiscoveryDiff with one added tool so the tree gets
+        # populated.
+        tool = tmp_path / "x.scriptree"
+        tool.write_text("{}", encoding="utf-8")
+        diff = DiscoveryDiff(added=[
+            DiscoveredItem(path=str(tool), kind="tool"),
+        ])
+        ctrl = self._make_ctrl()
+        dlg = UpdateDiffDialog(ctrl, diff)
+        assert isinstance(dlg._added_tree, QTreeWidget)
+        assert dlg._added_tree.topLevelItemCount() == 1
+        # Top-level row is checkable and checked by default.
+        from PySide6.QtCore import Qt
+        top = dlg._added_tree.topLevelItem(0)
+        assert top.checkState(0) == Qt.CheckState.Checked
+        dlg.close()
 
     def test_excluded_dialog_forget(self, tmp_path: Path) -> None:
         ctrl = self._make_ctrl()

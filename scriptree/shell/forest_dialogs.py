@@ -48,6 +48,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -63,6 +65,168 @@ if TYPE_CHECKING:
 
 def _log(msg: str) -> None:
     print(f"[forest_dialogs] {msg}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Tree-view builder — peers DiscoveredItems into their child contents
+# so the checklist shows ``ring → tree → tool`` hierarchy.
+# ---------------------------------------------------------------------------
+
+def _populate_children(
+    parent_widget_item: QTreeWidgetItem,
+    item_path: str,
+    item_kind: str,
+    *,
+    depth: int = 0,
+    max_depth: int = 4,
+) -> None:
+    """Recursively populate read-only child rows under
+    ``parent_widget_item`` describing what's inside the given
+    ``ring`` / ``tree`` / ``tool`` file.
+
+    Children are display-only — they have no checkbox, can't be
+    toggled, and don't affect the apply step.  Their job is to let
+    the user see "this ring contains rings X and Y, and ring X
+    contains tools A and B".
+
+    Loading the inner files is best-effort: a malformed catalog
+    just stops the recursion at that node with a small marker
+    label.  We never raise from here — the dialog must remain
+    interactive even when the user has half-broken catalogs in
+    their tree.
+    """
+    if depth >= max_depth:
+        return
+    p = Path(item_path)
+    if not p.is_file():
+        return
+    try:
+        if item_kind == "ring":
+            # .scriptreering — read its referenced cells.
+            import json
+            data = json.loads(p.read_text(encoding="utf-8"))
+            members = data.get("members") or []
+            for m in members:
+                child_catalog = m.get("catalog_path")
+                if not child_catalog:
+                    continue
+                # Resolve relative paths against the ring's directory.
+                child_path = Path(child_catalog)
+                if not child_path.is_absolute():
+                    child_path = (p.parent / child_path).resolve()
+                child_kind = (
+                    "tree" if str(child_path).lower().endswith(".scriptreetree")
+                    else "tool"
+                )
+                row = QTreeWidgetItem(parent_widget_item, [
+                    f"[{child_kind}] {child_path.name}",
+                    str(child_path),
+                ])
+                row.setFirstColumnSpanned(False)
+                _populate_children(
+                    row, str(child_path), child_kind,
+                    depth=depth + 1, max_depth=max_depth,
+                )
+        elif item_kind == "tree":
+            # .scriptreetree — recurse into its TreeNode hierarchy.
+            from scriptree.core.io import load_tree
+            tree_def = load_tree(p)
+            _populate_tree_nodes(
+                parent_widget_item, tree_def.nodes, p.parent,
+                depth=depth + 1, max_depth=max_depth,
+            )
+        # Tools have no children — leaf of the hierarchy.
+    except Exception as exc:  # noqa: BLE001
+        # Display a small marker so the user knows we tried.
+        QTreeWidgetItem(parent_widget_item, [
+            "(unable to peer inside — see log)",
+            f"{exc!r}",
+        ])
+        _log(f"_populate_children({item_path!r}, {item_kind!r}): {exc!r}")
+
+
+def _populate_tree_nodes(
+    parent_widget_item: QTreeWidgetItem,
+    nodes: list,
+    base_dir: Path,
+    *,
+    depth: int,
+    max_depth: int,
+) -> None:
+    """Render ``TreeNode``s as read-only widget rows under
+    ``parent_widget_item``.  Recurses into folders and dives into
+    leaf trees/tools via ``_populate_children``."""
+    if depth >= max_depth:
+        return
+    for node in nodes:
+        ntype = getattr(node, "type", None)
+        if ntype == "folder":
+            label = getattr(node, "name", "") or "(folder)"
+            row = QTreeWidgetItem(parent_widget_item, [
+                f"[folder] {label}",
+                "",
+            ])
+            _populate_tree_nodes(
+                row, getattr(node, "children", []), base_dir,
+                depth=depth + 1, max_depth=max_depth,
+            )
+        elif ntype == "leaf":
+            leaf_path = getattr(node, "path", "")
+            if not leaf_path:
+                continue
+            lp = Path(leaf_path)
+            if not lp.is_absolute():
+                lp = (base_dir / lp).resolve()
+            leaf_kind = (
+                "tree" if str(lp).lower().endswith(".scriptreetree")
+                else "tool"
+            )
+            row = QTreeWidgetItem(parent_widget_item, [
+                f"[{leaf_kind}] {lp.name}",
+                str(lp),
+            ])
+            _populate_children(
+                row, str(lp), leaf_kind,
+                depth=depth + 1, max_depth=max_depth,
+            )
+
+
+def _build_discovery_tree(
+    items: list,
+    *,
+    initial_checked: bool = True,
+) -> tuple[QTreeWidget, list[tuple[QTreeWidgetItem, "DiscoveredItem"]]]:
+    """Build a ``QTreeWidget`` with one top-level checkable row per
+    discovered item, plus read-only children showing what's inside.
+
+    Returns ``(tree, rows)`` where ``rows`` is a list of
+    ``(QTreeWidgetItem, DiscoveredItem)`` pairs the dialog can scan
+    when applying — each top-level row's check-state controls
+    inclusion of the corresponding item.
+    """
+    tree = QTreeWidget()
+    tree.setHeaderLabels(["Item", "Path"])
+    tree.setColumnCount(2)
+    tree.setRootIsDecorated(True)
+    tree.setUniformRowHeights(False)
+    tree.setColumnWidth(0, 320)
+
+    rows: list[tuple[QTreeWidgetItem, "DiscoveredItem"]] = []
+    for item in items:
+        p = Path(item.path)
+        top = QTreeWidgetItem(tree, [
+            f"[{item.kind}] {p.name}",
+            str(p),
+        ])
+        top.setFlags(top.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        top.setCheckState(
+            0,
+            Qt.CheckState.Checked if initial_checked
+            else Qt.CheckState.Unchecked,
+        )
+        _populate_children(top, item.path, item.kind)
+        rows.append((top, item))
+    return tree, rows
 
 
 # ---------------------------------------------------------------------------
@@ -279,11 +443,20 @@ class FirstRunDialog(QDialog):
             self.accept()
             return
 
-        # Apply all of what discovery found — first-run dialog is
-        # intentionally one-click; the user can always tidy after.
-        self._controller.apply_diff(diff)
-        self._controller.save()
+        # v0.3.16: hand off to the tree-view UpdateDiffDialog so the
+        # user can see the ring → tree → tool hierarchy and tick /
+        # untick individual items before applying.  Pre-fix this
+        # dialog applied everything unconditionally; the tree view
+        # gives users useful agency on first-run.
         self.accept()
+        # Run on next tick so this dialog has finished closing
+        # before the tree-view dialog parents to forest_window.
+        from PySide6.QtCore import QTimer
+
+        def _open_diff() -> None:
+            self._controller._show_diff_dialog(diff)
+
+        QTimer.singleShot(0, _open_diff)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +464,18 @@ class FirstRunDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class UpdateDiffDialog(QDialog):
-    """Diff prompt — checkbox per row in three sections."""
+    """Diff prompt — tree-view checklist with three sections.
+
+    v0.3.16: rewrote to use ``QTreeWidget`` so users can see the
+    ring → tree → tool hierarchy at a glance.  The user's request
+    was direct: "is it possible to have the checklist that comes
+    up with the apps to select as a tree view? That way we can see
+    what scriptrees are included in what scriptreetrees are
+    included in what rings."
+
+    Top-level rows are checkable (apply/skip toggle); nested rows
+    are read-only and exist purely to make the hierarchy visible.
+    """
 
     def __init__(
         self,
@@ -302,34 +486,40 @@ class UpdateDiffDialog(QDialog):
         self._controller = controller
         self._diff = diff
         self.setWindowTitle("Forest changes detected")
-        self.setMinimumWidth(640)
-        self.setMinimumHeight(480)
+        self.setMinimumWidth(720)
+        self.setMinimumHeight(560)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             "<b>I found some changes.</b><br>"
-            "Tick the items you want to apply.  Items left unticked "
-            "stay as they are now."
+            "Tick the top-level items you want to apply.  Expand a "
+            "row to see what's inside (read-only — child rows just "
+            "show structure)."
         ))
 
-        # Three sections, scrollable.
+        # Three sections.  Each section renders as a QTreeWidget
+        # so children are visible.  Wrapped in a scroll area to
+        # handle large diffs without growing the dialog absurdly.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
 
-        self._cb_added: list[tuple[QCheckBox, DiscoveredItem]] = []
-        self._cb_removed: list[tuple[QCheckBox, str]] = []
-        self._cb_reincl: list[tuple[QCheckBox, DiscoveredItem]] = []
+        self._added_tree: QTreeWidget | None = None
+        self._added_rows: list[tuple[QTreeWidgetItem, DiscoveredItem]] = []
+        self._removed_tree: QTreeWidget | None = None
+        self._removed_rows: list[tuple[QTreeWidgetItem, str]] = []
+        self._reincl_tree: QTreeWidget | None = None
+        self._reincl_rows: list[tuple[QTreeWidgetItem, DiscoveredItem]] = []
 
         if diff.added:
             box = QGroupBox(f"Add to forest ({len(diff.added)})")
             bl = QVBoxLayout(box)
-            for item in diff.added:
-                cb = QCheckBox(f"[{item.kind}]  {item.path}")
-                cb.setChecked(True)
-                bl.addWidget(cb)
-                self._cb_added.append((cb, item))
+            self._added_tree, self._added_rows = _build_discovery_tree(
+                diff.added, initial_checked=True,
+            )
+            self._added_tree.setMinimumHeight(120)
+            bl.addWidget(self._added_tree)
             inner_layout.addWidget(box)
 
         if diff.removed:
@@ -338,11 +528,22 @@ class UpdateDiffDialog(QDialog):
                 f"({len(diff.removed)})"
             )
             bl = QVBoxLayout(box)
+            removed_tree = QTreeWidget()
+            removed_tree.setHeaderLabels(["Item", "Path"])
+            removed_tree.setColumnCount(2)
+            removed_tree.setColumnWidth(0, 320)
+            removed_tree.setMinimumHeight(80)
             for item in diff.removed:
-                cb = QCheckBox(f"[{item.kind}]  {item.path}")
-                cb.setChecked(True)
-                bl.addWidget(cb)
-                self._cb_removed.append((cb, item.path))
+                p = Path(item.path)
+                row = QTreeWidgetItem(removed_tree, [
+                    f"[{item.kind}] {p.name}",
+                    str(p),
+                ])
+                row.setFlags(row.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                row.setCheckState(0, Qt.CheckState.Checked)
+                self._removed_rows.append((row, item.path))
+            bl.addWidget(removed_tree)
+            self._removed_tree = removed_tree
             inner_layout.addWidget(box)
 
         if diff.previously_excluded:
@@ -355,18 +556,17 @@ class UpdateDiffDialog(QDialog):
                 "<i>You removed these from the forest before.  "
                 "Tick to re-include; leave unticked to keep them out.</i>"
             ))
-            for item in diff.previously_excluded:
-                cb = QCheckBox(f"[{item.kind}]  {item.path}")
-                cb.setChecked(False)
-                bl.addWidget(cb)
-                self._cb_reincl.append((cb, item))
+            self._reincl_tree, self._reincl_rows = _build_discovery_tree(
+                diff.previously_excluded, initial_checked=False,
+            )
+            self._reincl_tree.setMinimumHeight(120)
+            bl.addWidget(self._reincl_tree)
             inner_layout.addWidget(box)
 
         inner_layout.addStretch(1)
         scroll.setWidget(inner)
         layout.addWidget(scroll, stretch=1)
 
-        # Action buttons.
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Apply
             | QDialogButtonBox.StandardButton.Cancel
@@ -378,10 +578,23 @@ class UpdateDiffDialog(QDialog):
             self._apply
         )
 
+    @staticmethod
+    def _is_checked(row: QTreeWidgetItem) -> bool:
+        return row.checkState(0) == Qt.CheckState.Checked
+
     def _apply(self) -> None:
-        accepted_added = {it.path for cb, it in self._cb_added if cb.isChecked()}
-        accepted_removed = {p for cb, p in self._cb_removed if cb.isChecked()}
-        accepted_reincl = {it.path for cb, it in self._cb_reincl if cb.isChecked()}
+        accepted_added = {
+            it.path for row, it in self._added_rows
+            if self._is_checked(row)
+        }
+        accepted_removed = {
+            p for row, p in self._removed_rows
+            if self._is_checked(row)
+        }
+        accepted_reincl = {
+            it.path for row, it in self._reincl_rows
+            if self._is_checked(row)
+        }
         self._controller.apply_diff(
             self._diff,
             accepted_added=accepted_added,
@@ -440,13 +653,26 @@ class ForestSettingsDialog(QDialog):
         ml.addWidget(self._mode)
         layout.addWidget(mode_box)
 
+        # Three buttons: Save (just save), Run (save + run discovery
+        # immediately), Cancel.  Run is what the user asked for —
+        # so the settings dialog can also kick off a discovery pass
+        # without making them right-click → Refresh after closing.
         btn_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        self._btn_run = QPushButton("Save && Run discovery")
+        self._btn_run.setToolTip(
+            "Save these settings, then immediately scan the configured "
+            "folders and apply per the chosen update mode."
+        )
+        btn_box.addButton(
+            self._btn_run, QDialogButtonBox.ButtonRole.ActionRole,
+        )
         layout.addWidget(btn_box)
         btn_box.rejected.connect(self.reject)
         btn_box.accepted.connect(self._save)
+        self._btn_run.clicked.connect(self._save_and_run)
 
     def _save(self) -> None:
         f = self._controller.forest
@@ -465,6 +691,20 @@ class ForestSettingsDialog(QDialog):
                 pass
         self._controller.save()
         self.accept()
+
+    def _save_and_run(self) -> None:
+        """Apply settings then immediately run discovery — same as
+        Save followed by right-click → Refresh, but in one step.
+        Honours the chosen update_mode (auto applies silently,
+        prompt opens the diff dialog).
+        """
+        self._save()
+        # ``_save`` calls ``self.accept()`` which closes us — fire
+        # the discovery on the next event tick so the diff dialog
+        # (if any) doesn't try to parent itself to a freshly-closed
+        # window.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._controller.refresh_from_sources)
 
 
 # ---------------------------------------------------------------------------

@@ -195,13 +195,14 @@ class ForestController(QObject):
         for it in list(self.forest.items):
             self._spawn_item(it)
 
-        # First-run: empty forest + nothing autoloaded → welcome
-        # dialog after the next event loop tick.
-        if (
-            not suppress_first_run
-            and not self.forest.items
-            and self.forest.loaded_from is None
-        ):
+        # First-run: empty forest → welcome dialog after the next
+        # event-loop tick.  v0.3.16: trigger now fires whenever
+        # ``items`` is empty (not gated on ``loaded_from is None``).
+        # Pre-fix, autoloading the per-user file always set
+        # ``loaded_from``, suppressing the dialog even when the user
+        # had explicitly cleared their forest and was looking at an
+        # empty workspace expecting a way to repopulate.
+        if not suppress_first_run and not self.forest.items:
             from PySide6.QtCore import QTimer
             QTimer.singleShot(50, self._show_first_run_dialog)
 

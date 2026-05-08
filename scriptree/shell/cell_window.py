@@ -2677,36 +2677,51 @@ class CellWindow(QMainWindow):
     def _reflow_members_after_master_move(self) -> None:
         """Re-evaluate every member's slot after the master has moved.
 
-        v0.3.8 fix — pre-fix this routine forced a repack whenever
-        members weren't on canonical slots, even when their actual
-        positions were on-screen and intentionally placed by the
-        user (manual rearrangement after the corner-reflow snapped
-        them to default).  Now repack ONLY when at least one member
-        would actually be off-screen at its current preferred
-        position — manual rearrangements survive subsequent master
-        nudges.
+        v0.3.16 — surgical reflow.  Members that are still on-screen
+        at their current position **stay where they are**; only
+        off-screen members get reassigned to a fresh slot.  This
+        protects the user's manual layout (e.g. they spread cells
+        across two screen quadrants and only one corner-pushes
+        anyone off the edge — the others must not move).
+
+        Pre-v0.3.16 history:
+          * pre-v0.3.8: any non-canonical layout triggered a full
+            repack on every master nudge.
+          * v0.3.8:     repack only when AT LEAST ONE member was
+            off-screen — but it was still a FULL repack of every
+            member, blowing away on-screen ones too.
+          * v0.3.16:    repack only the off-screen members; pass the
+            on-screen ones to ``repack`` via the ``fixed`` argument
+            so their slots are pre-claimed.
 
         During a master drag, members are translated rigidly with
         the master (cheap — no math).  When the drag ends, this
-        routine runs a full repack only if the corner threw a member
-        off-screen; otherwise positions stick.
+        routine runs a selective repack only on the off-screen
+        members; otherwise positions stick.
         """
         if self.role != "master" or not self._members:
             return
         from scriptree.shell.group_layout import screen_rect_for_master
         master_tl = (self.pos().x(), self.pos().y())
         screen_rect = screen_rect_for_master(master_tl, self._size_px)
-        # On-screen check: every member's top-left must be inside
-        # the master's screen.  If yes — leave the layout alone.
-        # If any member is off-screen, repack.
-        all_on_screen = all(
-            self._slot_on_screen(qp.x(), qp.y(), screen_rect)
-            for qp in self._members.values()
-        )
-        if all_on_screen:
+        # Partition members by on-/off-screen.
+        off_screen: list[str] = []
+        on_screen: list[str] = []
+        for mid, qp in self._members.items():
+            if self._slot_on_screen(qp.x(), qp.y(), screen_rect):
+                on_screen.append(mid)
+            else:
+                off_screen.append(mid)
+        if not off_screen:
+            # Everything's on-screen — just refresh the edge-fold
+            # badge (members might have crossed the inner-ring radius
+            # threshold without going off-screen; the fold check
+            # handles those cases).
             self._check_edge_fold()
             return
-        self._repack_members()
+        # Pass the on-screen ids as ``fixed`` so the repack leaves
+        # them in place and only reassigns off-screen members.
+        self._repack_members(fixed=set(on_screen))
 
     @staticmethod
     def _slot_on_screen(
@@ -2724,7 +2739,11 @@ class CellWindow(QMainWindow):
             and tl_x < right and tl_y < bottom
         )
 
-    def _repack_members(self) -> None:
+    def _repack_members(
+        self,
+        *,
+        fixed: set[str] | None = None,
+    ) -> None:
         """Recompute and apply on-screen positions for every member.
 
         Uses ``group_layout.repack`` to:
@@ -2733,6 +2752,12 @@ class CellWindow(QMainWindow):
           top-left fits on the master's screen.
         * Spill into the outer ring when the inner ring is full.
         * Auto-hide members for which no on-screen slot is available.
+
+        ``fixed`` (V3 v0.3.16+) — set of member ids whose positions
+        should be preserved verbatim.  Their nearest-slot is marked
+        as taken so non-fixed members don't overlap.  Used by
+        ``_reflow_members_after_master_move`` for surgical repacks.
+        ``None`` = legacy behaviour: every member up for reassignment.
 
         Updates ``self._members`` (the authoritative dict of preferred
         positions) and re-runs ``_check_edge_fold`` so the badge count
@@ -2769,6 +2794,7 @@ class CellWindow(QMainWindow):
             orientation=self._orientation,
             members=member_positions,
             screen_rect=screen_rect,
+            fixed=fixed,
         )
 
         # Apply the new positions to each member widget + update _members.

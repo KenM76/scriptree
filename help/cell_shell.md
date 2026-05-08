@@ -415,6 +415,20 @@ When you remove a ring/tree/tool from the forest (right-click → Remove from fo
 
 The excluded path still **blocks demotion**: an excluded ring keeps its folder from being scanned for individual tools (you removed the ring, not promoted the tool).
 
+### Discovery preview (tree view)
+
+When the prompt-mode discovery dialog appears, each row is shown as an **expandable tree** so you can see what's inside before ticking. A `.scriptreering` row expands into the cells it contains; a `.scriptreetree` row expands into its tools (recursively, through nested folders); a `.scriptree` row is a leaf.
+
+The tree-view is read-only **below** the top-level row — only the top item is checkable; expanding a row is purely informational. Use it to answer "what's in this ring?" before deciding whether to add it.
+
+### Settings dialog → "Save && Run discovery"
+
+Forest settings has three buttons: **Save** (apply settings, close), **Save && Run discovery** (apply settings, then immediately scan the configured folders), and **Cancel**. The Run variant honours the configured update mode — if it's `prompt` you'll see the tree-view diff dialog; if it's `auto` the changes apply silently.
+
+### Selective reflow on master move (v0.3.16)
+
+When you drag the forest cell, members move with it. If the corner of the screen pushes any of them off-screen, **only the off-screen members get reassigned to fresh slots** — the on-screen ones stay exactly where you put them. Pre-v0.3.16 a single off-screen member triggered a full repack of every member, blowing away your manual layout. The new contract is surgical: the user's spread-out arrangement survives every master nudge, and only the cells that genuinely need a new slot get one.
+
 ### Update modes
 
 Right-click the forest cell → **Forest settings…** → Update mode:

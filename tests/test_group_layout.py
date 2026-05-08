@@ -296,3 +296,71 @@ def test_canonical_check_false_when_overlapping() -> None:
         "m2": top_left_for_centre(*inner[0], 56),  # same slot!
     }
     assert not members_at_canonical_slots((472, 472), 56, "hexagon", "flat-top", members)
+
+
+# ---------------------------------------------------------------------------
+# repack — surgical reflow via the ``fixed`` parameter (V3 v0.3.16+)
+# ---------------------------------------------------------------------------
+
+def test_repack_fixed_members_keep_their_position() -> None:
+    """A fixed member's position is returned verbatim — no snap to
+    a slot, no reassignment.  Used by surgical reflow."""
+    inner = first_ring_centres(500, 500, 56, "hexagon", "flat-top")
+    n_pos = top_left_for_centre(*inner[0], 56)
+    # Use a deliberately off-canonical position for the fixed
+    # member so we can detect any accidental snap-to-slot.
+    fixed_pos = (n_pos[0] + 5, n_pos[1] + 7)
+    members = {
+        "fixed": fixed_pos,
+        "loose": top_left_for_centre(*inner[1], 56),
+    }
+    out = repack(
+        (472, 472), 56, "hexagon", "flat-top", members,
+        fixed={"fixed"},
+    )
+    # Fixed member's position is byte-identical to input.
+    assert out["fixed"] == fixed_pos
+    # Loose member still landed on a valid slot.
+    assert out["loose"] is not None
+
+
+def test_repack_fixed_members_block_their_slot() -> None:
+    """Non-fixed members must NOT be assigned to the slot a fixed
+    member is occupying.  Without slot-blocking the loose member
+    could overlap the fixed one."""
+    inner = first_ring_centres(500, 500, 56, "hexagon", "flat-top")
+    # Fixed member sits exactly on inner[3].  Loose member also
+    # prefers inner[3] (same direction).  After repack, loose must
+    # land elsewhere.
+    fixed_pos = top_left_for_centre(*inner[3], 56)
+    loose_pos = top_left_for_centre(
+        inner[3][0] + 0.001, inner[3][1] + 0.001, 56,
+    )
+    members = {
+        "fixed": fixed_pos,
+        "loose": loose_pos,
+    }
+    out = repack(
+        (472, 472), 56, "hexagon", "flat-top", members,
+        fixed={"fixed"},
+    )
+    assert out["fixed"] == fixed_pos
+    assert out["loose"] is not None
+    assert out["loose"] != fixed_pos
+
+
+def test_repack_no_fixed_reproduces_legacy_behaviour() -> None:
+    """``fixed=None`` (default) preserves pre-v0.3.16 behaviour:
+    every member is up for reassignment, fixed parameter is a
+    purely additive opt-in."""
+    inner = first_ring_centres(500, 500, 56, "hexagon", "flat-top")
+    # Member at a non-canonical position should be snapped onto a
+    # slot when fixed=None.
+    bad_pos = (inner[0][0] - 28 + 17, inner[0][1] - 28 + 19)
+    members = {"m": bad_pos}
+    out = repack((472, 472), 56, "hexagon", "flat-top", members)
+    # Snapped to a slot — not the input position.
+    assert out["m"] != bad_pos
+    assert out["m"] in [
+        top_left_for_centre(*c, 56) for c in inner
+    ]
