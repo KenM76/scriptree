@@ -443,9 +443,20 @@ The **Auto-add from ScripTreeApps now** menu entry runs the prompt dialog **rega
 
 Forests can be saved to `.scriptreeforest` files via right-click → **Save forest as…**. Open multiple forests with **Open forest…** to swap between named workspaces (e.g. `engineering.scriptreeforest`, `dxf-only.scriptreeforest`).
 
-**A default file is always present.** When the forest starts and no `.scriptreeforest` exists at `<APPDATA>/ScripTree/last_forest.scriptreeforest`, the launcher **creates one** there immediately. Every subsequent change auto-saves to that file (debounced ~250 ms after the last edit), so a process restart always restores your session. You don't have to remember to save — the forest is always up to date on disk.
+**A default file is always present (by default).** When the forest starts and no `.scriptreeforest` exists at the configured default path, the launcher **creates one** there immediately. Every subsequent change auto-saves to that file (debounced ~250 ms after the last edit), so a process restart always restores your session.
 
-Auto-save is on by default; the controller exposes `set_autosave_enabled(False)` for callers (tests, headless tools) that need disk-quiet mode. Manual **Save** still works at any time and is the right thing to use when saving to a named `.scriptreeforest` other than the autoload path.
+### Launch defaults (v0.3.21+)
+
+Right-click the forest cell → **Forest settings…** → **Launch defaults** section:
+
+- **Load this default forest when no file is specified** — checkbox.  When **on** (factory default), launching the forest with no command-line argument loads the default forest file, creating it empty if missing.  When **off**, the forest starts with a transient in-memory workspace — nothing is auto-saved until you explicitly **Save as…**.
+- **Default forest file** — path field with **Browse…**.  Where the fallback points.  Leave blank to use the canonical autoload path (`<APPDATA>/ScripTree/last_forest.scriptreeforest`).  Set to a checked-in workspace file, a USB-stick file, or any `.scriptreeforest` you want as your default.
+
+The preferences live in `<APPDATA>/ScripTree/forest_preferences.json`.  Changes apply at the **next launch**, not the current session.
+
+First-run users see factory defaults: fallback on, path empty — same experience as v0.3.20.
+
+Auto-save is on by default; the controller exposes `set_autosave_enabled(False)` for callers (tests, headless tools) that need disk-quiet mode.  When fallback is off and the forest has never been saved-as, autosave silently no-ops — there's no safe target.  Manual **Save** is the right thing to use when saving to a named `.scriptreeforest` other than the autoload path.
 
 ### Why "forest"?
 

@@ -596,6 +596,207 @@ class TestForestController:
 # forest_dialogs — construct headless and apply
 # ===========================================================================
 
+class TestForestPreferences:
+    """v0.3.21: ``forest_preferences.json`` controls launch
+    behaviour when no explicit forest is passed.
+
+      * ``fallback_to_default=True`` (factory default): the launcher
+        loads the configured default file, creating it empty if
+        missing — matches v0.3.20 behaviour.
+      * ``fallback_to_default=False``: launcher starts with a
+        transient in-memory forest; autosave is implicitly off
+        because there's nowhere safe to write.
+      * ``default_forest_path``: where the fallback points.  Empty
+        string = canonical autoload path.
+
+    These tests redirect the preferences + autoload paths to
+    ``tmp_path`` via ``monkeypatch`` so they don't touch the dev's
+    real ``%APPDATA%``.
+    """
+
+    def _make_branding(self) -> dict:
+        # Use a unique app name so preferences land in a fresh
+        # APPDATA subdirectory; combined with monkeypatch this
+        # keeps tests fully isolated.
+        return load_branding()
+
+    def test_factory_defaults(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """First-run user (no prefs file): fallback ON, path empty.
+        Matches the v0.3.20 experience verbatim."""
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import load_preferences
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: tmp_path / "forest_preferences.json",
+        )
+        prefs = load_preferences(self._make_branding())
+        assert prefs.fallback_to_default is True
+        assert prefs.default_forest_path == ""
+
+    def test_round_trip(self, tmp_path: Path, monkeypatch: Any) -> None:
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import (
+            ForestPreferences, load_preferences, save_preferences,
+        )
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        br = self._make_branding()
+        save_preferences(
+            ForestPreferences(
+                fallback_to_default=False,
+                default_forest_path=str(tmp_path / "x.scriptreeforest"),
+            ),
+            br,
+        )
+        loaded = load_preferences(br)
+        assert loaded.fallback_to_default is False
+        assert loaded.default_forest_path == str(
+            tmp_path / "x.scriptreeforest",
+        )
+
+    def test_start_with_fallback_off_no_file_created(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """``fallback_to_default=False`` → controller starts with
+        an empty in-memory forest, and the autoload path is NOT
+        written even when autosave is on."""
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import (
+            ForestPreferences, save_preferences,
+        )
+
+        autoload_target = tmp_path / "last_forest.scriptreeforest"
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: autoload_target,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda branding: autoload_target,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        save_preferences(
+            ForestPreferences(fallback_to_default=False),
+            self._make_branding(),
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            self._make_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.start(suppress_first_run=True)
+        # Forest exists in memory but no file backs it.
+        assert ctrl.forest.loaded_from is None
+        # Autoload file should NOT have been written.
+        assert not autoload_target.is_file()
+
+    def test_start_with_fallback_on_custom_path(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """``fallback_to_default=True`` + custom ``default_forest_path``
+        → controller loads/creates that file, not the canonical one."""
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import (
+            ForestPreferences, save_preferences,
+        )
+
+        canonical = tmp_path / "canonical.scriptreeforest"
+        custom = tmp_path / "custom.scriptreeforest"
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: canonical,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda branding: canonical,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        save_preferences(
+            ForestPreferences(
+                fallback_to_default=True,
+                default_forest_path=str(custom),
+            ),
+            self._make_branding(),
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            self._make_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(suppress_first_run=True)
+        # Custom file got created; canonical did NOT.
+        assert custom.is_file()
+        assert not canonical.is_file()
+        assert ctrl.forest.loaded_from == str(custom.resolve())
+
+    def test_save_is_noop_when_fallback_off_and_unsaved(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """When the user runs transient (fallback off, no explicit
+        save_as), calling ``save()`` is a silent no-op rather than
+        secretly writing to APPDATA."""
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import (
+            ForestPreferences, save_preferences,
+        )
+
+        canonical = tmp_path / "canonical.scriptreeforest"
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: canonical,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda branding: canonical,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+        save_preferences(
+            ForestPreferences(fallback_to_default=False),
+            self._make_branding(),
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            self._make_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.start(suppress_first_run=True)
+        # Trigger a change so dirty flag is set.
+        ctrl.forest.name = "Transient"
+        ctrl._dirty = True
+        # Save should NOT write anything.
+        ctrl.save()
+        assert not canonical.is_file()
+
+
 class TestAutosaveAndDefaultFile:
     """v0.3.20: starting the forest with no autoload file present
     creates a default ``.scriptreeforest`` at the canonical autoload
@@ -606,29 +807,39 @@ class TestAutosaveAndDefaultFile:
     def test_start_creates_default_file_when_no_autoload(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        """No autoload file → controller saves a fresh one at the
-        autoload path on start."""
+        """Factory-default preferences (fallback ON, path empty)
+        and no autoload file → controller saves a fresh one at the
+        canonical autoload path on start.
+
+        v0.3.21 changes: the start() flow now resolves the default
+        path via ``ForestPreferences.resolved_default_path``, which
+        calls ``default_autoload_path`` from inside ``forest_io``.
+        We patch both the controller's bound reference AND the
+        forest_io module's reference so the helper class also sees
+        the redirected path.
+        """
         from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
         from scriptree.shell.forest_controller import ForestController
 
-        # Redirect the autoload path to tmp so the test doesn't
-        # touch the dev's real APPDATA.
         target = tmp_path / "last_forest.scriptreeforest"
+        prefs_file = tmp_path / "forest_preferences.json"
         monkeypatch.setattr(
             fc_mod, "default_autoload_path",
             lambda branding: target,
         )
-        # Also patch ``list_autoload_forest`` to return None so the
-        # "no autoload" branch fires regardless of what's actually
-        # in APPDATA.
         monkeypatch.setattr(
-            fc_mod, "list_autoload_forest",
-            lambda branding: None,
+            io_mod, "default_autoload_path",
+            lambda branding: target,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
         )
 
         _fresh_registry()
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
-        ctrl.set_autosave_enabled(False)  # don't write again after
+        ctrl.set_autosave_enabled(False)
         ctrl.start(suppress_first_run=True)
 
         assert target.is_file(), (

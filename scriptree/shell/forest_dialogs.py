@@ -653,6 +653,58 @@ class ForestSettingsDialog(QDialog):
         ml.addWidget(self._mode)
         layout.addWidget(mode_box)
 
+        # ── Launch preferences (v0.3.21+) ─────────────────────────
+        # Persistent across forests — controls what the launcher
+        # does when nothing is specified on the command line.  These
+        # apply at the NEXT launch, not the current session.
+        prefs_box = QGroupBox("Launch defaults (applies on next launch)")
+        pl = QVBoxLayout(prefs_box)
+        prefs = controller.get_preferences()
+        self._prefs_fallback_cb = QCheckBox(
+            "Load this default forest when no file is specified"
+        )
+        self._prefs_fallback_cb.setToolTip(
+            "When checked, launching the forest with no command-line "
+            "argument loads the default forest file below (creating "
+            "it empty if missing).  When unchecked, the forest starts "
+            "with a transient in-memory workspace — nothing is "
+            "auto-saved until you explicitly Save as…"
+        )
+        self._prefs_fallback_cb.setChecked(prefs.fallback_to_default)
+        pl.addWidget(self._prefs_fallback_cb)
+        prefs_path_row = QHBoxLayout()
+        prefs_path_row.addWidget(QLabel("Default forest file:"))
+        self._prefs_path_edit = QLineEdit(prefs.default_forest_path)
+        self._prefs_path_edit.setPlaceholderText(
+            "(empty = canonical autoload path)"
+        )
+        prefs_path_row.addWidget(self._prefs_path_edit, stretch=1)
+        self._prefs_path_browse = QPushButton("Browse…")
+        prefs_path_row.addWidget(self._prefs_path_browse)
+        pl.addLayout(prefs_path_row)
+        layout.addWidget(prefs_box)
+
+        # Wire enable/disable: path edit + browse are only relevant
+        # when the fallback checkbox is on.
+        def _sync_prefs_enable():
+            on = self._prefs_fallback_cb.isChecked()
+            self._prefs_path_edit.setEnabled(on)
+            self._prefs_path_browse.setEnabled(on)
+        _sync_prefs_enable()
+        self._prefs_fallback_cb.toggled.connect(lambda _checked: _sync_prefs_enable())
+
+        def _browse_default_path():
+            current = self._prefs_path_edit.text().strip()
+            target, _ = QFileDialog.getSaveFileName(
+                self,
+                "Default forest file",
+                current,
+                "ScripTree forest (*.scriptreeforest)",
+            )
+            if target:
+                self._prefs_path_edit.setText(target)
+        self._prefs_path_browse.clicked.connect(_browse_default_path)
+
         # Three buttons: Save (just save), Run (save + run discovery
         # immediately), Cancel.  Run is what the user asked for —
         # so the settings dialog can also kick off a discovery pass
@@ -689,6 +741,21 @@ class ForestSettingsDialog(QDialog):
                 )
             except Exception:  # noqa: BLE001
                 pass
+        # Persist launch preferences (v0.3.21+).  These don't change
+        # the currently-loaded forest; they apply at the next launch.
+        from scriptree.shell.forest_io import ForestPreferences
+        new_prefs = ForestPreferences(
+            fallback_to_default=self._prefs_fallback_cb.isChecked(),
+            default_forest_path=self._prefs_path_edit.text().strip(),
+        )
+        try:
+            self._controller.update_preferences(new_prefs)
+        except OSError as exc:
+            # Disk write of prefs failed (read-only home dir?).
+            # Don't crash the dialog — the forest save below still
+            # works for the in-memory state.
+            from scriptree.shell.forest_controller import _log
+            _log(f"_save: update_preferences failed: {exc!r}")
         self._controller.save()
         self.accept()
 

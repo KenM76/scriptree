@@ -49,9 +49,9 @@ from PySide6.QtCore import QObject, QPoint, Signal
 from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox
 
 from scriptree.shell.forest_io import (
-    AutoDiscoverConfig, ForestDef, ForestItem, ItemKind,
+    AutoDiscoverConfig, ForestDef, ForestItem, ForestPreferences, ItemKind,
     default_autoload_path, kind_for_suffix, list_autoload_forest,
-    load_forest, save_forest,
+    load_forest, load_preferences, save_forest, save_preferences,
 )
 from scriptree.shell.forest_discover import (
     DiscoveredItem, DiscoveryDiff, diff_against, discover,
@@ -150,34 +150,60 @@ class ForestController(QObject):
         ``forest=None`` means "autoload from the per-user last
         forest, or empty default if none exists".
         """
+        # V3 v0.3.21+ — honour ``forest_preferences.json``.
+        #
+        # When the caller didn't pass an explicit ``forest`` argument
+        # (the common case — bare ``run_scriptreeforest`` launch with
+        # no positional path), we consult the user's preferences:
+        #
+        #   * fallback_to_default=True  → load the configured default
+        #     forest file, creating it empty if it doesn't exist (the
+        #     v0.3.20 default-file behaviour).
+        #   * fallback_to_default=False → start with an empty
+        #     in-memory transient forest.  Autosave is implicitly
+        #     gated: ``save()`` is a no-op until the user explicitly
+        #     ``save_as``s, since there's nowhere safe to write to.
+        #
+        # First-run users hit the factory defaults (fallback=True,
+        # path=""), matching the v0.3.20 experience verbatim.
+        self._preferences: ForestPreferences = load_preferences(self._branding)
+
         if forest is None:
-            forest = list_autoload_forest(self._branding)
-        if forest is None:
-            # V3 v0.3.20+ — no autoload file found.  Create a fresh
-            # one at the canonical autoload path so every subsequent
-            # change auto-saves to disk.  The starting state is an
-            # empty ForestDef — the first-run welcome dialog (queued
-            # below) lets the user populate it.
-            forest = ForestDef()
-            try:
-                target = default_autoload_path(self._branding)
-                save_forest(forest, target)
-                # ``save_forest`` sets ``loaded_from``; verify the
-                # round-trip and surface a clean log line so the
-                # user can locate their forest on disk if they want.
+            if self._preferences.fallback_to_default:
+                target = self._preferences.resolved_default_path(self._branding)
+                # Try to load the configured default file.
+                if target.is_file():
+                    try:
+                        forest = load_forest(target)
+                    except (OSError, ValueError) as exc:
+                        _log(
+                            f"start: failed to load default forest at "
+                            f"{target}: {exc!r}; starting empty"
+                        )
+                        forest = ForestDef()
+                else:
+                    # File doesn't exist yet — create it so autosave
+                    # has a target.
+                    forest = ForestDef()
+                    try:
+                        save_forest(forest, target)
+                        _log(
+                            f"start: no forest found — created default "
+                            f"at {forest.loaded_from}"
+                        )
+                    except OSError as exc:
+                        _log(
+                            f"start: could not create default forest "
+                            f"file: {exc!r}; running in-memory only"
+                        )
+            else:
+                # Preferences say: do NOT fall back.  Run with a
+                # transient forest; autosave is a no-op until the
+                # user explicitly saves.
+                forest = ForestDef()
                 _log(
-                    f"start: no forest found — created default at "
-                    f"{forest.loaded_from}"
-                )
-            except OSError as exc:
-                # File system not writable (RO mount? sandbox?) —
-                # fall through with ``loaded_from = None`` so the
-                # forest still works in memory.  Auto-save will
-                # keep failing silently; that's correct, the user
-                # has a bigger problem we can't fix here.
-                _log(
-                    f"start: could not create default forest file: "
-                    f"{exc!r}; running in-memory only"
+                    "start: fallback_to_default disabled — running "
+                    "with a transient in-memory forest"
                 )
         self.forest = forest
 
@@ -496,11 +522,33 @@ class ForestController(QObject):
     # ------------------------------------------------------------------
 
     def save(self) -> None:
-        target: Path
+        """Persist the forest to disk.
+
+        Target resolution:
+          1. ``self.forest.loaded_from`` — the file the forest was
+             opened / saved-as'd to.  Always wins when set.
+          2. The configured default forest path — only used as a
+             fallback when ``fallback_to_default`` is True in the
+             user's preferences.
+          3. Otherwise — silent no-op.  The user has explicitly
+             opted into a transient in-memory session; writing
+             to APPDATA without being told to would surprise them.
+        """
+        target: Path | None
         if self.forest.loaded_from:
             target = Path(self.forest.loaded_from)
+        elif getattr(self, "_preferences", None) is not None and \
+                self._preferences.fallback_to_default:
+            target = self._preferences.resolved_default_path(self._branding)
         else:
-            target = default_autoload_path(self._branding)
+            # Transient session — no target, no write.  ``_dirty``
+            # stays True so a future ``save_as`` can pick up the
+            # pending changes.
+            _log(
+                "save: no target (transient forest + fallback off); "
+                "skipping write — use Save as… to persist"
+            )
+            return
         self._sync_positions_into_items()
         save_forest(self.forest, target)
         self._dirty = False
@@ -570,6 +618,26 @@ class ForestController(QObject):
                 self.save()
             except Exception as exc:  # noqa: BLE001
                 _log(f"flush_if_dirty: save failed: {exc!r}")
+
+    def get_preferences(self) -> ForestPreferences:
+        """Return a snapshot of the user's launch preferences."""
+        if getattr(self, "_preferences", None) is None:
+            self._preferences = load_preferences(self._branding)
+        # Return a copy so callers can mutate without aliasing.
+        return ForestPreferences(
+            fallback_to_default=self._preferences.fallback_to_default,
+            default_forest_path=self._preferences.default_forest_path,
+        )
+
+    def update_preferences(self, prefs: ForestPreferences) -> None:
+        """Persist ``prefs`` to disk and update the controller's
+        cached copy.  Doesn't change the currently-loaded forest —
+        the new settings apply at the next launch."""
+        save_preferences(prefs, self._branding)
+        self._preferences = ForestPreferences(
+            fallback_to_default=prefs.fallback_to_default,
+            default_forest_path=prefs.default_forest_path,
+        )
 
     def set_autosave_enabled(self, enabled: bool) -> None:
         """Toggle auto-save at runtime.  Disabling stops the

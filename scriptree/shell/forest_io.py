@@ -420,3 +420,107 @@ def list_autoload_forest(branding: dict) -> ForestDef | None:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         _log(f"list_autoload_forest: {p}: {exc!r}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Per-user preferences (V3 v0.3.21+)
+# ---------------------------------------------------------------------------
+#
+# ``forest_preferences.json`` lives in the same per-user state
+# directory as ``last_forest.scriptreeforest``.  It controls how the
+# forest behaves at launch when the user doesn't pass an explicit
+# ``.scriptreeforest`` path:
+#
+#   * ``fallback_to_default`` — when True (factory default), the
+#     launcher loads the default forest file (creating it empty if
+#     missing).  When False, the launcher starts with a transient
+#     in-memory forest; nothing is auto-saved until the user
+#     explicitly Save-As's.
+#
+#   * ``default_forest_path`` — absolute path to the file the
+#     fallback path uses.  Empty string means "use
+#     ``default_autoload_path``" (i.e. the canonical
+#     ``last_forest.scriptreeforest`` location).  Lets the user
+#     point the default at a checked-in workspace file, a USB-stick
+#     file, etc.
+#
+# Preferences are a SEPARATE concern from a given forest file —
+# editing the default-path here doesn't move any data, it just tells
+# the launcher where to look next time.
+
+_PREFS_FORMAT = "scriptreeforest_prefs"
+_PREFS_VERSION = 1
+
+
+@dataclass
+class ForestPreferences:
+    """User preferences for forest-launch behaviour."""
+
+    fallback_to_default: bool = True
+    """When True (factory default), the launcher loads the default
+    forest file when nothing is specified on the command line.
+    When False, the launcher starts with an in-memory transient
+    forest — autosave does nothing until the user Save-As's."""
+
+    default_forest_path: str = ""
+    """Absolute path to the default forest file.  Empty = use
+    ``default_autoload_path`` (the canonical
+    ``last_forest.scriptreeforest`` location).  Stored as the
+    user-typed string verbatim; the controller resolves at load
+    time."""
+
+    def resolved_default_path(self, branding: dict) -> Path:
+        """Return the actual file path the launcher should fall
+        back to.  Folds the "empty means canonical" rule so callers
+        don't have to repeat it."""
+        if self.default_forest_path.strip():
+            return Path(self.default_forest_path).expanduser()
+        return default_autoload_path(branding)
+
+
+def default_preferences_path(branding: dict) -> Path:
+    """Where ``forest_preferences.json`` lives — same per-user
+    state directory as ``last_forest.scriptreeforest``."""
+    return default_autoload_path(branding).parent / "forest_preferences.json"
+
+
+def load_preferences(branding: dict) -> ForestPreferences:
+    """Read the user's forest preferences.
+
+    Missing / unreadable files return the factory defaults
+    (fallback=True, path=empty) — matching the v0.3.20 behaviour
+    so first-run users get the same experience they had before
+    the preference existed.
+    """
+    p = default_preferences_path(branding)
+    if not p.is_file():
+        return ForestPreferences()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        _log(f"load_preferences: {p}: {exc!r}; using defaults")
+        return ForestPreferences()
+    fmt = raw.get("format")
+    if fmt != _PREFS_FORMAT:
+        _log(f"load_preferences: unexpected format {fmt!r}; using defaults")
+        return ForestPreferences()
+    return ForestPreferences(
+        fallback_to_default=bool(raw.get("fallback_to_default", True)),
+        default_forest_path=str(raw.get("default_forest_path", "") or ""),
+    )
+
+
+def save_preferences(prefs: ForestPreferences, branding: dict) -> None:
+    """Persist ``prefs`` to disk.  Creates the parent directory if
+    needed.  Idempotent — same content writes byte-identical
+    output."""
+    p = default_preferences_path(branding)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    blob = {
+        "format": _PREFS_FORMAT,
+        "version": _PREFS_VERSION,
+        "fallback_to_default": bool(prefs.fallback_to_default),
+        "default_forest_path": str(prefs.default_forest_path or ""),
+    }
+    p.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+    _log(f"save_preferences: wrote {p}")
