@@ -45,7 +45,7 @@ travels with the source); absolute paths are stored verbatim.
   ],
   "auto_discover": {
     "enabled": true,
-    "roots": ["ScripTreeApps"],
+    "roots": ["ScripTreeApps", "../ScripTreeApps"],
     "include": ["ring", "tree", "tool"],
     "update_mode": "prompt"
   }
@@ -78,7 +78,7 @@ travels with the source); absolute paths are stored verbatim.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch — when `false`, neither launch-time nor manual Refresh runs the walker. |
-| `roots` | list of strings | `["ScripTreeApps"]` | Folders to scan, relative to the project root or absolute. |
+| `roots` | list of strings | `["ScripTreeApps", "../ScripTreeApps"]` | Folders to scan, relative to the project root or absolute.  The sibling-of-install entry (``../ScripTreeApps``) lets a deployment keep ScripTreeApps outside the ScripTree folder — checked into a separate repo, mounted via symlink, or on a shared drive.  Missing folders are silently skipped at discovery time. |
 | `include` | list | `["ring", "tree", "tool"]` | Which kinds the walker is allowed to add.  Filtering does NOT silently demote: a folder containing a `.scriptreering` is treated as a ring-folder and skipped entirely if `"ring"` isn't in `include` (rather than falling through to its `.scriptree` siblings). |
 | `update_mode` | `"off"` \| `"auto"` \| `"prompt"` | `"prompt"` | How discovery applies its diff.  `"off"` = never run; `"auto"` = apply silently; `"prompt"` = checkbox dialog. |
 

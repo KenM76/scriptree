@@ -133,10 +133,34 @@ class AutoDiscoverConfig:
     discovery walker.  The user's hand-curated forest stays
     untouched."""
 
-    roots: list[str] = field(default_factory=lambda: ["ScripTreeApps"])
+    roots: list[str] = field(
+        default_factory=lambda: ["ScripTreeApps", "../ScripTreeApps"]
+    )
     """Folders to scan, relative to the project root (or absolute).
-    Default: just ``ScripTreeApps``.  The forest settings dialog
-    lets the user add / remove entries."""
+
+    Default: two paths, both resolved at discovery time against the
+    project root (the directory containing
+    ``branding/branding.config.json``):
+
+      1. ``ScripTreeApps``      — apps living inside the ScripTree
+                                  install (the in-source layout).
+      2. ``../ScripTreeApps``   — apps sibling to the ScripTree
+                                  folder (lets a deployment keep
+                                  ScripTreeApps outside the
+                                  install — e.g. checked into a
+                                  separate repo, mounted via a
+                                  symlink, or kept on a shared
+                                  team drive).
+
+    Folders that don't exist are skipped silently by ``discover``
+    — both defaults can be present without producing errors if
+    only one (or neither) of the two layouts is realised on a
+    given machine.
+
+    The forest settings dialog lets the user add / remove entries.
+    Relative paths re-resolve against the project root every time
+    discovery runs, so moving the ScripTree install picks up the
+    new sibling automatically."""
 
     include: list[ItemKind] = field(
         default_factory=lambda: ["ring", "tree", "tool"]

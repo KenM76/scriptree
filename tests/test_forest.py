@@ -95,7 +95,11 @@ class TestForestIoRoundTrip:
         assert loaded.items == []
         assert loaded.excluded == []
         assert loaded.auto_discover.enabled is True
-        assert loaded.auto_discover.roots == ["ScripTreeApps"]
+        # v0.3.22: default roots are both "ScripTreeApps" (in-source)
+        # and "../ScripTreeApps" (sibling-of-install layout).
+        assert loaded.auto_discover.roots == [
+            "ScripTreeApps", "../ScripTreeApps",
+        ]
         assert loaded.auto_discover.update_mode == "prompt"
 
     def test_items_with_position_round_trip(self, tmp_path: Path) -> None:
@@ -252,6 +256,59 @@ class TestDiscover:
         # But the tool sibling does NOT — that's the priority
         # rule's "stop descending" behaviour.
         assert "a.scriptree" not in names
+
+    def test_default_roots_include_sibling_layout(self) -> None:
+        """v0.3.22: the factory-default ``roots`` lists both
+        ``ScripTreeApps`` and ``../ScripTreeApps`` so a deployment
+        with ScripTreeApps outside the ScripTree folder is
+        discovered automatically."""
+        from scriptree.shell.forest_io import AutoDiscoverConfig
+        cfg = AutoDiscoverConfig()
+        assert "ScripTreeApps" in cfg.roots
+        assert "../ScripTreeApps" in cfg.roots
+
+    def test_relative_root_resolves_against_project_root(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """Relative roots like ``../ScripTreeApps`` resolve at
+        discovery time against the project root.  Files only there
+        (not under ``ScripTreeApps``) still get walked."""
+        # Pretend the project root is tmp_path/proj/ScripTree.
+        # Place a tool at tmp_path/proj/ScripTreeApps/Demo/x.scriptree
+        # — the sibling layout the v0.3.22 default targets.
+        install = tmp_path / "proj" / "ScripTree"
+        install.mkdir(parents=True)
+        sibling = tmp_path / "proj" / "ScripTreeApps" / "Demo"
+        sibling.mkdir(parents=True)
+        (sibling / "x.scriptree").write_text("{}", encoding="utf-8")
+
+        from scriptree.shell import forest_io as io_mod
+        monkeypatch.setattr(
+            io_mod, "_project_root",
+            lambda: install,
+        )
+
+        items = discover(["../ScripTreeApps"])
+        names = [Path(i.path).name for i in items]
+        assert "x.scriptree" in names
+
+    def test_missing_default_root_is_silently_skipped(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """Both default roots being listed doesn't error when only
+        one (or neither) exists on disk — discover just skips the
+        missing ones."""
+        install = tmp_path / "proj" / "ScripTree"
+        install.mkdir(parents=True)
+        # No ScripTreeApps anywhere — but defaults list two.
+        from scriptree.shell import forest_io as io_mod
+        monkeypatch.setattr(
+            io_mod, "_project_root",
+            lambda: install,
+        )
+        # Should not raise; should return zero items.
+        items = discover(["ScripTreeApps", "../ScripTreeApps"])
+        assert items == []
 
     def test_excluded_individual_tool_still_emitted(
         self, tmp_path: Path,
