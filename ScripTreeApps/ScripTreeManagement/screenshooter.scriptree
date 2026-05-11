@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "name": "Screenshot a tool / tree / cell",
+  "description": "Render a ScripTree widget to a PNG file without opening it on the user's desktop. Uses Qt's widget.grab() against an unshown widget — no flash, no focus theft. Useful for documentation screenshots, visual-regression baselines, catalog thumbnails, or quick sanity checks after a branding tweak.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "screenshooter.py",
+    "{kind}",
+    "{input}",
+    ["--out", "{out}"],
+    "{batch?--batch}",
+    ["--cell-size", "{cell_size}"],
+    ["--width", "{width}"],
+    ["--height", "{height}"]
+  ],
+  "params": [
+    {
+      "id": "kind",
+      "label": "What to render",
+      "description": "cell = the hexagonal cell widget bound to the catalog. form = the parameter form view of a .scriptree (what the standalone runner shows). tree = the popup-menu view of a .scriptreetree. Leave on auto with --batch to pick per file: .scriptree -> form, .scriptreetree -> tree.",
+      "type": "enum",
+      "widget": "dropdown",
+      "required": false,
+      "default": "form",
+      "choices": ["cell", "form", "tree"],
+      "choice_labels": [
+        "cell  — hexagonal cell visual",
+        "form  — parameter form view",
+        "tree  — tree-popup view"
+      ]
+    },
+    {
+      "id": "input",
+      "label": "Input catalog (or folder for batch)",
+      "description": "A .scriptree / .scriptreetree file in single mode, or a folder containing those when --batch is on (every catalog inside gets rendered).",
+      "type": "path",
+      "widget": "file_open",
+      "required": true,
+      "default": "",
+      "file_filter": "ScripTree catalogs (*.scriptree *.scriptreetree);;All files (*)"
+    },
+    {
+      "id": "out",
+      "label": "Output PNG (or output folder for batch)",
+      "description": "Where to write the result. Single mode: a .png path. Batch mode: a folder (one PNG per source catalog, named <stem>_<kind>.png). Leave blank to default to ./<input>.png (single) or ./screenshots/ (batch).",
+      "type": "path",
+      "widget": "file_save",
+      "required": false,
+      "default": "",
+      "file_filter": "PNG image (*.png);;All files (*)"
+    },
+    {
+      "id": "batch",
+      "label": "Batch mode (walk input folder, render every catalog)",
+      "description": "Recurse through the input folder; render every .scriptree / .scriptreetree found.  Useful for re-generating a whole help-docs screenshot set in one shot.",
+      "type": "bool",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "cell_size",
+      "label": "Cell size (px)",
+      "description": "Pixel size of the hexagonal cell when kind=cell.  Ignored for form/tree.  128 looks clean for documentation thumbnails.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 128
+    },
+    {
+      "id": "width",
+      "label": "Form / tree width (px)",
+      "description": "Width of the captured form or tree widget.  Ignored for cell.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 520
+    },
+    {
+      "id": "height",
+      "label": "Form / tree height (px)",
+      "description": "Height of the captured form or tree widget.  Ignored for cell.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 640
+    }
+  ],
+  "sections": [
+    {"id": "target", "label": "What to capture", "default_collapsed": false},
+    {"id": "output", "label": "Output", "default_collapsed": false},
+    {"id": "geometry", "label": "Geometry", "default_collapsed": true}
+  ],
+  "cell": {
+    "text_label": "📸"
+  }
+}

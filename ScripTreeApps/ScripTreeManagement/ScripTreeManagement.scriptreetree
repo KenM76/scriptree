@@ -29,6 +29,16 @@
           "path": "./make_shortcut.scriptree"
         }
       ]
+    },
+    {
+      "type": "folder",
+      "name": "Documentation",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./screenshooter.scriptree"
+        }
+      ]
     }
   ]
 }
