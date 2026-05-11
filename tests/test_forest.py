@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -392,15 +393,15 @@ class TestForestController:
     def _make(self):
         """Fresh, started controller with an empty forest.
 
-        v0.3.15+ — the controller's ``add_item`` path now docks new
-        cells as members of the forest's group via the master
-        infrastructure, so it requires the forest cell to already
-        exist.  We call ``start()`` here with an explicit empty
-        ``ForestDef`` (avoids polluting / being polluted by the
-        per-user autoload file)."""
+        v0.3.20+ — autosave is disabled here so tests don't write
+        to the developer's real ``last_forest.scriptreeforest``
+        when the controller's ``forestChanged`` signal fires
+        during normal test setup.
+        """
         from scriptree.shell.forest_controller import ForestController
         _fresh_registry()
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
         ctrl.start(forest=ForestDef(), suppress_first_run=True)
         return ctrl
 
@@ -595,6 +596,122 @@ class TestForestController:
 # forest_dialogs — construct headless and apply
 # ===========================================================================
 
+class TestAutosaveAndDefaultFile:
+    """v0.3.20: starting the forest with no autoload file present
+    creates a default ``.scriptreeforest`` at the canonical autoload
+    path, and ``forestChanged`` signals auto-save through a 250ms
+    debounce timer so changes hit disk without the user clicking
+    Save."""
+
+    def test_start_creates_default_file_when_no_autoload(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """No autoload file → controller saves a fresh one at the
+        autoload path on start."""
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        # Redirect the autoload path to tmp so the test doesn't
+        # touch the dev's real APPDATA.
+        target = tmp_path / "last_forest.scriptreeforest"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: target,
+        )
+        # Also patch ``list_autoload_forest`` to return None so the
+        # "no autoload" branch fires regardless of what's actually
+        # in APPDATA.
+        monkeypatch.setattr(
+            fc_mod, "list_autoload_forest",
+            lambda branding: None,
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)  # don't write again after
+        ctrl.start(suppress_first_run=True)
+
+        assert target.is_file(), (
+            "expected default forest file to be created on start"
+        )
+        assert ctrl.forest.loaded_from == str(target.resolve())
+
+    def test_autosave_fires_on_change(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """A ``forestChanged`` signal triggers the autosave
+        debounce timer, which writes to disk after ~250 ms."""
+        from PySide6.QtCore import QEventLoop, QTimer
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        target = tmp_path / "f.scriptreeforest"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: target,
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        # Set loaded_from explicitly so save() targets our tmp file
+        # rather than the dev's APPDATA.
+        forest = ForestDef()
+        forest.loaded_from = str(target)
+        ctrl.start(forest=forest, suppress_first_run=True)
+
+        assert ctrl._autosave_enabled is True
+
+        # Trigger a change.
+        ctrl.forest.name = "AutoSaved"
+        ctrl.forestChanged.emit()
+        assert ctrl._dirty is True
+
+        # Pump the event loop for >250 ms so the debounce timer fires.
+        loop = QEventLoop()
+        QTimer.singleShot(400, loop.quit)
+        loop.exec()
+
+        # Save should have happened.
+        assert target.is_file()
+        from scriptree.shell.forest_io import load_forest
+        loaded = load_forest(target)
+        assert loaded.name == "AutoSaved"
+
+    def test_autosave_disabled_does_not_write(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """``set_autosave_enabled(False)`` stops the debounce timer
+        from writing — the dirty flag is still set, but disk stays
+        untouched until the user explicitly saves."""
+        from PySide6.QtCore import QEventLoop, QTimer
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        target = tmp_path / "f.scriptreeforest"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda branding: target,
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        forest = ForestDef()
+        forest.loaded_from = str(target)
+        ctrl.start(forest=forest, suppress_first_run=True)
+
+        ctrl.forest.name = "Manual"
+        ctrl.forestChanged.emit()
+        loop = QEventLoop()
+        QTimer.singleShot(400, loop.quit)
+        loop.exec()
+
+        # Disk file does NOT exist (autosave was off).
+        assert not target.is_file()
+        # But the dirty flag was still set, so a manual save works.
+        assert ctrl._dirty is True
+
+
 class TestDialogs:
 
     def _make_ctrl(self):
@@ -604,10 +721,13 @@ class TestDialogs:
         controller does NOT load the user's real per-machine
         ``last_forest.scriptreeforest`` — that would let test state
         leak between runs (and between developers running the suite).
+        Autosave is disabled (v0.3.20+) so ``forestChanged`` signals
+        in dialog tests don't write to the dev's APPDATA either.
         """
         from scriptree.shell.forest_controller import ForestController
         _fresh_registry()
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
         ctrl.start(forest=ForestDef(), suppress_first_run=True)
         return ctrl
 

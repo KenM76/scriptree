@@ -257,6 +257,7 @@ class TestForestAutoAttach_NoReshift:
 
         _fresh()
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
         ctrl.start(forest=ForestDef(), suppress_first_run=True)
         # Add the first tool — that's the existing forest member
         # whose position must not shift when more arrive.

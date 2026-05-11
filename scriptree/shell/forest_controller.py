@@ -115,7 +115,24 @@ class ForestController(QObject):
         # ``remove_item`` can find what to close.
         self._spawned: dict[str, Any] = {}
         self._dirty: bool = False
+        # V3 v0.3.20+ — auto-save default ON.
+        #
+        # ``forestChanged`` fires when something user-visible
+        # changes (item added/removed, settings edited, forest
+        # cell moved).  We wire it to a debounced QTimer that
+        # runs ``save()`` 250 ms after the last change so:
+        #   * Bursts of changes (e.g. discovery applying 10 items
+        #     in one batch) coalesce into a single disk write.
+        #   * A solo change (one drag, one menu toggle) hits disk
+        #     before the user can close the app.
+        from PySide6.QtCore import QTimer
+        self._autosave_enabled: bool = True
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(250)
+        self._autosave_timer.timeout.connect(self._autosave_flush)
         self.forestChanged.connect(self._mark_dirty)
+        self.forestChanged.connect(self._schedule_autosave)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -136,7 +153,32 @@ class ForestController(QObject):
         if forest is None:
             forest = list_autoload_forest(self._branding)
         if forest is None:
+            # V3 v0.3.20+ — no autoload file found.  Create a fresh
+            # one at the canonical autoload path so every subsequent
+            # change auto-saves to disk.  The starting state is an
+            # empty ForestDef — the first-run welcome dialog (queued
+            # below) lets the user populate it.
             forest = ForestDef()
+            try:
+                target = default_autoload_path(self._branding)
+                save_forest(forest, target)
+                # ``save_forest`` sets ``loaded_from``; verify the
+                # round-trip and surface a clean log line so the
+                # user can locate their forest on disk if they want.
+                _log(
+                    f"start: no forest found — created default at "
+                    f"{forest.loaded_from}"
+                )
+            except OSError as exc:
+                # File system not writable (RO mount? sandbox?) —
+                # fall through with ``loaded_from = None`` so the
+                # forest still works in memory.  Auto-save will
+                # keep failing silently; that's correct, the user
+                # has a bigger problem we can't fix here.
+                _log(
+                    f"start: could not create default forest file: "
+                    f"{exc!r}; running in-memory only"
+                )
         self.forest = forest
 
         # Build the forest cell.  CellWindow construction needs to
@@ -498,12 +540,45 @@ class ForestController(QObject):
     def _mark_dirty(self) -> None:
         self._dirty = True
 
+    def _schedule_autosave(self) -> None:
+        """Restart the autosave debounce timer.  Fires
+        ``_autosave_flush`` ~250 ms after the last change."""
+        if not self._autosave_enabled:
+            return
+        # Restart on each change so bursts coalesce.
+        self._autosave_timer.start()
+
+    def _autosave_flush(self) -> None:
+        """Debounce target.  Writes the forest to disk if dirty,
+        swallowing any errors so a transient I/O failure doesn't
+        crash the GUI."""
+        if not self._dirty:
+            return
+        if not self._autosave_enabled:
+            return
+        try:
+            self.save()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"autosave: save failed: {exc!r}")
+
     def flush_if_dirty(self) -> None:
+        """Synchronous flush — used at process exit to make sure
+        no pending change is lost when the debounce timer never
+        gets to fire."""
         if self._dirty:
             try:
                 self.save()
             except Exception as exc:  # noqa: BLE001
                 _log(f"flush_if_dirty: save failed: {exc!r}")
+
+    def set_autosave_enabled(self, enabled: bool) -> None:
+        """Toggle auto-save at runtime.  Disabling stops the
+        debounce timer but doesn't clear the dirty flag — a future
+        manual ``save()`` or re-enable still picks up pending
+        changes."""
+        self._autosave_enabled = bool(enabled)
+        if not self._autosave_enabled:
+            self._autosave_timer.stop()
 
     # ------------------------------------------------------------------
     # Menu action handlers (wired via _populate_forest_menu)

@@ -441,7 +441,11 @@ The **Auto-add from ScripTreeApps now** menu entry runs the prompt dialog **rega
 
 ### Saving
 
-Forests can be saved to `.scriptreeforest` files via right-click → **Save forest as…**. Open multiple forests with **Open forest…** to swap between named workspaces (e.g. `engineering.scriptreeforest`, `dxf-only.scriptreeforest`). The active forest is also auto-saved to `<APPDATA>/ScripTree/last_forest.scriptreeforest` on every meaningful change so a process restart restores your session.
+Forests can be saved to `.scriptreeforest` files via right-click → **Save forest as…**. Open multiple forests with **Open forest…** to swap between named workspaces (e.g. `engineering.scriptreeforest`, `dxf-only.scriptreeforest`).
+
+**A default file is always present.** When the forest starts and no `.scriptreeforest` exists at `<APPDATA>/ScripTree/last_forest.scriptreeforest`, the launcher **creates one** there immediately. Every subsequent change auto-saves to that file (debounced ~250 ms after the last edit), so a process restart always restores your session. You don't have to remember to save — the forest is always up to date on disk.
+
+Auto-save is on by default; the controller exposes `set_autosave_enabled(False)` for callers (tests, headless tools) that need disk-quiet mode. Manual **Save** still works at any time and is the right thing to use when saving to a named `.scriptreeforest` other than the autoload path.
 
 ### Why "forest"?
 
