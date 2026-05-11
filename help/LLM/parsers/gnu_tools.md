@@ -163,3 +163,19 @@ Confirm:
 If the import produces `source.mode == "heuristic"`, your help text
 didn't match any structured detector. Check the section headers and
 the indentation — these are the most common causes.
+
+## Ship a standalone-mode configuration
+
+After the `.scriptree` is generated, also write a sidecar
+`<tool>.scriptree.configs.json` with a `"standalone"` configuration
+marked as `default_name`.  That configuration's `ui_visibility`
+block should turn OFF the developer-facing widgets — `extras_box`,
+`command_line`, `copy_argv`, `env_button`, `tools_sidebar` — and
+turn ON `popup_on_error` and `popup_on_success` so the end user
+gets clear close-the-loop feedback.  Only deviate from that recipe
+when a specific control is genuinely useful for the tool's
+purpose (e.g. a diagnostic tool that needs `command_line` visible).
+
+See `help/LLM/configurations_sidecar.md` → "Standalone-mode recipe"
+for the full JSON shape, the per-element rationale, and the
+exceptions.

@@ -126,6 +126,12 @@ the declared sections.
   JSON format (`<name>.scriptree.configs.json`), including env/PATH
   override fields, UI visibility, hidden parameters, credential prompt,
   tree-level configurations, and the reserved `safetree` config.
+  **Ship a "standalone" configuration with every end-user-facing
+  tool** — see the "Standalone-mode recipe" section.  Default UI
+  visibility shows the command-line preview, copy-argv, env, extras
+  box, and tools sidebar; for an end user launching via
+  ScripTreeRing those should all be off, with `popup_on_error`
+  and `popup_on_success` on for clear close-the-loop feedback.
 - [`argument_template.md`](argument_template.md) — the substitution
   grammar that powers `build_full_argv`, with a reference implementation
   sketch and all the edge cases the tests pin down.

@@ -166,14 +166,65 @@ def _render_cell(catalog_path: Path, out: Path, size_px: int) -> None:
 # Kind: form — the ToolRunnerView for a .scriptree
 # ---------------------------------------------------------------------------
 
-def _render_form(catalog_path: Path, out: Path, width: int, height: int) -> None:
-    """Render the parameter form view of a single tool."""
+def _render_form(
+    catalog_path: Path,
+    out: Path,
+    width: int,
+    height: int,
+    *,
+    config: str | None = None,
+    standalone: bool = False,
+) -> None:
+    """Render the parameter form view of a single tool.
+
+    Optional flags:
+      * ``config`` — name of a sidecar configuration to activate
+        before capture.  ``None`` uses the sidecar's default
+        (matching what standalone mode picks at boot).  Unknown
+        names fall through to the default with a stderr warning.
+      * ``standalone`` — when True, render with ``_standalone_mode
+        = True`` and apply the active config's ``UIVisibility``
+        (hides command line, extra args, copy-argv, env button,
+        etc. per the config's flags).  When False (default), every
+        control is visible — matching the docked-in-MainWindow
+        view.
+    """
     _ensure_app()
     from scriptree.core.io import load_tool
     from scriptree.ui.tool_runner import ToolRunnerView
 
     tool = load_tool(catalog_path)
-    view = ToolRunnerView(tool)
+    view = ToolRunnerView(tool, file_path=str(catalog_path))
+
+    if standalone:
+        view._standalone_mode = True
+
+    if config:
+        try:
+            view.apply_named_configuration(config)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"apply_named_configuration({config!r}) failed: {exc!r}; "
+                f"falling back to default"
+            )
+            # Fall back to the sidecar's default if the name was bad.
+            try:
+                cfg = view._cfg_set.default_config()
+                view._apply_configuration(cfg)
+            except Exception:  # noqa: BLE001
+                pass
+    elif standalone:
+        # Mirror what StandaloneWindow.from_tool does when no
+        # explicit config name is given — pick the sidecar's
+        # default and apply.
+        try:
+            cfg = view._cfg_set.default_config()
+            if view._cfg_set.active != cfg.name:
+                view._cfg_set.active = cfg.name
+            view._apply_configuration(cfg)
+        except Exception:  # noqa: BLE001
+            pass
+
     if width > 0 and height > 0:
         view.resize(width, height)
     _capture(view, out)
@@ -215,6 +266,8 @@ def _batch(
     size_px: int,
     width: int,
     height: int,
+    config: str | None = None,
+    standalone: bool = False,
 ) -> int:
     """Walk ``root`` and render one PNG per catalog file found."""
     written = 0
@@ -225,12 +278,22 @@ def _batch(
         if suffix not in _SUFFIX_TO_KIND:
             continue
         effective_kind = kind or _SUFFIX_TO_KIND[suffix]
-        out = out_dir / f"{p.stem}_{effective_kind}.png"
+        # Tag the output filename with the mode so a single batch
+        # run can produce docked+standalone variants side by side.
+        suffix_tag = ""
+        if standalone:
+            suffix_tag = "_standalone"
+        if config:
+            suffix_tag += f"_{config}"
+        out = out_dir / f"{p.stem}_{effective_kind}{suffix_tag}.png"
         try:
             if effective_kind == "cell":
                 _render_cell(p, out, size_px)
             elif effective_kind == "form":
-                _render_form(p, out, width, height)
+                _render_form(
+                    p, out, width, height,
+                    config=config, standalone=standalone,
+                )
             elif effective_kind == "tree":
                 if suffix != ".scriptreetree":
                     _log(f"  skipping {p} — 'tree' needs .scriptreetree")
@@ -303,6 +366,28 @@ def main(argv: list[str] | None = None) -> int:
         "--height", type=int, default=640,
         help="Form / tree-mode height in px (default: 640).",
     )
+    parser.add_argument(
+        "--config", "-c", default=None,
+        help=(
+            "Name of a sidecar configuration to apply before "
+            "capture (form kind only).  Looks up "
+            "``<input>.configs.json`` and activates the named "
+            "config.  When omitted, uses the sidecar's "
+            "default-marked configuration (matching what "
+            "standalone mode picks at boot).  Unknown names fall "
+            "back to default with a warning."
+        ),
+    )
+    parser.add_argument(
+        "--standalone", action="store_true",
+        help=(
+            "Render in standalone mode — apply the active "
+            "configuration's UIVisibility flags so the captured "
+            "form matches what the user sees when launching the "
+            "tool from ScripTreeRing (hidden command line, no "
+            "Copy argv button, etc., per the config's settings)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     inp: Path = args.input.resolve()
@@ -324,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
             size_px=args.cell_size,
             width=args.width,
             height=args.height,
+            config=args.config,
+            standalone=args.standalone,
         )
         print(f"screenshooter: wrote {written} PNG(s) to {out_dir}")
         return 0 if written > 0 else 1
@@ -349,7 +436,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.kind == "cell":
             _render_cell(inp, out, args.cell_size)
         elif args.kind == "form":
-            _render_form(inp, out, args.width, args.height)
+            _render_form(
+                inp, out, args.width, args.height,
+                config=args.config, standalone=args.standalone,
+            )
         elif args.kind == "tree":
             if inp.suffix.lower() != ".scriptreetree":
                 print(

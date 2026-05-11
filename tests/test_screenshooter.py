@@ -143,6 +143,41 @@ class TestKindAutopick:
 # Failure modes — must produce clear errors, never crashes
 # ===========================================================================
 
+class TestConfigAndStandalone:
+    """v0.3.19: ``--config NAME`` activates a sidecar configuration
+    before capture; ``--standalone`` flips ``_standalone_mode`` so
+    the form's UIVisibility flags actually take effect."""
+
+    def test_standalone_flag_runs(self, tmp_path: Path) -> None:
+        out = tmp_path / "standalone.png"
+        result = _run(
+            "form", str(_real_tool_path()),
+            "--out", str(out),
+            "--standalone",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 1000
+
+    def test_unknown_config_falls_back_to_default(
+        self, tmp_path: Path,
+    ) -> None:
+        """An unknown config name must not crash — the screenshooter
+        warns to stderr and renders against the sidecar default."""
+        out = tmp_path / "unknown_cfg.png"
+        result = _run(
+            "form", str(_real_tool_path()),
+            "--out", str(out),
+            "--config", "definitely-not-a-real-config",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+
+
 class TestFailureModes:
 
     def test_missing_input_returns_nonzero(self, tmp_path: Path) -> None:
