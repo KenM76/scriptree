@@ -104,6 +104,46 @@ class ParamDef:
     # (a sentence, a quoted name, etc.) and you don't want it broken
     # apart at emit time.
     no_split: bool = False
+    # V0.4.0 — conditional widget visibility + conditional requirement.
+    #
+    # ``visible_when`` is a tiny expression evaluated against the
+    # form's current values; when it returns False the widget is
+    # hidden from the form AND its value is omitted from argv
+    # assembly (just like an empty required-False field).  When
+    # empty (the default), the param is always visible — preserving
+    # pre-v0.4.0 behaviour byte-identically.
+    #
+    # ``required_when`` follows the same expression syntax but
+    # triggers the existing required-field validation instead of
+    # toggling visibility.  When empty, the static ``required``
+    # field above governs.  ``required_when`` overrides ``required``
+    # when set — a field is required iff the expression evaluates
+    # truthy at the current moment.
+    #
+    # Grammar (handled by ``visible_when.evaluate`` —
+    # ``scriptree.core.visible_when``):
+    #
+    #   <expr>     := <atom> ( ('AND' | 'OR') <atom> )*
+    #   <atom>     := 'NOT' <atom> | '(' <expr> ')' | <comparison>
+    #   <comparison> := <ident> <op> <literal>
+    #                  | <ident> 'in' '(' <literal_list> ')'
+    #   <op>       := '==' | '!='
+    #   <literal>  := <quoted_string> | <bare_token>
+    #
+    # Examples::
+    #
+    #   "bom_source == 'drawing'"
+    #   "bom_type == '3'"
+    #   "bom_source in ('insert', 'auto')"
+    #   "bom_source == 'drawing' AND drawing_present == 'yes'"
+    #   "NOT (mode == 'silent')"
+    #
+    # Unparseable / unevaluable expressions log a one-line warning
+    # and FAIL OPEN — the widget is shown (and treated as not
+    # required-when) so a typo in the .scriptree doesn't make a
+    # field invisible and impossible to fix from the UI.
+    visible_when: str = ""
+    required_when: str = ""
 
     def label_for_choice(self, value: str) -> str:
         """Return the descriptive label for a choice value, or the value itself.

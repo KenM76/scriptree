@@ -124,6 +124,72 @@ disagree, the code wins — open an issue and fix the docs.
 }
 ```
 
+### Conditional visibility — `visible_when` / `required_when` (v0.4.0+)
+
+Optional string fields that let one param show / require itself
+based on another param's value.  Empty (the default) means
+"always visible" / "static `required` field governs".
+
+Use them to slim down multi-mode forms — fields that only matter
+in some modes disappear when irrelevant rather than crowding the
+form.
+
+Tiny declarative grammar (no embedded scripting):
+
+```
+<expr>     := <or_expr>
+<or_expr>  := <and_expr> ( 'OR' <and_expr> )*
+<and_expr> := <unary>    ( 'AND' <unary> )*
+<unary>    := 'NOT' <unary> | '(' <expr> ')' | <comparison>
+<comparison> := <ident> ('==' | '!=') <literal>
+              | <ident> 'in' '(' <literal_list> ')'
+```
+
+Examples:
+
+```json
+{
+  "id": "bom_feature_name",
+  "type": "string",
+  "widget": "text",
+  "visible_when": "bom_source == 'drawing'"
+}
+{
+  "id": "bom_template",
+  "type": "string",
+  "widget": "text",
+  "visible_when": "bom_source in ('insert', 'auto')"
+}
+{
+  "id": "drawing_bom_policy",
+  "type": "enum",
+  "widget": "dropdown",
+  "required_when": "bom_source == 'drawing'"
+}
+```
+
+Rules:
+
+- Comparisons are **string equality** on stringified values.
+  `bom_type == 3` works (a bare-token literal; both sides
+  compared as `"3"`).  For booleans use `"true"` / `"false"`.
+- Identifiers are case-sensitive (match `ParamDef.id`); keywords
+  (`AND` / `OR` / `NOT` / `in`) are case-insensitive.
+- Unknown identifiers evaluate to the empty string — so
+  `foo == 'bar'` is `False` when there's no `foo` param.
+- **Parse errors fail OPEN** — a typo logs to stderr and returns
+  `True` so a broken expression can't make a field permanently
+  invisible.
+
+A field hidden by `visible_when`:
+- Doesn't render in the runner form.
+- Skips the required check (the user couldn't fill it in).
+- Its value is dropped from argv assembly (the `{id?--flag}`
+  conditional emission sees an empty value naturally).
+- **Keeps its in-memory value** across hide/show cycles —
+  toggling `bom_source` between modes repeatedly doesn't clear
+  what the user typed.
+
 ### Type × widget compatibility
 
 | type          | allowed widgets                       |

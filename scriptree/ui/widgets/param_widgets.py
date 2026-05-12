@@ -677,8 +677,83 @@ class FolderWidget(_PathPickerBase):
 
 # --- factory ---------------------------------------------------------------
 
+def _build_tooltip(param: ParamDef) -> str:
+    """Format a rich-text tooltip from a ParamDef.
+
+    v0.4.0 (ScripTree4) — universally apply ``param.description`` as
+    a hover tooltip on every widget so users get useful inline help
+    for every field.  Previously only the placeholder text used
+    description (truncated to 80 chars) and Browse buttons had
+    static tooltips; the actual input control had no tooltip at all,
+    which made densely-populated forms hostile to first-time users.
+
+    Format: bold label on the first line, description below.  Qt
+    auto-wraps rich text tooltips that contain HTML, so long
+    descriptions render readably without manual line-breaking.
+    Returns an empty string when no useful content is available so
+    Qt skips the tooltip entirely rather than showing a blank box.
+    """
+    label = (param.label or "").strip()
+    desc = (param.description or "").strip()
+    if not label and not desc:
+        return ""
+    # Escape HTML-special chars in the user-provided text so a stray
+    # ``<`` doesn't turn into a malformed tag inside the tooltip.
+    import html
+    parts: list[str] = []
+    if label:
+        parts.append(f"<b>{html.escape(label)}</b>")
+    if desc:
+        parts.append(html.escape(desc).replace("\n", "<br/>"))
+    # Wrap in a fixed-width div so Qt's tooltip doesn't expand into a
+    # screen-wide block on long descriptions.
+    return (
+        '<div style="max-width: 380px;">'
+        + "<br/>".join(parts)
+        + "</div>"
+    )
+
+
+def _apply_tooltip_recursively(widget: QWidget, text: str) -> None:
+    """Set ``text`` as the tooltip on ``widget`` AND on every
+    interactive child (line edits, spin boxes, combos, etc.) so the
+    user gets the same help no matter which sub-control they hover.
+
+    Some of our composite widgets (CheckboxWidget, _PathPickerBase)
+    place their interactive child inside a layout; hovering the
+    outer QWidget alone doesn't reliably trigger the tooltip on
+    child controls because the child intercepts the hover events.
+    Setting the tooltip on the descendants directly avoids the
+    dead-zone problem.
+    """
+    if not text:
+        return
+    widget.setToolTip(text)
+    # Walk descendants and propagate the same tooltip.  Skip pure
+    # decorative widgets (QLabel acting as a description) so their
+    # built-in word-wrap behaviour isn't shadowed by a tooltip
+    # repeating the same text.
+    for child in widget.findChildren(QWidget):
+        if isinstance(child, QLabel):
+            continue
+        # Don't clobber a child that already set its own more-
+        # specific tooltip (Browse/Open buttons have custom text).
+        if child.toolTip():
+            continue
+        child.setToolTip(text)
+
+
 def build_widget_for(param: ParamDef) -> ParamWidget:
-    """Map a ParamDef to its concrete widget class."""
+    """Map a ParamDef to its concrete widget class and apply a
+    universal hover tooltip drawn from ``param.description``.
+
+    v0.4.0+ — every interactive control built by the factory now
+    carries the description as a tooltip so users hovering ANY
+    widget see the help text rather than having to guess from the
+    label alone.  Subclasses that pre-set a more-specific tooltip
+    on a sub-widget (e.g. the Browse button's "Pick a file..."
+    blurb) are preserved — ``_apply_tooltip_recursively`` only
+    fills in empty tooltips."""
     mapping: dict[WidgetKind, type[ParamWidget]] = {
         WidgetKind.TEXT: TextWidget,
         WidgetKind.TEXTAREA: TextAreaWidget,
@@ -691,4 +766,7 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.FOLDER: FolderWidget,
     }
     cls = mapping.get(param.widget, TextWidget)
-    return cls(param)
+    widget = cls(param)
+    tooltip = _build_tooltip(param)
+    _apply_tooltip_recursively(widget, tooltip)
+    return widget

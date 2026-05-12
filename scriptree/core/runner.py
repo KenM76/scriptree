@@ -162,9 +162,28 @@ def resolve(
     errors: list[str] = []
 
     # Required-value check (skipped for preview).
+    #
+    # v0.4.0 — honour ``visible_when`` and ``required_when``:
+    #   * A field hidden by ``visible_when`` is exempt from the
+    #     required check (and from required_when too) — its row
+    #     doesn't exist in the form, so requiring it would be a
+    #     bug-magnet.
+    #   * A field's effective requirement is
+    #     ``required_when`` (when set) OR static ``required``.
     if not ignore_required:
+        from scriptree.core.visible_when import evaluate as _vw_eval
         for p in tool.params:
-            if p.required and _is_empty(values.get(p.id)):
+            vw = getattr(p, "visible_when", "") or ""
+            if vw and not _vw_eval(vw, values):
+                continue  # hidden — skip the required check
+            rw = getattr(p, "required_when", "") or ""
+            if rw:
+                if not _vw_eval(rw, values):
+                    continue  # not required in this mode
+                effective_required = True
+            else:
+                effective_required = p.required
+            if effective_required and _is_empty(values.get(p.id)):
                 errors.append(f"Required parameter {p.label!r} is empty.")
         if errors:
             raise RunnerError("\n".join(errors))

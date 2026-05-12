@@ -351,18 +351,116 @@ class ToolEditorView(QWidget):
             self._on_prop_section_changed
         )
 
-        self._prop_layout.addRow("ID:", self._prop_id)
-        self._prop_layout.addRow("Label:", self._prop_label)
-        self._prop_layout.addRow("Description:", self._prop_desc)
-        self._prop_layout.addRow("Type:", self._prop_type)
-        self._prop_layout.addRow("Widget:", self._prop_widget)
-        self._prop_layout.addRow("Required:", self._prop_required)
-        self._prop_layout.addRow("Do not save value:", self._prop_no_persist)
-        self._prop_layout.addRow("Do not auto-split:", self._prop_no_split)
-        self._prop_layout.addRow("Default:", self._prop_default)
-        self._prop_layout.addRow("Choices:", self._prop_choices)
-        self._prop_layout.addRow("File filter:", self._prop_filter)
-        self._prop_layout.addRow("Section:", self._prop_section)
+        # v0.4.0 — every property row gets a hover tooltip on BOTH
+        # the label and the input.  Previously the only tooltips on
+        # the property panel were the ones manually wired above
+        # (no_persist, no_split, choices, section); the rest of the
+        # fields had no inline help at all, which made the editor
+        # hostile to first-time tool authors.
+        #
+        # ``_add_prop_row`` is a tiny wrapper that calls
+        # ``QFormLayout.addRow(label_widget, input)`` AFTER setting
+        # the same tooltip on both so the user gets help whether
+        # they hover the field name or the field itself.
+        self._add_prop_row(
+            "ID:", self._prop_id,
+            "Internal identifier for this parameter.  Used inside "
+            "the argument template (e.g. <code>{my_id}</code>) and "
+            "in saved configurations.  Must be a valid Python "
+            "identifier — letters, digits, underscores; can't "
+            "start with a digit.  Renaming an ID rewrites every "
+            "reference in the argument template.",
+        )
+        self._add_prop_row(
+            "Label:", self._prop_label,
+            "Human-readable name shown next to the field in the "
+            "form.  Keep it short — under 30 characters typically "
+            "fits the available space without truncation.",
+        )
+        self._add_prop_row(
+            "Description:", self._prop_desc,
+            "Longer help text that appears as a placeholder inside "
+            "the field AND as a hover tooltip in the runner form. "
+            "First few words show as placeholder; full text shows on "
+            "hover.  This is the user's primary in-app help — write "
+            "it as if the reader has never seen the tool before.",
+        )
+        self._add_prop_row(
+            "Type:", self._prop_type,
+            "Data type the field collects.  Limits which widgets "
+            "are available (e.g. <code>bool</code> requires "
+            "<code>checkbox</code>; <code>path</code> requires one "
+            "of the file/folder pickers).  Type drives validation, "
+            "default coercion, and how the value is rendered into "
+            "the argument template.",
+        )
+        self._add_prop_row(
+            "Widget:", self._prop_widget,
+            "Visual control used to collect the value.  Filtered by "
+            "the chosen Type — only compatible widgets appear in "
+            "the dropdown.",
+        )
+        self._add_prop_row(
+            "Required:", self._prop_required,
+            "When checked, the user can't click Run until this "
+            "field has a non-empty value.  An empty required field "
+            "shows a red outline and disables the Run button.",
+        )
+        self._add_prop_row(
+            "Do not save value:", self._prop_no_persist,
+            "When checked, the parameter's value is never written "
+            "into any saved configuration.  Useful for passwords, "
+            "tokens, and other sensitive or scratch values.  The "
+            "user's most recent entry is kept during the session "
+            "but is lost when the tool is reloaded.",
+        )
+        self._add_prop_row(
+            "Do not auto-split:", self._prop_no_split,
+            "Opt out of the auto-split rule for this parameter.  "
+            "By default, when a string param's placeholder is the "
+            "entire template token (e.g. "
+            "<code>argument_template=[\"{flags}\"]</code>) and the "
+            "value contains whitespace, ScripTree splits it into "
+            "multiple argv tokens — perfect for typing repeatable "
+            "flags.  Check this box to disable that for this param: "
+            "the value emits as a single argv token even with "
+            "embedded spaces.",
+        )
+        self._add_prop_row(
+            "Default:", self._prop_default,
+            "Pre-filled value shown when the user first opens the "
+            "form.  Should be the most useful starting point for "
+            "the typical run — not an example.  For "
+            "<code>bool</code> use <code>true</code> / "
+            "<code>false</code>; for <code>enum</code> use one of "
+            "the declared choices.",
+        )
+        self._add_prop_row(
+            "Choices:", self._prop_choices,
+            "Dropdown choices.  Each entry is either a bare value "
+            "(used both in argv and as the visible label) or "
+            "<code>value=label</code> to show a descriptive label "
+            "while sending the value to the command.  Comma-"
+            "separated.  Only meaningful for <code>enum</code> / "
+            "<code>multiselect</code> types.",
+        )
+        self._add_prop_row(
+            "File filter:", self._prop_filter,
+            "Qt file-dialog filter applied to "
+            "<code>file_open</code> / <code>file_save</code> "
+            "pickers.  Format: "
+            "<code>&lt;name&gt; (*.ext1 *.ext2);;...</code> — e.g. "
+            "<code>Text (*.txt);;All files (*)</code>.  Only "
+            "meaningful for path-type / file-picker widgets.",
+        )
+        self._add_prop_row(
+            "Section:", self._prop_section,
+            "Which section this param belongs to.  The list tracks "
+            "the tool's declared sections — use the +§ / ✎§ / −§ "
+            "buttons above the param list to manage them.  Empty "
+            "section falls into a synthetic 'Other' bucket at the "
+            "end of the form.",
+        )
         middle.addWidget(right_box)
         middle.setStretchFactor(0, 1)
         middle.setStretchFactor(1, 2)
@@ -613,6 +711,85 @@ class ToolEditorView(QWidget):
         self._tool.menus = dlg.menus
         self._menus_status.setText(_menus_summary(self._tool))
 
+    # --- property-row tooltip helper (v0.4.0+) ---------------------------
+
+    def _add_prop_row(
+        self,
+        label: str,
+        widget: QWidget,
+        tooltip_html: str,
+    ) -> None:
+        """Add a row to the property panel with the same hover
+        tooltip on both the label and the input.
+
+        Also stashes the row's label widget on a dict keyed by the
+        input widget so ``_refresh_prop_visibility`` can hide /
+        show the whole row (label + input) based on the param's
+        type — keeps the panel uncluttered for types that don't
+        need a given field.
+        """
+        from PySide6.QtWidgets import QLabel
+        label_widget = QLabel(label)
+        label_widget.setToolTip(tooltip_html)
+        if not widget.toolTip():
+            widget.setToolTip(tooltip_html)
+        if not hasattr(self, "_prop_row_labels"):
+            self._prop_row_labels: dict[QWidget, QLabel] = {}
+        self._prop_row_labels[widget] = label_widget
+        self._prop_layout.addRow(label_widget, widget)
+
+    def _set_prop_row_visible(self, widget: QWidget, visible: bool) -> None:
+        """Show / hide both the label and the input of the row
+        owned by ``widget``.  Used by
+        ``_refresh_prop_visibility``."""
+        label = self._prop_row_labels.get(widget) if hasattr(
+            self, "_prop_row_labels"
+        ) else None
+        if label is not None:
+            label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _refresh_prop_visibility(self) -> None:
+        """Hide property rows that aren't relevant to the currently
+        selected param's type / widget combo.
+
+        v0.4.0 — concrete de-busy step.  Previously the property
+        panel showed every field for every param, including:
+
+          * ``Choices:`` for a string field (meaningless).
+          * ``File filter:`` for an integer field (meaningless).
+          * ``Do not auto-split:`` for a checkbox (meaningless).
+
+        Now we only show fields that affect the current param.
+        The panel collapses to the minimum useful set per type.
+        """
+        if self._current_param_index is None:
+            return
+        if not (0 <= self._current_param_index < len(self._tool.params)):
+            return
+        param = self._tool.params[self._current_param_index]
+        from ..core.model import ParamType, Widget as W
+        is_enum = param.type in (ParamType.ENUM, ParamType.MULTISELECT)
+        is_path = param.type is ParamType.PATH
+        is_file_widget = param.widget in (W.FILE_OPEN, W.FILE_SAVE)
+        is_string = param.type is ParamType.STRING
+
+        # Always-visible: ID, Label, Description, Type, Widget,
+        # Required, Default, Section.  Conditional:
+        self._set_prop_row_visible(self._prop_choices, is_enum)
+        self._set_prop_row_visible(self._prop_filter, is_path and is_file_widget)
+        self._set_prop_row_visible(self._prop_no_split, is_string)
+        # "Do not save value" makes sense for any field that holds
+        # a typed secret — keep visible for all string / path types
+        # but hide for booleans (no secret bools).
+        self._set_prop_row_visible(
+            self._prop_no_persist,
+            param.type in (
+                ParamType.STRING, ParamType.PATH, ParamType.INTEGER,
+                ParamType.FLOAT,
+            ),
+        )
+
     # --- param list ------------------------------------------------------
 
     def _refresh_param_list(self) -> None:
@@ -701,6 +878,13 @@ class ToolEditorView(QWidget):
             self._populate_widget_combo(ParamType.STRING)
             if self._prop_section.count() > 0:
                 self._prop_section.setCurrentIndex(0)
+            # When no param is selected, hide all conditional rows
+            # so the panel reads as obviously empty rather than a
+            # field-by-field "0 / 0 / 0" form.
+            self._set_prop_row_visible(self._prop_choices, False)
+            self._set_prop_row_visible(self._prop_filter, False)
+            self._set_prop_row_visible(self._prop_no_split, False)
+            self._set_prop_row_visible(self._prop_no_persist, False)
         finally:
             self._building_panel = False
 
@@ -731,6 +915,9 @@ class ToolEditorView(QWidget):
             if sec_idx < 0:
                 sec_idx = 0
             self._prop_section.setCurrentIndex(sec_idx)
+            # v0.4.0 — hide rows that don't apply to this param's
+            # type / widget combo to keep the panel uncluttered.
+            self._refresh_prop_visibility()
         finally:
             self._building_panel = False
 

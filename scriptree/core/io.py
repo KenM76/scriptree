@@ -264,6 +264,12 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["no_persist"] = True
     if p.no_split:
         d["no_split"] = True
+    # V0.4.0 — emit only when non-empty so legacy tools without
+    # visible_when / required_when round-trip byte-identical.
+    if p.visible_when:
+        d["visible_when"] = p.visible_when
+    if p.required_when:
+        d["required_when"] = p.required_when
     return d
 
 
@@ -317,6 +323,8 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         section=d.get("section", ""),
         no_persist=bool(d.get("no_persist", False)),
         no_split=bool(d.get("no_split", False)),
+        visible_when=str(d.get("visible_when", "") or ""),
+        required_when=str(d.get("required_when", "") or ""),
     )
 
 

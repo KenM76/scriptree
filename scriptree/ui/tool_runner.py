@@ -315,6 +315,21 @@ class ReorderableParamForm(QListWidget):
             for i in range(self.count())
         ]
 
+    def set_row_hidden(self, param_id: str, hidden: bool) -> None:
+        """Hide / show the row owned by ``param_id`` (v0.4.0+).
+
+        Used by ``ToolRunnerView`` to honour ``ParamDef.visible_when``
+        — when an expression like ``"bom_source == 'drawing'"`` is
+        currently False, the row for ``bom_feature_name`` disappears
+        from the form so the user only sees fields relevant to the
+        mode they've picked.
+        """
+        for i in range(self.count()):
+            item = self.item(i)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == param_id:
+                item.setHidden(hidden)
+                return
+
     def _on_rows_moved(self, *_args: Any) -> None:
         self.orderChanged.emit(self.current_order())
 
@@ -1821,6 +1836,14 @@ class ToolRunnerView(QWidget):
 
         Hidden params are not rendered in the form, so their values come
         from the active configuration's stored ``values`` dict instead.
+
+        v0.4.0 — also treats params hidden by ``visible_when`` as
+        empty for argv purposes: their stored value is dropped from
+        the returned dict so the argument-template
+        conditional-emission rules (``{id?--flag}`` etc.) skip them
+        naturally.  The widget's actual value PERSISTS in memory
+        for re-show — only its contribution to the current argv is
+        suppressed.
         """
         values = {pid: w.get_value() for pid, w in self._widgets.items()}
         # Merge in hidden param values from the active configuration.
@@ -1831,7 +1854,52 @@ class ToolRunnerView(QWidget):
                 for pid in hidden:
                     if pid not in values and pid in cfg.values:
                         values[pid] = cfg.values[pid]
+        # Drop visible_when-hidden params for argv assembly.  See
+        # ``_visible_when_hidden_ids`` for the source of truth.
+        for pid in self._visible_when_hidden_ids():
+            values.pop(pid, None)
         return values
+
+    def _visible_when_hidden_ids(self) -> set[str]:
+        """Return the set of param IDs currently hidden by
+        ``visible_when``.  Computed by evaluating each param's
+        expression against the current widget values (BEFORE this
+        method's filtering — we want a snapshot of all entries,
+        including the hidden ones, when deciding what's visible).
+        """
+        from scriptree.core.visible_when import evaluate as _evaluate
+        # Raw values BEFORE filtering (so an expression like
+        # ``"a == 'x'"`` can see ``a`` even when ``a`` is itself
+        # currently hidden).
+        raw = {pid: w.get_value() for pid, w in self._widgets.items()}
+        hidden_ids: set[str] = set()
+        for param in self._tool.params:
+            expr = (getattr(param, "visible_when", "") or "").strip()
+            if not expr:
+                continue
+            if not _evaluate(expr, raw):
+                hidden_ids.add(param.id)
+        return hidden_ids
+
+    def _refresh_visible_when(self) -> None:
+        """Apply ``visible_when`` to the form: hide/show rows.
+
+        Called from ``_update_live_cmd`` so every value change
+        re-evaluates visibility.  Cheap — the evaluator is a
+        single-pass parser, run once per param with a
+        ``visible_when`` expression (usually a handful per tool).
+        """
+        if not self._widgets:
+            return
+        hidden = self._visible_when_hidden_ids()
+        for form in self._section_forms.values():
+            for param in self._tool.params:
+                # Only call set_row_hidden when the param actually
+                # has a row in this form — set_row_hidden is a
+                # find-and-no-op otherwise but skipping the call
+                # avoids burning cycles on every section x every
+                # param on every keystroke.
+                form.set_row_hidden(param.id, param.id in hidden)
 
     def _resolve_for_preview(self) -> ResolvedCommand | None:
         try:
@@ -1886,6 +1954,11 @@ class ToolRunnerView(QWidget):
         """
         if self._updating:
             return
+        # v0.4.0 — refresh visible_when-driven row visibility before
+        # collecting values, so the argv preview matches what the
+        # user actually sees.  Cheap (recursive-descent parser over
+        # a handful of expressions); safe to run on every change.
+        self._refresh_visible_when()
         try:
             cmd = build_full_argv(
                 self._tool,
