@@ -67,11 +67,19 @@ def migrate_one(
     dry_run: bool = False,
     log: callable = print,
 ) -> bool:
-    """Migrate a single ``.scriptree`` file.
+    """Migrate a single ``.scriptree`` or ``.scriptreetree`` file.
 
     Returns True iff the file was changed (or would be, in
     dry-run mode).  Skips files whose JSON can't be parsed,
     logging a warning to stderr.
+
+    v0.5.3 — also walks ``.scriptreetree`` (tree-catalog) files,
+    which share the main schema_version trajectory.  They don't
+    have ``params`` so the type/widget rename map is inert there;
+    we only bump ``schema_version``.  The separate
+    ``.scriptreering`` / ``.scriptreeforest`` formats keep their
+    own ``"version"`` keys under their own ``"format"`` discriminator
+    and are deliberately NOT touched here.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -108,13 +116,22 @@ def migrate_one(
     return changed
 
 
+# File extensions whose schema_version follows the main 1 → 2 → 3
+# trajectory.  Lowercase, with leading dot.  ``.scriptreering`` and
+# ``.scriptreeforest`` have their own independent ``"version"`` keys
+# under separate ``"format"`` discriminators and are not migrated by
+# this CLI.
+_MIGRATABLE_SUFFIXES = (".scriptree", ".scriptreetree")
+
+
 def migrate_tree(
     root: Path,
     *,
     dry_run: bool = False,
     quiet: bool = False,
 ) -> tuple[int, int]:
-    """Walk ``root`` and migrate every ``.scriptree`` underneath.
+    """Walk ``root`` and migrate every ``.scriptree`` / ``.scriptreetree``
+    underneath.
 
     Returns ``(scanned_count, changed_count)``.
     """
@@ -124,11 +141,16 @@ def migrate_tree(
     if root.is_file():
         targets = [root]
     else:
-        targets = sorted(root.rglob("*.scriptree"))
+        # Two passes is simpler than one glob with alternation —
+        # globs concatenate, sorting is stable per pass.
+        targets = sorted(
+            list(root.rglob("*.scriptree"))
+            + list(root.rglob("*.scriptreetree"))
+        )
     for p in targets:
         if not p.is_file():
             continue
-        if p.suffix.lower() != ".scriptree":
+        if p.suffix.lower() not in _MIGRATABLE_SUFFIXES:
             continue
         scanned += 1
         if migrate_one(p, dry_run=dry_run, log=log):

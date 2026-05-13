@@ -229,6 +229,32 @@ class TestMigrate:
         assert first is True
         assert second is False
 
+    def test_migrate_walks_scriptreetree_files(
+        self, tmp_path: Path,
+    ) -> None:
+        """v0.5.3 — ``.scriptreetree`` files also follow the main
+        schema_version trajectory and must be migrated.  They have
+        no ``params`` so only the version bump applies.
+
+        Before v0.5.3 the migrator skipped them; the v3 tree loader
+        then hard-failed on any pre-v3 ``.scriptreetree`` and the
+        forest's auto-discover couldn't enumerate trees correctly."""
+        from scriptree.cli.migrate import migrate_one
+        p = tmp_path / "x.scriptreetree"
+        p.write_text(json.dumps({
+            "schema_version": 2,
+            "name": "Tree",
+            "nodes": [
+                {"type": "leaf", "path": "./a.scriptree"},
+            ],
+        }), encoding="utf-8")
+        changed = migrate_one(p)
+        assert changed is True
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert data["schema_version"] == 3
+        # No params field on trees — make sure we didn't invent one.
+        assert "params" not in data
+
     def test_migrate_dry_run_does_not_write(self, tmp_path: Path) -> None:
         from scriptree.cli.migrate import migrate_one
         p = tmp_path / "x.scriptree"

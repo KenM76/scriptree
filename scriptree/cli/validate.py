@@ -34,16 +34,26 @@ from pathlib import Path
 
 
 def validate_one(path: Path) -> tuple[bool, str]:
-    """Validate a single ``.scriptree`` file.
+    """Validate a single ``.scriptree`` or ``.scriptreetree`` file.
 
     Returns ``(ok, message)``.  ``ok=True`` ⇒ valid, ``message``
     is a one-line summary.  ``ok=False`` ⇒ invalid, ``message``
     is the loader's error text (already formatted with hints).
+
+    Dispatches by suffix: ``.scriptree`` → ``load_tool``,
+    ``.scriptreetree`` → ``load_tree``.
     """
-    from scriptree.core.io import load_tool
+    from scriptree.core.io import load_tool, load_tree
     from scriptree.core.model import VALID_WIDGETS
 
+    suffix = path.suffix.lower()
     try:
+        if suffix == ".scriptreetree":
+            tree = load_tree(path)
+            return True, (
+                f"Valid: {path} ({len(tree.nodes)} top-level "
+                f"node(s))"
+            )
         tool = load_tool(path)
     except (OSError, ValueError) as exc:
         return False, str(exc)
@@ -74,13 +84,22 @@ def validate_one(path: Path) -> tuple[bool, str]:
     )
 
 
+_VALIDATABLE_SUFFIXES = (".scriptree", ".scriptreetree")
+
+
 def validate_tree(root: Path) -> tuple[int, int]:
-    """Walk ``root`` and validate every ``.scriptree`` underneath.
-    Returns ``(scanned_count, failed_count)``."""
+    """Walk ``root`` and validate every ``.scriptree`` and
+    ``.scriptreetree`` underneath.
+
+    Returns ``(scanned_count, failed_count)``.
+    """
     if root.is_file():
         targets = [root]
     else:
-        targets = sorted(root.rglob("*.scriptree"))
+        targets = sorted(
+            list(root.rglob("*.scriptree"))
+            + list(root.rglob("*.scriptreetree"))
+        )
     scanned = 0
     failed = 0
     # ASCII markers — Windows consoles often run cp1252 which
@@ -89,7 +108,7 @@ def validate_tree(root: Path) -> tuple[int, int]:
     for p in targets:
         if not p.is_file():
             continue
-        if p.suffix.lower() != ".scriptree":
+        if p.suffix.lower() not in _VALIDATABLE_SUFFIXES:
             continue
         scanned += 1
         ok, msg = validate_one(p)
