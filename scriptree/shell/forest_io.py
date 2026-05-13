@@ -412,13 +412,30 @@ def load_forest(path: str | Path) -> ForestDef:
 # Per-user autoload state
 # ---------------------------------------------------------------------------
 
+_DEFAULT_FOREST_FILENAME = "default.scriptreeforest"
+"""Canonical filename for the per-user default forest.
+
+v0.5.2 — renamed from ``last_forest.scriptreeforest`` so the file's
+purpose is obvious to anyone poking around APPDATA.  A legacy file
+with the old name is auto-migrated by
+:func:`migrate_legacy_autoload_path`.
+"""
+
+_LEGACY_FOREST_FILENAME = "last_forest.scriptreeforest"
+
+
 def default_autoload_path(branding: dict) -> Path:
-    """Where the per-user "last forest" file lives.
+    """Where the per-user default forest file lives.
 
     Mirror of ``ring_io._appdata_dir`` for the forest layer.  The
     file is **always** written to the user-scoped state directory;
     a system-wide default is out of scope (rings already cover the
     "shared session" case via their own autoload list).
+
+    v0.5.2 — file is now ``default.scriptreeforest``.  Previous
+    installs wrote ``last_forest.scriptreeforest``; that path is
+    rehomed transparently by :func:`migrate_legacy_autoload_path`,
+    which the launcher calls at startup.
     """
     brand_name = branding.get("appName", "ScripTree")
     if sys.platform == "win32":
@@ -427,7 +444,37 @@ def default_autoload_path(branding: dict) -> Path:
         appdata = Path.home() / "Library" / "Application Support" / brand_name
     else:
         appdata = Path.home() / ".config" / brand_name
-    return appdata / "last_forest.scriptreeforest"
+    return appdata / _DEFAULT_FOREST_FILENAME
+
+
+def migrate_legacy_autoload_path(branding: dict) -> Path | None:
+    """One-shot rename of legacy ``last_forest.scriptreeforest`` to
+    the v0.5.2 ``default.scriptreeforest``.
+
+    Idempotent: if the new path already exists OR the legacy one
+    doesn't, this is a no-op.  Returns the path that was renamed
+    (for logging), or ``None`` if no migration happened.
+
+    Called by the launcher at startup so the rest of the code can
+    assume the canonical filename without scattering legacy probes
+    everywhere.
+    """
+    new_path = default_autoload_path(branding)
+    legacy_path = new_path.parent / _LEGACY_FOREST_FILENAME
+    if new_path.is_file():
+        return None  # Already migrated (or fresh install).
+    if not legacy_path.is_file():
+        return None  # Nothing to migrate.
+    try:
+        legacy_path.rename(new_path)
+        _log(f"migrate_legacy_autoload_path: {legacy_path} -> {new_path}")
+        return legacy_path
+    except OSError as exc:
+        _log(
+            f"migrate_legacy_autoload_path: rename failed "
+            f"({legacy_path} -> {new_path}): {exc!r}"
+        )
+        return None
 
 
 def list_autoload_forest(branding: dict) -> ForestDef | None:
@@ -451,7 +498,7 @@ def list_autoload_forest(branding: dict) -> ForestDef | None:
 # ---------------------------------------------------------------------------
 #
 # ``forest_preferences.json`` lives in the same per-user state
-# directory as ``last_forest.scriptreeforest``.  It controls how the
+# directory as ``default.scriptreeforest``.  It controls how the
 # forest behaves at launch when the user doesn't pass an explicit
 # ``.scriptreeforest`` path:
 #
@@ -464,7 +511,7 @@ def list_autoload_forest(branding: dict) -> ForestDef | None:
 #   * ``default_forest_path`` — absolute path to the file the
 #     fallback path uses.  Empty string means "use
 #     ``default_autoload_path``" (i.e. the canonical
-#     ``last_forest.scriptreeforest`` location).  Lets the user
+#     ``default.scriptreeforest`` location).  Lets the user
 #     point the default at a checked-in workspace file, a USB-stick
 #     file, etc.
 #
@@ -489,7 +536,7 @@ class ForestPreferences:
     default_forest_path: str = ""
     """Absolute path to the default forest file.  Empty = use
     ``default_autoload_path`` (the canonical
-    ``last_forest.scriptreeforest`` location).  Stored as the
+    ``default.scriptreeforest`` location).  Stored as the
     user-typed string verbatim; the controller resolves at load
     time."""
 
@@ -504,7 +551,7 @@ class ForestPreferences:
 
 def default_preferences_path(branding: dict) -> Path:
     """Where ``forest_preferences.json`` lives — same per-user
-    state directory as ``last_forest.scriptreeforest``."""
+    state directory as ``default.scriptreeforest``."""
     return default_autoload_path(branding).parent / "forest_preferences.json"
 
 

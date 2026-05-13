@@ -568,6 +568,15 @@ def main() -> int:
     if forest_mode:
         try:
             from scriptree.shell.forest_controller import ForestController
+            # v0.5.2 — rehome any pre-existing
+            # ``last_forest.scriptreeforest`` to its v0.5.2 name
+            # (``default.scriptreeforest``) before the controller
+            # tries to load.  Idempotent: a no-op on first install
+            # or when the rename has already happened.
+            from scriptree.shell.forest_io import (
+                migrate_legacy_autoload_path,
+            )
+            migrate_legacy_autoload_path(branding)
             _forest_controller = ForestController(branding, registry, _SNAP_ENGINE)
             _forest_controller.start()
             _log("Forest mode: ForestController started")

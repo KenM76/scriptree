@@ -451,7 +451,7 @@ class TestForestController:
         """Fresh, started controller with an empty forest.
 
         v0.3.20+ — autosave is disabled here so tests don't write
-        to the developer's real ``last_forest.scriptreeforest``
+        to the developer's real ``default.scriptreeforest``
         when the controller's ``forestChanged`` signal fires
         during normal test setup.
         """
@@ -732,7 +732,7 @@ class TestForestPreferences:
             ForestPreferences, save_preferences,
         )
 
-        autoload_target = tmp_path / "last_forest.scriptreeforest"
+        autoload_target = tmp_path / "default.scriptreeforest"
         prefs_file = tmp_path / "forest_preferences.json"
         monkeypatch.setattr(
             fc_mod, "default_autoload_path",
@@ -879,7 +879,7 @@ class TestAutosaveAndDefaultFile:
         from scriptree.shell import forest_io as io_mod
         from scriptree.shell.forest_controller import ForestController
 
-        target = tmp_path / "last_forest.scriptreeforest"
+        target = tmp_path / "default.scriptreeforest"
         prefs_file = tmp_path / "forest_preferences.json"
         monkeypatch.setattr(
             fc_mod, "default_autoload_path",
@@ -987,7 +987,7 @@ class TestDialogs:
 
         We pass a brand-new ``ForestDef`` to ``start()`` so the
         controller does NOT load the user's real per-machine
-        ``last_forest.scriptreeforest`` — that would let test state
+        ``default.scriptreeforest`` — that would let test state
         leak between runs (and between developers running the suite).
         Autosave is disabled (v0.3.20+) so ``forestChanged`` signals
         in dialog tests don't write to the dev's APPDATA either.
@@ -1090,3 +1090,77 @@ class TestDialogs:
         # Forget → path leaves excluded list, but is NOT re-added.
         assert len(ctrl.forest.excluded) == 0
         assert len(ctrl.forest.items) == 0
+
+
+# ===========================================================================
+# v0.5.2 — default.scriptreeforest rename + legacy migration
+# ===========================================================================
+
+class TestDefaultForestFilenameRename:
+    """Pin the v0.5.2 rename ``last_forest.scriptreeforest`` →
+    ``default.scriptreeforest`` and the one-shot migration that
+    rehomes an existing legacy file."""
+
+    def test_default_autoload_path_is_default_scriptreeforest(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Factory default filename is ``default.scriptreeforest``."""
+        from scriptree.shell.forest_io import default_autoload_path
+        # Redirect HOME so we resolve into the tmp dir.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        p = default_autoload_path({"appName": "ScripTree"})
+        assert p.name == "default.scriptreeforest"
+
+    def test_migrate_legacy_renames_old_file(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Existing ``last_forest.scriptreeforest`` → rename to
+        ``default.scriptreeforest``; original removed."""
+        from scriptree.shell.forest_io import (
+            default_autoload_path, migrate_legacy_autoload_path,
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        new_p = default_autoload_path({"appName": "ScripTree"})
+        new_p.parent.mkdir(parents=True, exist_ok=True)
+        legacy = new_p.parent / "last_forest.scriptreeforest"
+        legacy.write_text(
+            '{"format":"scriptreeforest","version":1,"items":[]}',
+            encoding="utf-8",
+        )
+        result = migrate_legacy_autoload_path({"appName": "ScripTree"})
+        assert result == legacy
+        assert new_p.is_file()
+        assert not legacy.exists()
+
+    def test_migrate_legacy_is_noop_when_new_exists(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """If ``default.scriptreeforest`` already exists, the legacy
+        file is left untouched."""
+        from scriptree.shell.forest_io import (
+            default_autoload_path, migrate_legacy_autoload_path,
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        new_p = default_autoload_path({"appName": "ScripTree"})
+        new_p.parent.mkdir(parents=True, exist_ok=True)
+        new_p.write_text(
+            '{"format":"scriptreeforest","version":1,"items":[]}',
+            encoding="utf-8",
+        )
+        legacy = new_p.parent / "last_forest.scriptreeforest"
+        legacy.write_text(
+            '{"format":"scriptreeforest","version":1,"items":[]}',
+            encoding="utf-8",
+        )
+        result = migrate_legacy_autoload_path({"appName": "ScripTree"})
+        assert result is None
+        assert legacy.is_file()  # untouched
+
+    def test_migrate_legacy_is_noop_on_fresh_install(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """No legacy + no new = no-op (returns None)."""
+        from scriptree.shell.forest_io import migrate_legacy_autoload_path
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        result = migrate_legacy_autoload_path({"appName": "ScripTree"})
+        assert result is None
