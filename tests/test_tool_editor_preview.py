@@ -48,7 +48,7 @@ def _tool() -> ToolDef:
             ParamDef(
                 id="verbose",
                 label="Verbose",
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 default=False,
             ),

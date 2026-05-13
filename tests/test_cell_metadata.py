@@ -325,7 +325,7 @@ class TestModelRoundTrip:
     ) -> None:
         """A .scriptree without the 'cell' sub-object loads cleanly."""
         legacy = {
-            "schema_version": 1,
+            "schema_version": 3,
             "name": "alpha",
             "executable": "/bin/echo",
             "argument_template": ["{x}"],
@@ -341,7 +341,7 @@ class TestModelRoundTrip:
         self, tmp_path: Path,
     ) -> None:
         legacy = {
-            "schema_version": 1,
+            "schema_version": 3,
             "name": "cat",
             "nodes": [],
         }

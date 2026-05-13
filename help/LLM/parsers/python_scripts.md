@@ -125,7 +125,7 @@ Then open ScripTree, do **File → New tool from executable...**, pick
 
 1. `source.mode` in the resulting draft is `"argparse"`.
 2. Every flag from `help.txt` appears in the params list.
-3. Path flags have `file_open` / `file_save` / `folder` widgets.
+3. Path flags have `file` / `save_file` / `folder` widgets.
 4. Enum flags have `dropdown` widget with correct choices.
 5. Bool flags have `checkbox` widget.
 6. Tooltips match the `help=` strings.

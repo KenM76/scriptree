@@ -771,7 +771,7 @@ class ToolEditorView(QWidget):
         from ..core.model import ParamType, Widget as W
         is_enum = param.type in (ParamType.ENUM, ParamType.MULTISELECT)
         is_path = param.type is ParamType.PATH
-        is_file_widget = param.widget in (W.FILE_OPEN, W.FILE_SAVE)
+        is_file_widget = param.widget in (W.FILE, W.SAVE_FILE)
         is_string = param.type is ParamType.STRING
 
         # Always-visible: ID, Label, Description, Type, Widget,
@@ -786,7 +786,7 @@ class ToolEditorView(QWidget):
             self._prop_no_persist,
             param.type in (
                 ParamType.STRING, ParamType.PATH, ParamType.INTEGER,
-                ParamType.FLOAT,
+                ParamType.NUMBER,
             ),
         )
 

@@ -42,7 +42,7 @@ def _tasklist() -> ToolDef:
             ParamDef(id="user"),
             ParamDef(
                 id="svc",
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 default=False,
             ),
@@ -55,7 +55,7 @@ def _tasklist() -> ToolDef:
             ),
             ParamDef(
                 id="nh",
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 default=False,
             ),

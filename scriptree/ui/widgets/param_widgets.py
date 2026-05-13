@@ -199,7 +199,7 @@ class NumberWidget(ParamWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        if param.type is ParamType.FLOAT:
+        if param.type is ParamType.NUMBER:
             self._spin = QDoubleSpinBox()
             self._spin.setRange(-1e12, 1e12)
             self._spin.setDecimals(6)
@@ -760,9 +760,9 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.NUMBER: NumberWidget,
         WidgetKind.CHECKBOX: CheckboxWidget,
         WidgetKind.DROPDOWN: DropdownWidget,
-        WidgetKind.ENUM_RADIO: RadioWidget,
-        WidgetKind.FILE_OPEN: FileOpenWidget,
-        WidgetKind.FILE_SAVE: FileSaveWidget,
+        WidgetKind.RADIO: RadioWidget,
+        WidgetKind.FILE: FileOpenWidget,
+        WidgetKind.SAVE_FILE: FileSaveWidget,
         WidgetKind.FOLDER: FolderWidget,
     }
     cls = mapping.get(param.widget, TextWidget)

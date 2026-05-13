@@ -42,7 +42,7 @@ def _sample_tool() -> ToolDef:
                 id="output",
                 label="Output file",
                 type=ParamType.PATH,
-                widget=Widget.FILE_SAVE,
+                widget=Widget.SAVE_FILE,
                 required=True,
                 file_filter="Text (*.txt);;All (*)",
             ),
@@ -192,7 +192,7 @@ class TestTreeRoundTrip:
         clients happy when newer ones write a not-yet-standardized
         value."""
         tree = tree_from_dict({
-            "schema_version": 2,
+            "schema_version": 3,
             "name": "t",
             "nodes": [],
             "folder_layout": "horizontal_carousel",

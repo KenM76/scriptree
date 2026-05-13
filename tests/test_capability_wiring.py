@@ -90,7 +90,7 @@ def _tool_with_paths() -> ToolDef:
         params=[
             ParamDef(
                 id="p", label="Path",
-                type=ParamType.PATH, widget=Widget.FILE_OPEN,
+                type=ParamType.PATH, widget=Widget.FILE,
             ),
             ParamDef(id="s", label="String", type=ParamType.STRING),
         ],

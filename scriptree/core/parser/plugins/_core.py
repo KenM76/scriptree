@@ -77,9 +77,9 @@ _USAGE_LINE = re.compile(r"^\s*(?:usage|Usage|USAGE)\s*:\s*(?P<rest>.+)$")
 _KEYWORD_RULES: list[tuple[re.Pattern[str], ParamType, Widget]] = [
     # Paths — directory before file so "input directory" beats "input file".
     (re.compile(r"\b(directory|folder|dir)\b", re.I), ParamType.PATH, Widget.FOLDER),
-    (re.compile(r"\boutput\s+(file|path)\b", re.I), ParamType.PATH, Widget.FILE_SAVE),
-    (re.compile(r"\b(output|write to|save to)\b", re.I), ParamType.PATH, Widget.FILE_SAVE),
-    (re.compile(r"\b(input|read from|load|path to|file)\b", re.I), ParamType.PATH, Widget.FILE_OPEN),
+    (re.compile(r"\boutput\s+(file|path)\b", re.I), ParamType.PATH, Widget.SAVE_FILE),
+    (re.compile(r"\b(output|write to|save to)\b", re.I), ParamType.PATH, Widget.SAVE_FILE),
+    (re.compile(r"\b(input|read from|load|path to|file)\b", re.I), ParamType.PATH, Widget.FILE),
     # Numbers.
     (re.compile(r"\b(port|count|number of|num|size|limit|threads|integer|\bint\b)\b", re.I),
      ParamType.INTEGER, Widget.NUMBER),
@@ -139,7 +139,7 @@ def parse_heuristic(help_text: str) -> ToolDef:
     for p in params:
         if p.description.startswith("(Positional"):
             template.append("{" + p.id + "}")
-        elif p.type is ParamType.BOOL:
+        elif p.type is ParamType.BOOLEAN:
             flag = _primary_flag_for(p)
             template.append("{" + p.id + "?" + flag + "}")
         else:
@@ -299,7 +299,7 @@ def _parse_flag_line(
 
     # Determine type + widget.
     if not metavar and not choices:
-        ptype = ParamType.BOOL
+        ptype = ParamType.BOOLEAN
         widget = Widget.CHECKBOX
     elif choices:
         ptype = ParamType.ENUM
@@ -329,7 +329,7 @@ def _parse_flag_line(
             type=ptype,
             widget=widget,
             required=False,
-            default="" if ptype is not ParamType.BOOL else False,
+            default="" if ptype is not ParamType.BOOLEAN else False,
             choices=choices,
         )
     ]

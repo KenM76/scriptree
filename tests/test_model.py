@@ -30,7 +30,7 @@ class TestParamDef:
 
     def test_widget_must_match_type(self) -> None:
         with pytest.raises(ValueError, match="not valid for type"):
-            ParamDef(id="x", type=ParamType.BOOL, widget=Widget.DROPDOWN)
+            ParamDef(id="x", type=ParamType.BOOLEAN, widget=Widget.DROPDOWN)
 
     def test_default_widget_for_each_type(self) -> None:
         for t in ParamType:

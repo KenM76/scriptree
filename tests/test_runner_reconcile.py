@@ -51,9 +51,9 @@ def _tasklist_tool() -> ToolDef:
             ParamDef(id="user"),
             ParamDef(id="password"),
             ParamDef(id="module"),
-            ParamDef(id="svc", type=ParamType.BOOL, widget=Widget.CHECKBOX, default=False),
-            ParamDef(id="apps", type=ParamType.BOOL, widget=Widget.CHECKBOX, default=False),
-            ParamDef(id="v", type=ParamType.BOOL, widget=Widget.CHECKBOX, default=False),
+            ParamDef(id="svc", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX, default=False),
+            ParamDef(id="apps", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX, default=False),
+            ParamDef(id="v", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX, default=False),
             ParamDef(id="filter"),
             ParamDef(
                 id="format",
@@ -62,7 +62,7 @@ def _tasklist_tool() -> ToolDef:
                 choices=["TABLE", "LIST", "CSV"],
                 default="TABLE",
             ),
-            ParamDef(id="nh", type=ParamType.BOOL, widget=Widget.CHECKBOX, default=False),
+            ParamDef(id="nh", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX, default=False),
         ],
     )
 
@@ -99,7 +99,7 @@ def _dxf_tool() -> ToolDef:
             ParamDef(id="config", required=True, default="KIT"),
             ParamDef(
                 id="no_pdf",
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 default=False,
             ),

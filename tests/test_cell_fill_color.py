@@ -53,7 +53,7 @@ def _tool() -> ToolDef:
         params=[
             ParamDef(
                 id="p", label="P",
-                type=ParamType.PATH, widget=Widget.FILE_OPEN,
+                type=ParamType.PATH, widget=Widget.FILE,
             ),
         ],
     )

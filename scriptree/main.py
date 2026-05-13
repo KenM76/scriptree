@@ -117,6 +117,21 @@ def _autorun_active_tool(win) -> None:  # noqa: ANN001
 
 
 def main(argv: list[str] | None = None) -> int:
+    # v0.5.0 — CLI subcommand dispatch.  When invoked as
+    # ``scriptree validate <path>`` or ``scriptree migrate <path>``
+    # we hand off to the relevant module BEFORE constructing a
+    # QApplication (the CLI subcommands are pure stdlib + Python
+    # core — no Qt, no display required).
+    raw_argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if raw_argv and raw_argv[0] in ("validate", "migrate"):
+        sub = raw_argv[0]
+        rest = raw_argv[1:]
+        if sub == "validate":
+            from .cli.validate import main as _validate_main
+            return _validate_main(rest)
+        from .cli.migrate import main as _migrate_main
+        return _migrate_main(rest)
+
     args = _parse_args(argv)
 
     app = QApplication(sys.argv)

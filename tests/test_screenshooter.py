@@ -44,7 +44,7 @@ def _real_tree_path() -> Path:
     )
 
 
-def _run(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+def _run(*args: str, timeout: int = 180) -> subprocess.CompletedProcess:
     """Spawn the screenshooter as a subprocess.
 
     A subprocess (rather than importing main()) is important

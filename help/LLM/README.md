@@ -204,7 +204,7 @@ Before saving any generated `.scriptree`, verify each of these:
    single highest-leverage UX pattern in the schema.
 4. **Sections are `tab` mode if the form has 10+ params.** A flat
    10-row scroll is a defect.
-5. **Mode switches that gate other fields use `enum_radio`, not
+5. **Mode switches that gate other fields use `radio`, not
    `checkbox`.** A radio cues the user that the mode comes first; a
    checkbox suggests an independent toggle. See
    [`param_types_widgets.md`](param_types_widgets.md).

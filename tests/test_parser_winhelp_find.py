@@ -80,7 +80,7 @@ class TestFindFlags:
     def test_off_is_boolean_checkbox(self) -> None:
         p = self.tool.param_by_id("off")
         assert p is not None
-        assert p.type is ParamType.BOOL
+        assert p.type is ParamType.BOOLEAN
         assert p.widget is Widget.CHECKBOX
 
     def test_tight_column_description_captured(self) -> None:

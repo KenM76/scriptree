@@ -76,7 +76,7 @@ def tmp_tree_dir(tmp_path: Path) -> Path:
     tree_path = tmp_path / "group.scriptreetree"
     tree_path.write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": 3,
             "name": tree.name,
             "nodes": [
                 {"type": "leaf", "path": "./alpha.scriptree"},

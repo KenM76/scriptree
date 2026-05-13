@@ -117,7 +117,7 @@ class TestChoiceLabelsIO:
 
     def test_legacy_file_without_labels_loads(self) -> None:
         v1 = {
-            "schema_version": 1,
+            "schema_version": 3,
             "name": "legacy",
             "executable": "/bin/true",
             "params": [

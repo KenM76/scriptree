@@ -109,7 +109,7 @@ multiple flag occurrences into one text field. Use a `string` param
 
 **What is NOT auto-split** (each keeps existing single-token semantics):
 
-- `path` / `bool` / `int` / `float` / `enum` params — only `STRING`.
+- `path` / `boolean` / `integer` / `number` / `enum` params — only `string`.
 - String params with `"no_split": true` set on their `ParamDef` —
   per-field opt-out for tool authors who genuinely want a string
   field that holds one logical value with embedded whitespace
@@ -138,20 +138,20 @@ blow up the runner.
 }
 ```
 
-### 3. Conditional flag (bool)
+### 3. Conditional flag (boolean)
 
 ```
 {param_id?--flag}
 ```
 
-For a `bool` param. Emits `--flag` when the value is truthy; emits
+For a `boolean` param. Emits `--flag` when the value is truthy; emits
 nothing when false. Used as a standalone token, not inside a group.
 
 The literal text after `?` is **arbitrary** — it does not have to
 start with `-`. It's whatever string should appear in argv when the
 bool is true. This enables the next pattern.
 
-#### Bool flags that need a separate value token
+#### Boolean flags that need a separate value token
 
 Some CLIs use `-flag 1` rather than just `-flag` (ffmpeg's image2
 muxer flags `-strftime 1`, `-update 1`, `-frame_pts 1`; some

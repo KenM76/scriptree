@@ -1,19 +1,34 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "name": "Screenshot a tool / tree / cell",
-  "description": "Render a ScripTree widget to a PNG file without opening it on the user's desktop. Uses Qt's widget.grab() against an unshown widget — no flash, no focus theft. Useful for documentation screenshots, visual-regression baselines, catalog thumbnails, or quick sanity checks after a branding tweak.",
+  "description": "Render a ScripTree widget to a PNG file without opening it on the user's desktop. Uses Qt's widget.grab() against an unshown widget \u2014 no flash, no focus theft. Useful for documentation screenshots, visual-regression baselines, catalog thumbnails, or quick sanity checks after a branding tweak.",
   "executable": "python",
   "working_directory": "../..",
   "argument_template": [
     "screenshooter.py",
     "{kind}",
     "{input}",
-    ["--out", "{out}"],
+    [
+      "--out",
+      "{out}"
+    ],
     "{batch?--batch}",
-    ["--cell-size", "{cell_size}"],
-    ["--width", "{width}"],
-    ["--height", "{height}"],
-    ["--config", "{config}"],
+    [
+      "--cell-size",
+      "{cell_size}"
+    ],
+    [
+      "--width",
+      "{width}"
+    ],
+    [
+      "--height",
+      "{height}"
+    ],
+    [
+      "--config",
+      "{config}"
+    ],
     "{standalone?--standalone}"
   ],
   "params": [
@@ -25,11 +40,15 @@
       "widget": "dropdown",
       "required": false,
       "default": "form",
-      "choices": ["cell", "form", "tree"],
+      "choices": [
+        "cell",
+        "form",
+        "tree"
+      ],
       "choice_labels": [
-        "cell  — hexagonal cell visual",
-        "form  — parameter form view",
-        "tree  — tree-popup view"
+        "cell  \u2014 hexagonal cell visual",
+        "form  \u2014 parameter form view",
+        "tree  \u2014 tree-popup view"
       ]
     },
     {
@@ -37,7 +56,7 @@
       "label": "Input catalog (or folder for batch)",
       "description": "A .scriptree / .scriptreetree file in single mode, or a folder containing those when --batch is on (every catalog inside gets rendered).",
       "type": "path",
-      "widget": "file_open",
+      "widget": "file",
       "required": true,
       "default": "",
       "file_filter": "ScripTree catalogs (*.scriptree *.scriptreetree);;All files (*)"
@@ -47,7 +66,7 @@
       "label": "Output PNG (or output folder for batch)",
       "description": "Where to write the result. Single mode: a .png path. Batch mode: a folder (one PNG per source catalog, named <stem>_<kind>.png). Leave blank to default to ./<input>.png (single) or ./screenshots/ (batch).",
       "type": "path",
-      "widget": "file_save",
+      "widget": "save_file",
       "required": false,
       "default": "",
       "file_filter": "PNG image (*.png);;All files (*)"
@@ -56,7 +75,7 @@
       "id": "batch",
       "label": "Batch mode (walk input folder, render every catalog)",
       "description": "Recurse through the input folder; render every .scriptree / .scriptreetree found.  Useful for re-generating a whole help-docs screenshot set in one shot.",
-      "type": "bool",
+      "type": "boolean",
       "widget": "checkbox",
       "required": false,
       "default": false
@@ -100,19 +119,31 @@
     {
       "id": "standalone",
       "label": "Render in standalone mode",
-      "description": "Apply the active configuration's UIVisibility flags so the captured form matches what the user sees when launching the tool from ScripTreeRing — hidden command line, no Copy argv / Env buttons, no Tools sidebar, etc., per the config's own settings.  Off by default (renders the full docked view).",
-      "type": "bool",
+      "description": "Apply the active configuration's UIVisibility flags so the captured form matches what the user sees when launching the tool from ScripTreeRing \u2014 hidden command line, no Copy argv / Env buttons, no Tools sidebar, etc., per the config's own settings.  Off by default (renders the full docked view).",
+      "type": "boolean",
       "widget": "checkbox",
       "required": false,
       "default": false
     }
   ],
   "sections": [
-    {"id": "target", "label": "What to capture", "default_collapsed": false},
-    {"id": "output", "label": "Output", "default_collapsed": false},
-    {"id": "geometry", "label": "Geometry", "default_collapsed": true}
+    {
+      "id": "target",
+      "label": "What to capture",
+      "default_collapsed": false
+    },
+    {
+      "id": "output",
+      "label": "Output",
+      "default_collapsed": false
+    },
+    {
+      "id": "geometry",
+      "label": "Geometry",
+      "default_collapsed": true
+    }
   ],
   "cell": {
-    "text_label": "📸"
+    "text_label": "\ud83d\udcf8"
   }
 }

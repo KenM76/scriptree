@@ -304,17 +304,59 @@ def _normalize_choices(
     return [str(c) for c in raw_choices], list(raw_labels)
 
 
+def _enum_from_str(
+    enum_cls: type,
+    raw: str,
+    *,
+    field_name: str,
+    param_id: str,
+) -> Any:
+    """Coerce a JSON string to an enum value with a helpful error.
+
+    v0.5.0 — replaces the bare ``ParamType(raw)`` / ``Widget(raw)``
+    calls in ``_param_from_dict``.  When ``raw`` isn't a member of
+    the enum, raise a ``ValueError`` whose message includes:
+      * the offending value,
+      * the offending field name (``type`` / ``widget``),
+      * the param id (so the user can find the broken entry),
+      * a ``Did you mean '<closest>'?`` hint (via difflib), and
+      * the full list of valid values.
+
+    Diagnosis goes from "what does that mean?" to "oh, typo" in
+    seconds.
+    """
+    try:
+        return enum_cls(raw)
+    except ValueError:
+        import difflib
+        valid = [member.value for member in enum_cls]
+        closest = difflib.get_close_matches(raw, valid, n=1)
+        hint = f" Did you mean '{closest[0]}'?" if closest else ""
+        raise ValueError(
+            f"{raw!r} is not a valid {field_name} for param "
+            f"{param_id!r}.{hint}\n"
+            f"Valid {field_name}s: {', '.join(valid)}."
+        ) from None
+
+
 def _param_from_dict(d: dict[str, Any]) -> ParamDef:
     choices, choice_labels = _normalize_choices(
         d.get("choices", []),
         d.get("choice_labels", []),
     )
+    param_id = d.get("id", "<unknown>")
     return ParamDef(
         id=d["id"],
         label=d.get("label", ""),
         description=d.get("description", ""),
-        type=ParamType(d.get("type", "string")),
-        widget=Widget(d.get("widget", "text")),
+        type=_enum_from_str(
+            ParamType, d.get("type", "string"),
+            field_name="type", param_id=param_id,
+        ),
+        widget=_enum_from_str(
+            Widget, d.get("widget", "text"),
+            field_name="widget", param_id=param_id,
+        ),
         required=d.get("required", False),
         default=d.get("default", ""),
         choices=choices,
@@ -530,4 +572,17 @@ def _check_schema(data: dict[str, Any]) -> None:
         raise ValueError(
             f"File has schema_version {v}, this build only understands "
             f"up to {SCHEMA_VERSION}. Upgrade ScripTree."
+        )
+    # v0.5.0 hard-break: refuse to load v2 files.  The 0.3.x/0.4.x
+    # vocabulary (``bool`` / ``float`` / ``file_open`` / ``file_save``
+    # / ``enum_radio``) was renamed in v3 to align with JSON Schema +
+    # HTML5; mixed-vocabulary loading was rejected in favour of a
+    # clean break + migration script.
+    if v < SCHEMA_VERSION:
+        raise ValueError(
+            f"File uses schema_version {v}, but this ScripTree is "
+            f"version {SCHEMA_VERSION}.\n"
+            f"Run `scriptree migrate <path>` (or "
+            f"`scriptree migrate <dir>` for a whole tree) to upgrade.\n"
+            f"See help/LLM/scriptree_format.md for the rename map."
         )

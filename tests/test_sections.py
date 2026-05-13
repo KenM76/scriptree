@@ -65,7 +65,7 @@ def _sectioned_tool() -> ToolDef:
             ParamDef(
                 id="verbose",
                 label="Verbose",
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 default=False,
                 section="Debug",
@@ -148,7 +148,7 @@ class TestSectionIO:
 
     def test_v1_file_loads_without_sections(self) -> None:
         v1_data = {
-            "schema_version": 1,
+            "schema_version": 3,
             "name": "legacy",
             "description": "",
             "executable": "/bin/echo",

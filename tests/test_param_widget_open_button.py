@@ -48,7 +48,7 @@ class TestCheckboxAlignment:
         param = ParamDef(
             id="agree",
             label="Agree",
-            type=ParamType.BOOL,
+            type=ParamType.BOOLEAN,
             widget=Widget.CHECKBOX,
             description="Agree to the terms and conditions of this hypothetical software.",
         )
@@ -123,14 +123,14 @@ class TestCheckboxAlignment:
 def _file_param() -> ParamDef:
     return ParamDef(
         id="f", label="F",
-        type=ParamType.PATH, widget=Widget.FILE_OPEN,
+        type=ParamType.PATH, widget=Widget.FILE,
     )
 
 
 def _save_param() -> ParamDef:
     return ParamDef(
         id="f", label="F",
-        type=ParamType.PATH, widget=Widget.FILE_SAVE,
+        type=ParamType.PATH, widget=Widget.SAVE_FILE,
     )
 
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "Get-LocalUser",
   "description": "List local user accounts (optionally filter by name).",
   "executable": "powershell.exe",

@@ -63,7 +63,7 @@ class TestToolEnvRoundTrip:
 
     def test_legacy_file_loads_clean(self) -> None:
         v2 = {
-            "schema_version": 2,
+            "schema_version": 3,
             "name": "legacy",
             "executable": "/bin/true",
             "params": [],

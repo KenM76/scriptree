@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "Remove-LocalGroupMember",
   "description": "Remove a user or group from a local security group.",
   "executable": "powershell.exe",

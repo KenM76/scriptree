@@ -42,7 +42,7 @@ def _make(widget_kind: Widget, type_: ParamType = ParamType.STRING) -> ParamDef:
         type=type_,
         widget=widget_kind,
         choices=["a", "b"] if widget_kind in (
-            Widget.DROPDOWN, Widget.ENUM_RADIO,
+            Widget.DROPDOWN, Widget.RADIO,
         ) else [],
     )
 
@@ -65,7 +65,7 @@ class TestUniversalTooltip:
         assert "non-trivial description" in w.toolTip()
 
     def test_checkbox_widget(self) -> None:
-        w = build_widget_for(_make(Widget.CHECKBOX, ParamType.BOOL))
+        w = build_widget_for(_make(Widget.CHECKBOX, ParamType.BOOLEAN))
         assert "non-trivial description" in w.toolTip()
 
     def test_dropdown_widget(self) -> None:
@@ -73,11 +73,11 @@ class TestUniversalTooltip:
         assert "non-trivial description" in w.toolTip()
 
     def test_radio_widget(self) -> None:
-        w = build_widget_for(_make(Widget.ENUM_RADIO, ParamType.ENUM))
+        w = build_widget_for(_make(Widget.RADIO, ParamType.ENUM))
         assert "non-trivial description" in w.toolTip()
 
     def test_file_open_widget(self) -> None:
-        w = build_widget_for(_make(Widget.FILE_OPEN, ParamType.PATH))
+        w = build_widget_for(_make(Widget.FILE, ParamType.PATH))
         assert "non-trivial description" in w.toolTip()
         # Browse button keeps its more-specific tooltip — the
         # universal one only fills empty tooltips.

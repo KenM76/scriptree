@@ -10,37 +10,74 @@ from enum import Enum
 from typing import Any
 
 
-SCHEMA_VERSION = 2
-"""Bumped to 2 in April 2026 when we added sections.
+SCHEMA_VERSION = 3
+"""Bumped to 3 in May 2026 — JSON-Schema-aligned type names.
 
-v1 → v2 migration is transparent: v1 files have no ``sections`` key
-and every ParamDef has ``section=""`` by default, which the loader
-treats as "legacy flat form — render as one group". A v2 file that
-declares sections cannot be loaded by v1 tooling; the schema check
-in ``core/io.py`` will raise.
+History
+-------
+
+  * v1 (initial) — flat param list, no sections.
+  * v2 (Apr 2026) — added ``sections`` and the per-section layout
+    field.  v1 files load transparently into v2 (empty sections list
+    == flat form).
+  * v3 (May 2026) — JSON-Schema-aligned vocabulary:
+      type:    ``bool`` → ``boolean``, ``float`` → ``number``
+      widget:  ``file_open`` → ``file``, ``file_save`` → ``save_file``,
+               ``enum_radio`` → ``radio``
+    Hard-break: v3 ScripTree refuses to load v2 files with an
+    error message pointing at ``scriptree migrate``.  See
+    ``scriptree/cli/migrate.py`` for the upgrade script.
+
+Why JSON Schema for type, HTML5 for widget?  ``.scriptree`` files
+are JSON intended to outlive the implementation language.  JSON
+Schema is the canonical, language-agnostic vocabulary for JSON
+configs.  Widgets aren't a JSON-Schema concept; HTML5 form elements
+are the closest canonical equivalent — and that's what LLMs reach
+for in UI/web-form contexts.  Aligning both stops the
+``int`` / ``bool`` / ``spinbox`` / ``radiobutton`` LLM-noise
+problem at the source.
 """
 
 
 class ParamType(str, Enum):
+    """JSON-Schema-aligned parameter types.
+
+    v3 rename map (v2 names listed for historical reference;
+    migration handled by ``scriptree migrate``):
+      ``bool``  → ``boolean``  (renamed for JSON-Schema canonical)
+      ``float`` → ``number``   (JSON-Schema uses ``number`` for all
+                                numerics; constrain with min/max if
+                                you need integer-only)
+    """
+
     STRING = "string"
     INTEGER = "integer"
-    FLOAT = "float"
-    BOOL = "bool"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
     PATH = "path"
     ENUM = "enum"
     MULTISELECT = "multiselect"
 
 
 class Widget(str, Enum):
+    """HTML5-aligned widget kinds.
+
+    v3 rename map (v2 names listed for historical reference;
+    migration handled by ``scriptree migrate``):
+      ``file_open``  → ``file``       (HTML5 ``<input type="file">``)
+      ``file_save``  → ``save_file``  (verb-noun reads as action)
+      ``enum_radio`` → ``radio``      (HTML5 ``<input type="radio">``)
+    """
+
     TEXT = "text"
     TEXTAREA = "textarea"
     NUMBER = "number"
     CHECKBOX = "checkbox"
     DROPDOWN = "dropdown"
-    FILE_OPEN = "file_open"
-    FILE_SAVE = "file_save"
+    FILE = "file"
+    SAVE_FILE = "save_file"
     FOLDER = "folder"
-    ENUM_RADIO = "enum_radio"
+    RADIO = "radio"
 
 
 # Which widgets are valid for each param type. The editor uses this to
@@ -48,10 +85,10 @@ class Widget(str, Enum):
 VALID_WIDGETS: dict[ParamType, tuple[Widget, ...]] = {
     ParamType.STRING: (Widget.TEXT, Widget.TEXTAREA),
     ParamType.INTEGER: (Widget.NUMBER, Widget.TEXT),
-    ParamType.FLOAT: (Widget.NUMBER, Widget.TEXT),
-    ParamType.BOOL: (Widget.CHECKBOX,),
-    ParamType.PATH: (Widget.FILE_OPEN, Widget.FILE_SAVE, Widget.FOLDER),
-    ParamType.ENUM: (Widget.DROPDOWN, Widget.ENUM_RADIO),
+    ParamType.NUMBER: (Widget.NUMBER, Widget.TEXT),
+    ParamType.BOOLEAN: (Widget.CHECKBOX,),
+    ParamType.PATH: (Widget.FILE, Widget.SAVE_FILE, Widget.FOLDER),
+    ParamType.ENUM: (Widget.DROPDOWN, Widget.RADIO),
     ParamType.MULTISELECT: (Widget.DROPDOWN,),
 }
 

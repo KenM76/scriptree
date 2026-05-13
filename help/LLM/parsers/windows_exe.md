@@ -79,10 +79,10 @@ static void PrintHelp()
 }
 ```
 
-ScripTree's heuristic parser produces: `input` (file_open, required),
-`output` (file_save, optional), `/V` checkbox, `/N` number spin box
+ScripTree's heuristic parser produces: `input` (file, required),
+`output` (save_file, optional), `/V` checkbox, `/N` number spin box
 (keyword "number" in description), `/MODE` dropdown with three
-choices (extracted from the description), `/OUT` file_save picker.
+choices (extracted from the description), `/OUT` save_file picker.
 
 ## Alternative: System.CommandLine (preferred for new code)
 

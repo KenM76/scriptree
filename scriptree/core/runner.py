@@ -401,7 +401,7 @@ def _resolve_conditional(
     param = param_map[name]
     val = values.get(name, param.default)
 
-    if param.type is ParamType.BOOL:
+    if param.type is ParamType.BOOLEAN:
         return flag if _is_truthy(val) else None
 
     # For non-bool params, "?--flag=" means "emit --flag=<value>" when
@@ -419,7 +419,7 @@ def _resolve_conditional(
 def _value_to_str(val: Any, param: ParamDef) -> str:
     if val is None:
         return ""
-    if param.type is ParamType.BOOL:
+    if param.type is ParamType.BOOLEAN:
         return "true" if _is_truthy(val) else "false"
     if isinstance(val, (list, tuple)):
         return ",".join(str(x) for x in val)

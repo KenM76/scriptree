@@ -63,8 +63,8 @@ OUTPUTS
 |---------|-----------|--------|
 | `string`, `string[]` | STRING | TEXT |
 | `int`, `int32`, `int64`, `uint32`, `uint64`, `long` | INTEGER | NUMBER |
-| `double`, `float`, `decimal` | FLOAT | NUMBER |
-| `bool`, (switch) | BOOL | CHECKBOX |
+| `double`, `float`, `decimal` | NUMBER | NUMBER |
+| `bool`, (switch) | BOOLEAN | CHECKBOX |
 | `datetime`, `timespan`, `uri`, `guid` | STRING | TEXT |
 | `hashtable`, `hashtable[]` | STRING | TEXTAREA |
 | `securestring`, `pscredential` | *(skip)* | — |

@@ -236,11 +236,11 @@ _TYPE_MAP: dict[str, tuple[ParamType, Widget]] = {
     "uint32": (ParamType.INTEGER, Widget.NUMBER),
     "uint64": (ParamType.INTEGER, Widget.NUMBER),
     "long": (ParamType.INTEGER, Widget.NUMBER),
-    "double": (ParamType.FLOAT, Widget.NUMBER),
-    "float": (ParamType.FLOAT, Widget.NUMBER),
-    "decimal": (ParamType.FLOAT, Widget.NUMBER),
-    "bool": (ParamType.BOOL, Widget.CHECKBOX),
-    "switch": (ParamType.BOOL, Widget.CHECKBOX),
+    "double": (ParamType.NUMBER, Widget.NUMBER),
+    "float": (ParamType.NUMBER, Widget.NUMBER),
+    "decimal": (ParamType.NUMBER, Widget.NUMBER),
+    "bool": (ParamType.BOOLEAN, Widget.CHECKBOX),
+    "switch": (ParamType.BOOLEAN, Widget.CHECKBOX),
     "datetime": (ParamType.STRING, Widget.TEXT),
     "timespan": (ParamType.STRING, Widget.TEXT),
     "uri": (ParamType.STRING, Widget.TEXT),
@@ -274,7 +274,7 @@ def _map_type(type_tag: str) -> tuple[ParamType, Widget] | None:
     lower = type_tag.lower().strip()
     if not lower:
         # No type tag = switch parameter → boolean.
-        return (ParamType.BOOL, Widget.CHECKBOX)
+        return (ParamType.BOOLEAN, Widget.CHECKBOX)
     if lower in _SKIP_TYPES:
         return None
     if lower in _PIPELINE_ONLY_TYPES:
@@ -359,13 +359,13 @@ def detect(help_text: str) -> ToolDef | None:
         if has_multiple_sets and pp.param_set != "(All)":
             required = False
 
-        if ptype is ParamType.BOOL:
+        if ptype is ParamType.BOOLEAN:
             # Switch / bool parameters → conditional flag.
             params.append(ParamDef(
                 id=pid,
                 label=label,
                 description=pp.description,
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 required=False,  # bool flags are never "required"
                 default=False,

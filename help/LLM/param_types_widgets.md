@@ -3,41 +3,65 @@
 Reference matrix of legal type × widget combinations, default values,
 and coercion rules.
 
+> **v0.5.0 / schema_version 3 — canonical-names rename (breaking).**
+> Type and widget names are now JSON-Schema / HTML5 aligned. Old names
+> (`bool`, `float`, `file_open`, `file_save`, `enum_radio`) are **no
+> longer accepted** — run `python -m scriptree migrate <path>` to
+> upgrade v2 files in place. See the bottom of this doc for the full
+> rename map.
+
 ## Types
 
-| type          | Python type on read   | JSON form              |
-|---------------|-----------------------|------------------------|
-| `string`      | `str`                 | string                 |
-| `integer`     | `int`                 | integer                |
-| `float`       | `float`               | number                 |
-| `bool`        | `bool`                | boolean                |
-| `path`        | `str` (path string)   | string                 |
+| type          | Python type on read   | JSON form               |
+|---------------|-----------------------|-------------------------|
+| `string`      | `str`                 | string                  |
+| `integer`     | `int`                 | integer                 |
+| `number`      | `float`               | number                  |
+| `boolean`     | `bool`                | boolean                 |
+| `path`        | `str` (path string)   | string                  |
 | `enum`        | `str`                 | string (one of choices) |
-| `multiselect` | `list[str]`           | array of strings       |
+| `multiselect` | `list[str]`           | array of strings        |
+
+The first four mirror [JSON Schema's primitive types][jsonschema-types]
+verbatim. `path` / `enum` / `multiselect` are ScripTree extensions —
+they don't have direct JSON-Schema analogues but they round-trip as
+strings (or arrays of strings) so JSON-Schema validators still
+accept the files.
+
+[jsonschema-types]: https://json-schema.org/understanding-json-schema/reference/type
 
 ## Widgets
 
-| widget       | Qt class             | Used for              |
-|--------------|----------------------|-----------------------|
-| `text`       | `QLineEdit`          | short strings, ints, floats, masked input |
-| `textarea`   | `QPlainTextEdit`     | long strings, regexes |
-| `number`     | `QSpinBox` / `QDoubleSpinBox` | integer / float |
-| `checkbox`   | `QCheckBox`          | bools                 |
-| `dropdown`   | `QComboBox`          | enums, multiselects   |
-| `enum_radio` | `QButtonGroup` of `QRadioButton` | enums (small sets) |
-| `file_open`  | line edit + Browse (`QFileDialog.getOpenFileName`) | existing input files |
-| `file_save`  | line edit + Browse (`QFileDialog.getSaveFileName`) | output files to write |
-| `folder`     | line edit + Browse (`QFileDialog.getExistingDirectory`) | directories |
+| widget       | Qt class                              | Used for              |
+|--------------|---------------------------------------|-----------------------|
+| `text`       | `QLineEdit`                           | short strings, ints, numbers, masked input |
+| `textarea`   | `QPlainTextEdit`                      | long strings, regexes |
+| `number`     | `QSpinBox` / `QDoubleSpinBox`         | integer / number      |
+| `checkbox`   | `QCheckBox`                           | booleans              |
+| `dropdown`   | `QComboBox`                           | enums, multiselects   |
+| `radio`      | `QButtonGroup` of `QRadioButton`      | enums (small sets)    |
+| `file`       | line edit + Browse (`getOpenFileName`) | existing input files  |
+| `save_file`  | line edit + Browse (`getSaveFileName`) | output files to write |
+| `folder`     | line edit + Browse (`getExistingDirectory`) | directories     |
 
-### Drag-and-drop (v0.1.11)
+Widget names mirror the [HTML5 form-element vocabulary][html5-forms]
+where there's a direct analogue — `text`, `textarea`, `number`,
+`checkbox`, `radio`, `file` all map straight onto their `<input>`
+counterparts. `save_file` (for output paths) and `folder` (for
+directories) are ScripTree extensions that HTML doesn't have. `dropdown`
+is the conventional name for what HTML calls `<select>`.
 
-`text`, `textarea`, `file_open`, `file_save`, and `folder` widgets all
+[html5-forms]: https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input
+
+### Drag-and-drop (v0.1.11+)
+
+`text`, `textarea`, `file`, `save_file`, and `folder` widgets all
 accept file/folder drops from Explorer. The implementation is two thin
 Qt subclasses in `scriptree/ui/widgets/param_widgets.py`:
 
 - `_DroppableLineEdit(QLineEdit)` — replaces the field's text with the
-  first dropped local-file URL. Used by `text`, `file_open`,
-  `file_save`, and `folder`.
+  first dropped local-file URL. Used by `text`, `file`, `save_file`,
+  and `folder`.
 - `_DroppablePlainTextEdit(QPlainTextEdit)` — inserts dropped paths at
   the cursor, one per line. Used by `textarea`.
 
@@ -49,42 +73,43 @@ implementation's fallback.
 
 ## Legal combinations
 
-| type          | legal widgets                           |
-|---------------|-----------------------------------------|
-| `string`      | `text`, `textarea`                      |
-| `integer`     | `number`, `text`                        |
-| `float`       | `number`, `text`                        |
-| `bool`        | `checkbox`                              |
-| `path`        | `file_open`, `file_save`, `folder`      |
-| `enum`        | `dropdown`, `enum_radio`                |
-| `multiselect` | `dropdown`                              |
+| type          | legal widgets                       |
+|---------------|-------------------------------------|
+| `string`      | `text`, `textarea`                  |
+| `integer`     | `number`, `text`                    |
+| `number`      | `number`, `text`                    |
+| `boolean`     | `checkbox`                          |
+| `path`        | `file`, `save_file`, `folder`       |
+| `enum`        | `dropdown`, `radio`                 |
+| `multiselect` | `dropdown`                          |
 
 Hand-edited files with illegal combinations load, but on first save the
-editor snaps the widget to the first legal value.
+editor snaps the widget to the first legal value. `scriptree validate`
+flags the mismatch up front so you can fix it before run-time.
 
 ## Default values per type
 
 When a new param is added in the editor or when `default` is missing in
 a hand-edited file:
 
-| type          | default         |
-|---------------|-----------------|
-| `string`      | `""`            |
-| `integer`     | `0`             |
-| `float`       | `0.0`           |
-| `bool`        | `false`         |
-| `path`        | `""`            |
+| type          | default                       |
+|---------------|-------------------------------|
+| `string`      | `""`                          |
+| `integer`     | `0`                           |
+| `number`      | `0.0`                         |
+| `boolean`     | `false`                       |
+| `path`        | `""`                          |
 | `enum`        | first choice, or `""` if none |
-| `multiselect` | `[]`            |
+| `multiselect` | `[]`                          |
 
 ## Coercion on read
 
 Values come out of form widgets typed, but sidecar JSON can hold
 anything. `load_configs` coerces:
 
-- `bool` — truthy Python object → `bool`.
+- `boolean` — truthy Python object → `bool`.
 - `integer` — `int(value)`, raises `ValueError` on non-numeric.
-- `float` — `float(value)`, raises `ValueError` on non-numeric.
+- `number` — `float(value)`, raises `ValueError` on non-numeric.
 - `enum` — validated against `choices`; mismatch falls back to default.
 - `multiselect` — wrapped in list if a single string was stored.
 - `string` / `path` — `str(value)`.
@@ -94,7 +119,7 @@ from loading.
 
 ## Widget-specific fields
 
-### `file_open`, `file_save`
+### `file`, `save_file`
 
 Read `file_filter` from the param. Format is Qt's filter string:
 
@@ -190,20 +215,19 @@ heavily.
 | Position expressions | `main_w-overlay_w-20:main_h-overlay_h-20`, `(main_w-overlay_w)/2:(main_h-overlay_h)/2` |
 | Encoder profile / level | `high@4.1`, `main10@5.1` (when the CLI accepts the combined form) |
 
-#### `enum_radio` — radio buttons for mode switches
+#### `radio` — radio buttons for mode switches
 
 When the choice count is small (2–5) and the choice **gates which
-other fields below it are relevant**, use `enum_radio`. Same
-`choices` / `choice_labels` format as `dropdown`; only the rendering
-differs.
+other fields below it are relevant**, use `radio`. Same `choices` /
+`choice_labels` format as `dropdown`; only the rendering differs.
 
-##### When `enum_radio` beats `checkbox`
+##### When `radio` beats `checkbox`
 
 A checkbox conveys "optional flag, on or off." A radio conveys
 "pick one of these mutually exclusive modes." When fields below the
 control depend on the user's choice, the radio is the correct widget
 because it cues the user that **the mode is the first thing to
-decide**. Examples that should be `enum_radio`, not `checkbox`:
+decide**. Examples that should be `radio`, not `checkbox`:
 
 - **Stream copy / re-encode** for trim, concat, convert. Codec /
   preset / CRF below only matter in re-encode mode.
@@ -226,7 +250,7 @@ choice with a friendly label:
 {
   "id": "verbosity",
   "type": "enum",
-  "widget": "enum_radio",
+  "widget": "radio",
   "default": "",
   "choices": ["", "-v", "-vv", "-vvv"],
   "choice_labels": ["(none)", "Quiet", "Verbose", "Debug"]
@@ -257,7 +281,53 @@ by editing the param manually.
 ### `number`
 
 Integer spin box range: `[-2**31, 2**31 - 1]`.
-Float spin box range: `[-1e12, 1e12]` with 4 decimals.
+Number (float) spin box range: `[-1e12, 1e12]` with 4 decimals.
 
 These can be overridden per-param via optional `min` / `max` / `step`
 fields (not yet exposed in the editor UI; only reachable by hand-edit).
+
+## v0.5.0 — Canonical-name rename (schema_version 2 → 3)
+
+Files written before v0.5.0 used a mix of Python-flavoured (`bool`,
+`float`) and ScripTree-specific (`file_open`, `file_save`,
+`enum_radio`) names. v0.5.0 swaps those for the JSON-Schema- and
+HTML5-aligned names tabulated above. **This is a hard break** — v3
+loaders refuse to open v2 files, pointing the user at the migrator.
+
+### Rename map (run `scriptree migrate` to apply)
+
+| Field    | v2 (old)      | v3 (new)     |
+|----------|---------------|--------------|
+| `type`   | `bool`        | `boolean`    |
+| `type`   | `float`       | `number`     |
+| `widget` | `file_open`   | `file`       |
+| `widget` | `file_save`   | `save_file`  |
+| `widget` | `enum_radio`  | `radio`      |
+
+The migrator **also** folds in past LLM-noise aliases that the loader
+used to tolerate (these were never canonical — they were workarounds
+for upstream LLMs picking the wrong name):
+
+| Field    | LLM noise        | Canonical    |
+|----------|------------------|--------------|
+| `type`   | `int`            | `integer`    |
+| `type`   | `str`            | `string`     |
+| `widget` | `spinbox`        | `number`     |
+| `widget` | `radiobutton`    | `radio`      |
+| `widget` | `select`         | `dropdown`   |
+
+### Diagnostics
+
+On a bad type or widget value, the loader now produces a diff-style
+hint:
+
+```
+'int' is not a valid type for param 'iterations'.
+Did you mean 'integer'?
+Valid types: string, integer, number, boolean, path, enum, multiselect.
+```
+
+Run `python -m scriptree validate <path>` to check a file (or recurse
+through a directory) before run time — it catches both the loader
+errors and widget/type mismatches that the loader is too permissive to
+flag on its own.

@@ -113,9 +113,9 @@ disagree, the code wins — open an issue and fix the docs.
   "id": "python_identifier, required, unique within params[]",
   "label": "string, required",
   "description": "string, optional, default \"\"",
-  "type": "string|integer|float|bool|path|enum|multiselect",
-  "widget": "text|textarea|number|checkbox|dropdown|file_open|file_save|folder|enum_radio",
-  "required": "bool, default false",
+  "type": "string|integer|number|boolean|path|enum|multiselect",
+  "widget": "text|textarea|number|checkbox|dropdown|file|save_file|folder|radio",
+  "required": "boolean, default false",
   "default": "value of the param's type, or \"\" / null",
   "choices": ["value", "value2"],
   "choice_labels": ["Human label", "Human label 2"],
@@ -196,10 +196,10 @@ A field hidden by `visible_when`:
 |---------------|---------------------------------------|
 | `string`      | `text`, `textarea`                    |
 | `integer`     | `number`, `text`                      |
-| `float`       | `number`, `text`                      |
-| `bool`        | `checkbox`                            |
-| `path`        | `file_open`, `file_save`, `folder`    |
-| `enum`        | `dropdown`, `enum_radio`              |
+| `number`      | `number`, `text`                      |
+| `boolean`     | `checkbox`                            |
+| `path`        | `file`, `save_file`, `folder`         |
+| `enum`        | `dropdown`, `radio`                   |
 | `multiselect` | `dropdown` (multi-select mode)        |
 
 Changing `type` in the editor narrows the `widget` dropdown
@@ -232,8 +232,8 @@ value as its own label.
 ### `default` semantics
 
 - `string` / `path` — empty string `""` means "no default".
-- `integer` / `float` — `0` is the null default.
-- `bool` — `false` is the null default.
+- `integer` / `number` — `0` is the null default.
+- `boolean` — `false` is the null default.
 - `enum` — must be one of the values in `choices`, or `""` for "no
   selection".
 - `multiselect` — a list of values, may be empty.
@@ -377,7 +377,7 @@ the GUI.
 
 Field rules:
 
-- **Type** — `bool`.
+- **Type** — `boolean`.
 - **Default** — `false`.  Omitted from the JSON when at the default
   so v0.2.x files round-trip byte-identical.
 - **Permission gate** — the runner ALSO requires the
