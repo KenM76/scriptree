@@ -148,7 +148,7 @@ def _maybe_start_harness(app: QApplication) -> None:
     SECURITY: do NOT log the gate state.  A log line saying
     "harness disabled" is a side channel that tells an attacker the harness
     could be enabled.  The consumer build's correct behaviour is to make the
-    harness invisible â€” not just inactive.  Identical observable behaviour in
+    harness invisible — not just inactive.  Identical observable behaviour in
     all three failure modes:
       (a) package not installed (consumer build),
       (b) env var unset / != "1" (dev install, no harness opt-in),
@@ -156,25 +156,25 @@ def _maybe_start_harness(app: QApplication) -> None:
 
     The ONLY log emission is on success of both gates (see server.py).
     """
-    # Gate 2: env-var check comes FIRST â€” it is a cheap os.environ read and
+    # Gate 2: env-var check comes FIRST — it is a cheap os.environ read and
     # avoids even attempting the import on the common case where the env var
     # is unset.  Order per ADR-002 code-path sketch (diagram shows env-var
     # checked before import attempt).
     if os.environ.get("SCRIPTREE2_TEST_HARNESS") != "1":
-        return  # Silent â€” env-var gate not set.
+        return  # Silent — env-var gate not set.
 
     try:
         # Gate 1: package importable?  In a consumer build this raises
         # ImportError because the package is not installed.
         import scriptree2_test_harness  # noqa: F401
     except ImportError:
-        return  # Silent â€” package gate not satisfied.
+        return  # Silent — package gate not satisfied.
 
     # Both gates passed.  Hand off to the harness (it emits the loud log).
     try:
         scriptree2_test_harness.start_server(app)
     except Exception:
-        return  # Silent â€” harness startup failure must not surface to user.
+        return  # Silent — harness startup failure must not surface to user.
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def _get_snap_engine() -> SnapEngine | None:
     CRITICAL: when launched via `py -m apps.shell.main`, Python registers this
     module as `__main__` rather than `apps.shell.main`.  Other modules that
     `from scriptree.shell.main import _get_snap_engine` end up with a SECOND module
-    object whose `_SNAP_ENGINE` is None â€” so the caller sees None even after
+    object whose `_SNAP_ENGINE` is None — so the caller sees None even after
     main() set it on `__main__`.
 
     Look up `__main__` first, then fall back to this module's binding.  Same
@@ -262,7 +262,7 @@ def _on_snap_commit(
         _log(f"_on_snap_commit: calling _try_spawn_master src={source_id[:8]} tgt={target_id[:8]}")
         _try_spawn_master(src, tgt)
     elif mode != "edge":
-        _log(f"_on_snap_commit: mode={mode!r} â€” no master spawn (edge mode only)")
+        _log(f"_on_snap_commit: mode={mode!r} — no master spawn (edge mode only)")
 
 
 def _on_hexagon_moved(hex_id: str) -> None:
@@ -270,13 +270,13 @@ def _on_hexagon_moved(hex_id: str) -> None:
 
     Bug 2: when the whole dock group is translating together, every member
     fires hexagonMoved.  Suppress the undock check during coordinated group
-    moves â€” the relative positions haven't changed, so undock cannot have
+    moves — the relative positions haven't changed, so undock cannot have
     occurred.  We identify coordinated moves via _GROUP_MOVE_IN_PROGRESS:
     if ANY hex is listed there as the initiator, the move is part of a
     group drag.
     """
     group_in_progress = bool(_GROUP_MOVE_IN_PROGRESS)
-    # Rate-limited log â€” _on_hexagon_moved fires every frame during a drag.
+    # Rate-limited log — _on_hexagon_moved fires every frame during a drag.
     import time as _time
     _now = _time.monotonic()
     if not hasattr(_on_hexagon_moved, '_last_log'):
@@ -404,7 +404,7 @@ def main() -> int:
     # visible non-tool window.  Hexagons are Qt.Tool (excluded from
     # Qt's "last window" count); when a tool's QMessageBox /
     # QFileDialog / OutputDialog dismisses, Qt's default
-    # quitOnLastWindowClosed=True would invoke QApplication.quit() â€”
+    # quitOnLastWindowClosed=True would invoke QApplication.quit() —
     # taking the entire shell with it and making every hex disappear.
     # The shell's lifecycle is owned by CellRegistry, not by Qt's
     # window-counting heuristic.  See lesson
@@ -420,9 +420,9 @@ def main() -> int:
     app.setApplicationName(app_name)
     app.setApplicationVersion("0.0.1-demo")
 
-    _log(f"Starting {branding.get('appNameLong', app_name)} â€” phase-1 demo")
+    _log(f"Starting {branding.get('appNameLong', app_name)} — phase-1 demo")
 
-    # ---- Test-harness (two-gate check â€” ADR-002) ------------------------
+    # ---- Test-harness (two-gate check — ADR-002) ------------------------
     # Must run after QApplication is constructed but before any CellWindow.
     _maybe_start_harness(app)
 
@@ -481,7 +481,7 @@ def main() -> int:
     # --autoload-rings  : load all rings from user + system autoload configs.
     # --load-ring <path>: load exactly one ring from the given path.
     #
-    # Both flags are additive â€” they do NOT suppress the SCRIPTREE2_INITIAL_HEXAGONS
+    # Both flags are additive — they do NOT suppress the SCRIPTREE2_INITIAL_HEXAGONS
     # env var or the default single-hex fallback.  If you want ONLY the rings,
     # set SCRIPTREE2_INITIAL_HEXAGONS=[] (empty list) alongside the flag.
     _ring_loaded_any = False
@@ -623,7 +623,7 @@ def main() -> int:
         _log("Right-click the hexagon â†’ 'Spawn another hexagon' to get a second one,")
         _log("then drag them together to trigger snap-and-dock.")
     else:
-        _log(f"{len(spawned)} hexagons spawned. Drag them together â€” "
+        _log(f"{len(spawned)} hexagons spawned. Drag them together — "
              f"honeycomb-strict snap: same shape/orientation, full-edge share only. "
              f"Two flat-top hexes that dock will spawn a master.")
 

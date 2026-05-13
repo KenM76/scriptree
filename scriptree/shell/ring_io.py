@@ -1,5 +1,5 @@
 """
-ring_io.py â€” Save / load master-hexagon groups as .scriptreering files.
+ring_io.py — Save / load master-hexagon groups as .scriptreering files.
 
 Public API
 ----------
@@ -91,7 +91,7 @@ def _autoload_config_path(brand_name: str, scope: Literal["user", "system"]) -> 
 
 
 def _default_rings_dir(brand_name: str) -> Path:
-    """<USERPROFILE>/Documents/<BRAND>/rings/ â€” created on demand."""
+    """<USERPROFILE>/Documents/<BRAND>/rings/ — created on demand."""
     if sys.platform == "win32":
         docs = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / "Documents"
     else:
@@ -192,12 +192,12 @@ def _load_hex_fields(d: dict, size_px: int | None = None) -> dict:
     """
     shape = d.get("shape", "hexagon")
     if shape not in ("hexagon", "square"):
-        _log(f"Unknown shape {shape!r} â€” coerced to 'hexagon'")
+        _log(f"Unknown shape {shape!r} — coerced to 'hexagon'")
         shape = "hexagon"
 
     orientation = d.get("orientation", "flat-top")
     if orientation not in ("flat-top", "pointy-top"):
-        _log(f"Unknown orientation {orientation!r} â€” coerced to 'flat-top'")
+        _log(f"Unknown orientation {orientation!r} — coerced to 'flat-top'")
         orientation = "flat-top"
 
     raw_size = d.get("size_px", size_px or 56)
@@ -249,7 +249,7 @@ def save_ring(hex_window: "CellWindow", path: Path) -> None:
     hex_window._members (Amendment 2 authoritative set).
 
     Standalone case: serialises the hex itself as the master descriptor with an
-    empty members list.  The resulting .scriptreering is a valid single-hex ring â€”
+    empty members list.  The resulting .scriptreering is a valid single-hex ring —
     load_ring() will spawn one standalone hex at the saved position.
 
     Raises ValueError if hex_window.role is neither 'master' nor 'standalone'.
@@ -285,7 +285,7 @@ def save_ring(hex_window: "CellWindow", path: Path) -> None:
         for member_id, preferred_qpoint in hex_window._members.items():
             member_win = registry.get(member_id)
             if member_win is None:
-                _log(f"save_ring: member {member_id[:8]} not in registry â€” skipping")
+                _log(f"save_ring: member {member_id[:8]} not in registry — skipping")
                 continue
 
             m_dict = _hex_to_dict(member_win)
@@ -474,7 +474,7 @@ def load_ring(
             pass
         member_win.show()
 
-        # preferred_position â€” also clamp.
+        # preferred_position — also clamp.
         pref_raw = m_raw.get("preferred_position") or {}
         try:
             pref_x = int(pref_raw.get("x", mf_m["pos_x"]))
@@ -567,7 +567,7 @@ def _resolve_catalog_path(cat_path_raw: str | None, branding: dict) -> str | Non
         _log(f"_resolve_catalog_path: absolute path not found: {p}")
         return None
 
-    # Relative â€” try project root first.
+    # Relative — try project root first.
     try:
         root = _project_root()
         candidate = (root / p).resolve()
@@ -582,7 +582,7 @@ def _resolve_catalog_path(cat_path_raw: str | None, branding: dict) -> str | Non
     if fallback.exists():
         return str(fallback)
 
-    _log(f"_resolve_catalog_path: could not resolve {cat_path_raw!r} â€” treating as None")
+    _log(f"_resolve_catalog_path: could not resolve {cat_path_raw!r} — treating as None")
     return None
 
 
@@ -616,7 +616,7 @@ def list_autoload_rings(scope: Literal["user", "system"]) -> list[Path]:
 def add_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
     """Add path to scope's autoload config and register the Windows autostart entry.
 
-    Idempotent â€” adding the same path twice results in a single entry.
+    Idempotent — adding the same path twice results in a single entry.
     For 'system' scope, requires admin privileges (raises PermissionError if not).
     """
     path = Path(path).resolve()
@@ -646,7 +646,7 @@ def add_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
         )
         _log(f"add_autoload_ring: added {path_str} to {scope} config")
     else:
-        _log(f"add_autoload_ring: {path_str} already in {scope} config â€” skipped")
+        _log(f"add_autoload_ring: {path_str} already in {scope} config — skipped")
 
     # Register autostart entry.
     cmd = _build_autostart_cmd()
@@ -663,7 +663,7 @@ def remove_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
     cfg_path = _autoload_config_path(brand_name, scope)
 
     if not cfg_path.exists():
-        _log(f"remove_autoload_ring: config not found â€” nothing to remove")
+        _log(f"remove_autoload_ring: config not found — nothing to remove")
         return
 
     try:
@@ -682,11 +682,11 @@ def remove_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
         )
         _log(f"remove_autoload_ring: removed {path_str} from {scope} config")
     else:
-        _log(f"remove_autoload_ring: {path_str} not in {scope} config â€” no-op")
+        _log(f"remove_autoload_ring: {path_str} not in {scope} config — no-op")
 
     # If no rings remain, remove the autostart entry.
     if not rings:
-        _log(f"remove_autoload_ring: no rings left in {scope} â€” unregistering autostart")
+        _log(f"remove_autoload_ring: no rings left in {scope} — unregistering autostart")
         unregister_autostart(scope, brand_name)
 
 
@@ -724,13 +724,13 @@ def register_autostart(
     On non-Windows platforms, logs a warning and returns.
     """
     if sys.platform != "win32":
-        _log("register_autostart: non-Windows platform â€” no-op")
+        _log("register_autostart: non-Windows platform — no-op")
         return
 
     if brand_name is None:
         brand_name = _read_brand_name()
 
-    import winreg  # stdlib â€” Windows only
+    import winreg  # stdlib — Windows only
 
     if scope == "user":
         hive = winreg.HKEY_CURRENT_USER
@@ -768,7 +768,7 @@ def unregister_autostart(
     On non-Windows platforms, logs a warning and returns.
     """
     if sys.platform != "win32":
-        _log("unregister_autostart: non-Windows platform â€” no-op")
+        _log("unregister_autostart: non-Windows platform — no-op")
         return
 
     if brand_name is None:
@@ -792,9 +792,9 @@ def unregister_autostart(
                 winreg.DeleteValue(k, brand_name)
                 _log(f"unregister_autostart: deleted Run[{brand_name!r}] scope={scope}")
             except FileNotFoundError:
-                _log(f"unregister_autostart: Run[{brand_name!r}] not found â€” no-op")
+                _log(f"unregister_autostart: Run[{brand_name!r}] not found — no-op")
     except FileNotFoundError:
-        _log(f"unregister_autostart: subkey not found â€” no-op")
+        _log(f"unregister_autostart: subkey not found — no-op")
     except Exception as exc:
         _log(f"unregister_autostart: winreg error: {exc!r}")
         raise
@@ -822,7 +822,7 @@ def elevate_for_system_autostart(ring_path: Path) -> None:
     On non-Windows or if ShellExecuteW fails, logs an error.
     """
     if sys.platform != "win32":
-        _log("elevate_for_system_autostart: non-Windows â€” cannot elevate")
+        _log("elevate_for_system_autostart: non-Windows — cannot elevate")
         return
 
     import ctypes
@@ -833,7 +833,7 @@ def elevate_for_system_autostart(ring_path: Path) -> None:
 
     ret = ctypes.windll.shell32.ShellExecuteW(
         0,          # hwnd
-        "runas",    # verb â€” triggers UAC prompt
+        "runas",    # verb — triggers UAC prompt
         exe,
         args,
         None,       # working directory (inherit)

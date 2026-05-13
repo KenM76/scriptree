@@ -1,8 +1,8 @@
 """
-snap_engine.py â€” SnapEngine: continuous 60 Hz honeycomb-strict snap detection.
+snap_engine.py — SnapEngine: continuous 60 Hz honeycomb-strict snap detection.
 
 Architecture: ADR-001 Â§sub-decision-3 (superseding Amendment 1).
-Platform: Win11 primary (uses QTimer in the Qt event loop â€” no threads).
+Platform: Win11 primary (uses QTimer in the Qt event loop — no threads).
 
 Algorithm summary (honeycomb-strict, Rule 2)
 ---------------------------------------------
@@ -14,21 +14,21 @@ On drag-attach:
     - If D's centre is within snap_distance_px of any slot, record candidate.
   - Pick nearest candidate across all targets.
   - Emit snapPreview(source_id, target_id, "edge", geom) while candidate exists.
-  - On drag-end (detach_drag): commit â€” move D to the exact slot top-left.
+  - On drag-end (detach_drag): commit — move D to the exact slot top-left.
 
 Why position-snap rather than edge-midpoint matching
 -----------------------------------------------------
 The previous engine matched edge midpoints with normal-vector anti-parallelism.
-This required a 15Â° tolerance and still fired for non-honeycomb arrangements
+This required a 15° tolerance and still fired for non-honeycomb arrangements
 (e.g. edge touching vertex).  The new model is simpler:
 
   Two hexagons form a honeycomb pair iff D's centre == one of T's neighbour slots.
 
 This is an exact geometric statement.  The snap threshold is the tolerance.
-Vertex snap is GONE â€” no vertex-to-vertex path exists.  Two hexagons whose
+Vertex snap is GONE — no vertex-to-vertex path exists.  Two hexagons whose
 vertices touch but whose edges do NOT share a full face will not snap.
 
-Rule 3 â€” cross-shape / cross-orientation: if D._shape != T._shape or
+Rule 3 — cross-shape / cross-orientation: if D._shape != T._shape or
 D._orientation != T._orientation, no snap.  Honeycomb tiling requires identical
 tiles.
 
@@ -57,7 +57,7 @@ def _log(msg: str) -> None:
 # Honeycomb neighbour slot offsets (center-to-center, relative to target)
 # ---------------------------------------------------------------------------
 # For a FLAT-TOP hex of side length R = size_px/2:
-#   Horizontal spacing between adjacent centres: 2 * R * cos(30Â°) = size_px * sqrt(3)/2
+#   Horizontal spacing between adjacent centres: 2 * R * cos(30°) = size_px * sqrt(3)/2
 #     That is the flat-to-flat distance (= apothem * 2).  BUT for honeycomb the
 #     off-axis pairs (NE/NW/SE/SW) have x-offset = R * 3/2 = size_px * 3/4 and
 #     y-offset = R * sqrt(3)/2 = size_px * sqrt(3)/4.
@@ -72,7 +72,7 @@ def _log(msg: str) -> None:
 #   SE: (+3/4,         +sqrt(3)/4 )
 #   SW: (-3/4,         +sqrt(3)/4 )
 #
-# For POINTY-TOP: rotate the above offsets by 90Â°:
+# For POINTY-TOP: rotate the above offsets by 90°:
 #   (x, y)  â†’  (-y, x)
 #   E:  (+sqrt(3)/2,  0          )   â† was N rotated
 #   W:  (-sqrt(3)/2,  0          )   â† was S rotated
@@ -81,7 +81,7 @@ def _log(msg: str) -> None:
 #   NW: (-sqrt(3)/4,  -3/4       )   â† was NE rotated
 #   SW: (-sqrt(3)/4,  +3/4       )   â† was SE rotated
 #
-# For SQUARE (4 neighbours, any orientation â€” same-orientation requirement applies):
+# For SQUARE (4 neighbours, any orientation — same-orientation requirement applies):
 #   N:  ( 0,  -1 )
 #   S:  ( 0,  +1 )
 #   E:  (+1,   0 )
@@ -91,7 +91,7 @@ _SQRT3_HALF  = math.sqrt(3) / 2   # â‰ˆ 0.8660
 _SQRT3_QRTR  = math.sqrt(3) / 4   # â‰ˆ 0.4330
 
 # Raw offsets as (dx_factor, dy_factor) Ã— size_px.
-# Indices 0â€“5 match a clockwise ordering for readability; order doesn't matter.
+# Indices 0–5 match a clockwise ordering for readability; order doesn't matter.
 _FLAT_TOP_OFFSETS: list[tuple[float, float]] = [
     ( 0.0,          -_SQRT3_HALF),   # N
     (+0.75,         -_SQRT3_QRTR),   # NE
@@ -141,7 +141,7 @@ def _neighbour_slot_centres(
 
 
 # ---------------------------------------------------------------------------
-# _SnapCandidate â€” internal result of one tick evaluation
+# _SnapCandidate — internal result of one tick evaluation
 # ---------------------------------------------------------------------------
 
 class _SnapCandidate:
@@ -219,7 +219,7 @@ class SnapEngine(QObject):
         # Invalidated by hexagonMoved (source only) and hexagonReshaped (any).
         self._cache: dict[str, tuple[float, float, int, str, str]] = {}
 
-        # Timer â€” fires at 16 ms (~60 Hz).
+        # Timer — fires at 16 ms (~60 Hz).
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
@@ -228,7 +228,7 @@ class SnapEngine(QObject):
         self._last_log_time: float = 0.0
         self._last_tick_log_time: float = 0.0
 
-        # Bug A fix â€” Belt: single-fire commit guard.
+        # Bug A fix — Belt: single-fire commit guard.
         # Cleared at attach_drag; set immediately before snapCommit.emit.
         self._committed_ids: set[str] = set()
 
@@ -273,7 +273,7 @@ class SnapEngine(QObject):
         if not self._timer.isActive():
             self._timer.start()
         _log(
-            f"attach_drag({hex_id[:8]}) â€” "
+            f"attach_drag({hex_id[:8]}) — "
             f"dragging={[h[:8] for h in self._dragging]} "
             f"timer_active={self._timer.isActive()}"
         )
@@ -281,11 +281,11 @@ class SnapEngine(QObject):
     def detach_drag(self, hex_id: str) -> None:
         """Called when a hex drag ends. Commits snap if preview was active.
 
-        Bug A fix â€” Belt: _committed_ids prevents a double-commit if
+        Bug A fix — Belt: _committed_ids prevents a double-commit if
         detach_drag is called re-entrantly during the snap-nudge move_to().
         """
         _log(
-            f"detach_drag({hex_id[:8]}) â€” "
+            f"detach_drag({hex_id[:8]}) — "
             f"preview_active={hex_id in self._active_previews} "
             f"already_committed={hex_id in self._committed_ids} "
             f"previews={[k[:8] for k in self._active_previews]}"
@@ -293,7 +293,7 @@ class SnapEngine(QObject):
         self._dragging.discard(hex_id)
 
         if hex_id in self._committed_ids:
-            _log(f"detach_drag({hex_id[:8]}) â€” already committed this drag, skipping")
+            _log(f"detach_drag({hex_id[:8]}) — already committed this drag, skipping")
             self._active_previews.pop(hex_id, None)
             if not self._dragging and self._timer.isActive():
                 self._timer.stop()
@@ -324,15 +324,15 @@ class SnapEngine(QObject):
             else:
                 _log(
                     f"detach_drag: source {candidate.source_id[:8]} not in registry "
-                    f"â€” snapCommit skipped"
+                    f"— snapCommit skipped"
                 )
         else:
-            _log(f"detach_drag({hex_id[:8]}) â€” no preview active, no commit")
+            _log(f"detach_drag({hex_id[:8]}) — no preview active, no commit")
 
         if not self._dragging and self._timer.isActive():
             self._timer.stop()
         _log(
-            f"detach_drag({hex_id[:8]}) done â€” "
+            f"detach_drag({hex_id[:8]}) done — "
             f"dragging now={[h[:8] for h in self._dragging]}"
         )
 
@@ -359,11 +359,11 @@ class SnapEngine(QObject):
             self._cache.pop(src_id, None)
             src_cx, src_cy, src_size, src_shape, src_orient = self._get_pos(src)
 
-            # Skip committed drags (belt guard â€” shouldn't fire mid-drag but defensive).
+            # Skip committed drags (belt guard — shouldn't fire mid-drag but defensive).
             if src_id in self._committed_ids:
                 continue
 
-            # Bug 1 fix â€” snap-back-to-own-group:
+            # Bug 1 fix — snap-back-to-own-group:
             # Do NOT exclude the dragging hex's own group members from snap
             # candidates.  Excluding them (the old behaviour) prevented a
             # separated member from snapping back onto its own master's cluster.
@@ -375,14 +375,14 @@ class SnapEngine(QObject):
             best: _SnapCandidate | None = None
 
             for tgt in self._registry.others(src_id):
-                # (No group-membership filter here â€” see Bug 1 fix comment above.)
+                # (No group-membership filter here — see Bug 1 fix comment above.)
 
-                # Bug 2 fix â€” master-of-master guard:
+                # Bug 2 fix — master-of-master guard:
                 # Masters are anchors, not honeycomb cells; they have no
                 # edges to dock to.  Allowing a master as a snap target
                 # causes _try_spawn_master(src, master) to run, which either
                 # absorbs the master as a member or spawns a second master
-                # between them â€” both paths are wrong.  Skip all masters.
+                # between them — both paths are wrong.  Skip all masters.
                 if tgt.role == "master":
                     continue
 

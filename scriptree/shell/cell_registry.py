@@ -1,5 +1,5 @@
 """
-cell_registry.py â€” CellRegistry singleton.
+cell_registry.py — CellRegistry singleton.
 
 Owns all live CellWindow instances in this process. Acts as the
 publish/subscribe bus for dock and lifecycle events.
@@ -43,7 +43,7 @@ class CellRegistry(QObject):
         Emitted when a MasterHexagon is hidden (undocked) or destroyed (source closed).
     """
 
-    # Singleton storage â€” attached to QApplication so it lives as long as the app.
+    # Singleton storage — attached to QApplication so it lives as long as the app.
     _INSTANCE: "CellRegistry | None" = None
 
     # ---- Signals -----------------------------------------------------------
@@ -78,7 +78,7 @@ class CellRegistry(QObject):
         """
         hid = hex_win._id
         if hid in self._hexagons:
-            _log(f"register: {hid} already registered â€” no-op")
+            _log(f"register: {hid} already registered — no-op")
             return
         self._hexagons[hid] = hex_win
         _log(f"register: {hid} role={hex_win.role} total={len(self._hexagons)}")
@@ -90,7 +90,7 @@ class CellRegistry(QObject):
         Called from CellWindow.closeEvent. Emits hexagonClosed.
         """
         if hex_id not in self._hexagons:
-            _log(f"unregister: {hex_id} not found â€” no-op")
+            _log(f"unregister: {hex_id} not found — no-op")
             return
         del self._hexagons[hex_id]
         _log(f"unregister: {hex_id} remaining={len(self._hexagons)}")
@@ -143,7 +143,7 @@ class CellRegistry(QObject):
     # ---- Legacy shim (kept for SnapEngine compatibility) -------------------
 
     def dock_group_of(self, hex_id: str) -> set[str]:
-        """Compatibility shim â€” returns hex_id's group including the master.
+        """Compatibility shim — returns hex_id's group including the master.
 
         The snap engine calls this to skip same-group members during snap
         candidate evaluation. Under Amendment 2, a 'group' is:

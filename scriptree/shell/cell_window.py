@@ -1,5 +1,5 @@
 """
-cell_window.py â€” CellWindow, the branded floating hexagonal launcher.
+cell_window.py — CellWindow, the branded floating hexagonal launcher.
 
 Architecture: see docs/architecture/ADR-001-overlay-and-docking.md
 Platform target: Win11 (Phase 0/1 demo). Mac/Linux behaviour: see ADR-001 Â§cross-platform.
@@ -8,7 +8,7 @@ Coordinate convention
 ---------------------
 All sizes and positions passed to setMask / resize / move are in *logical* pixels
 (device-independent units).  Qt scales them to physical pixels via devicePixelRatio
-internally.  We do NOT multiply by devicePixelRatio ourselves â€” that double-scales.
+internally.  We do NOT multiply by devicePixelRatio ourselves — that double-scales.
 """
 
 from __future__ import annotations
@@ -59,13 +59,14 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 
 # ---------------------------------------------------------------------------
-# Logging helper (stderr only â€” no print spam on stdout)
+# Logging helper (stderr only — no print spam on stdout)
 # ---------------------------------------------------------------------------
 
 def _log(msg: str) -> None:
@@ -73,17 +74,17 @@ def _log(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ShapeGeometry â€” returned by compute_polygon(), consumed by SnapEngine
+# ShapeGeometry — returned by compute_polygon(), consumed by SnapEngine
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ShapeGeometry:
     """Full geometric description of a hexagon/square at a given size.
 
-    polygon       â€” QPolygon of integer logical-pixel vertices (for setMask and drawPolygon).
-    vertices      â€” same vertices as QPointF list (for snap math, float precision).
-    edge_midpointsâ€” one QPointF per edge, widget-local coords.
-    edge_normals  â€” outward unit normal QPointF per edge (direction only, no magnitude).
+    polygon       — QPolygon of integer logical-pixel vertices (for setMask and drawPolygon).
+    vertices      — same vertices as QPointF list (for snap math, float precision).
+    edge_midpoints— one QPointF per edge, widget-local coords.
+    edge_normals  — outward unit normal QPointF per edge (direction only, no magnitude).
     """
     polygon: QPolygon
     vertices: list[QPointF]
@@ -98,7 +99,7 @@ class ShapeGeometry:
 def _regular_polygon_geometry(n: int, start_deg: float, size_px: int) -> ShapeGeometry:
     """Compute a regular n-gon inscribed in a size_px x size_px square.
 
-    start_deg â€” angle of the first vertex in degrees (counter-clockwise from +X).
+    start_deg — angle of the first vertex in degrees (counter-clockwise from +X).
     Vertices are ordered clockwise in Qt screen space (y increases downward).
     """
     cx = cy = size_px / 2.0
@@ -133,7 +134,7 @@ def _regular_polygon_geometry(n: int, start_deg: float, size_px: int) -> ShapeGe
             normals.append(QPointF(0.0, 0.0))
             continue
 
-        # Outward normal: rotate edge direction 90Â° clockwise (in Qt screen coords,
+        # Outward normal: rotate edge direction 90° clockwise (in Qt screen coords,
         # y increases downward, so clockwise rotation is (ey, -ex)).
         # However, for a convex polygon with vertices ordered clockwise in screen space,
         # the OUTWARD normal points away from the centre. We verify by checking
@@ -166,12 +167,12 @@ def compute_polygon(shape: str, size_px: int, orientation: str) -> ShapeGeometry
     """
     s = (shape or "hexagon").lower()
     if s == "hexagon":
-        # flat-top: first vertex at 0Â° (right), giving horizontal top/bottom edges.
-        # pointy-top: first vertex at -90Â° (top), giving vertical top/bottom vertices.
+        # flat-top: first vertex at 0° (right), giving horizontal top/bottom edges.
+        # pointy-top: first vertex at -90° (top), giving vertical top/bottom vertices.
         start_deg = 0.0 if orientation == "flat-top" else -90.0
         return _regular_polygon_geometry(n=6, start_deg=start_deg, size_px=size_px)
     if s == "square":
-        # Square at 45Â° rotation so vertices are at corners, edges face N/E/S/W.
+        # Square at 45° rotation so vertices are at corners, edges face N/E/S/W.
         return _regular_polygon_geometry(n=4, start_deg=45.0, size_px=size_px)
     _log(f"Unknown shape {shape!r}; falling back to hexagon/flat-top.")
     return _regular_polygon_geometry(n=6, start_deg=0.0, size_px=size_px)
@@ -311,12 +312,12 @@ class SettingsDialog(QDialog):
     window title which reads from the branding dict passed at construction.
 
     Controls:
-        1. Shape        QComboBox â€” Hexagon | Square
-        2. Orientation  QComboBox â€” Flat-top | Pointy-top (disabled for Square)
-        3. Size         QSlider   â€” 32â€“96 px, step 4, live preview
-        4. Transparency QSlider   â€” 30â€“100 (maps to 0.30â€“1.00 alpha), live preview
+        1. Shape        QComboBox — Hexagon | Square
+        2. Orientation  QComboBox — Flat-top | Pointy-top (disabled for Square)
+        3. Size         QSlider   — 32–96 px, step 4, live preview
+        4. Transparency QSlider   — 30–100 (maps to 0.30–1.00 alpha), live preview
         5. Always on top QCheckBox
-        6. Rotate 90Â°  QPushButton â€” cycles orientation (no-op for Square)
+        6. Rotate 90°  QPushButton — cycles orientation (no-op for Square)
 
     Footer:
         - Reset to defaults
@@ -340,16 +341,56 @@ class SettingsDialog(QDialog):
 
         self._hex = hexagon
         brand = hexagon._branding.get("appName", "App")
-        self.setWindowTitle(f"{brand} â€” Settings")
+        self.setWindowTitle(f"{brand} — Settings")
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setMinimumWidth(300)
 
         # Prevent the dialog from blocking the hexagon (modeless).
         self.setModal(False)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
+        # v0.5.1 — tabbed layout.  The flat single-column form was
+        # getting long enough that it routinely opened taller than
+        # the desktop work area when launched from a cell sitting
+        # near a screen edge.  Four tabs ("Shape & Size", "Click
+        # action", "Colours", "Label") keep any single page short
+        # enough to fit on a typical 1080 p display without
+        # scrolling.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setSpacing(8)
+        outer_layout.setContentsMargins(12, 12, 12, 12)
+
+        self._tabs = QTabWidget()
+        outer_layout.addWidget(self._tabs)
+
+        # Each tab is a plain QWidget whose own QVBoxLayout receives
+        # the section's controls.  Below the section code reassigns
+        # the local variable ``layout`` to the appropriate per-tab
+        # layout before each section so the existing
+        # ``layout.addWidget`` / ``layout.addLayout`` calls drop the
+        # controls into the right tab — minimising diff vs. the
+        # pre-tabbed structure.
+        shape_tab = QWidget()
+        shape_tab_layout = QVBoxLayout(shape_tab)
+        shape_tab_layout.setSpacing(10)
+        self._tabs.addTab(shape_tab, "Shape && Size")
+
+        click_tab = QWidget()
+        click_tab_layout = QVBoxLayout(click_tab)
+        click_tab_layout.setSpacing(10)
+        self._tabs.addTab(click_tab, "Click action")
+
+        colour_tab = QWidget()
+        colour_tab_layout = QVBoxLayout(colour_tab)
+        colour_tab_layout.setSpacing(10)
+        self._tabs.addTab(colour_tab, "Colours")
+
+        label_tab = QWidget()
+        label_tab_layout = QVBoxLayout(label_tab)
+        label_tab_layout.setSpacing(10)
+        self._tabs.addTab(label_tab, "Label")
+
+        # First section drops into the shape tab.
+        layout = shape_tab_layout
 
         # ---- 1. Shape -------------------------------------------------------
         shape_row = QHBoxLayout()
@@ -387,7 +428,7 @@ class SettingsDialog(QDialog):
 
         # ---- 4. Transparency ------------------------------------------------
         transp_row = QVBoxLayout()
-        # Store transparency as int 30â€“100; maps to 0.30â€“1.00 alpha multiplier.
+        # Store transparency as int 30–100; maps to 0.30–1.00 alpha multiplier.
         transp_int = round(hexagon._transparency * 100)
         self._transp_label = QLabel(f"Transparency: {transp_int}%")
         self._transp_slider = QSlider(Qt.Horizontal)
@@ -411,6 +452,10 @@ class SettingsDialog(QDialog):
             "Cycle between Flat-top and Pointy-top orientations (no-op for Square)"
         )
         layout.addWidget(self._rotate_btn)
+        layout.addStretch(1)
+
+        # Switch to the click-action tab.
+        layout = click_tab_layout
 
         # ---- 6.5 Click action (V3 v0.3.5+) ---------------------------------
         # Two dropdowns:
@@ -516,6 +561,10 @@ class SettingsDialog(QDialog):
         self._click_action_combo.currentIndexChanged.connect(
             lambda _i: _refresh_run_mode_enabled()
         )
+        layout.addStretch(1)
+
+        # Switch to the colours tab.
+        layout = colour_tab_layout
 
         # ---- 6.6 Cell colour (V3 v0.3.6+) ----------------------------------
         # Three synced controls + reset:
@@ -947,6 +996,10 @@ class SettingsDialog(QDialog):
             lambda _v: _on_text_hue_changed()
         )
         self._text_color_reset_btn.clicked.connect(_on_text_color_reset)
+        layout.addStretch(1)
+
+        # Switch to the label tab.
+        layout = label_tab_layout
 
         # ---- 7. Cell label (icon / custom text / default auto) -------------
         # Per user spec (2026-05-07): the per-cell Settings dialog needs
@@ -1083,18 +1136,19 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(label_grp)
         self._update_label_controls_enabled()
+        layout.addStretch(1)
 
-        # ---- Separator ------------------------------------------------------
-        layout.addSpacing(4)
-
-        # ---- Footer ---------------------------------------------------------
+        # ---- Footer (lives outside the tab widget) -------------------------
+        # The Reset / Close buttons apply to the whole dialog regardless of
+        # which tab is active, so they go in the outer layout below the
+        # QTabWidget.
         footer = QHBoxLayout()
         self._reset_btn = QPushButton("Reset to defaults")
         footer.addWidget(self._reset_btn)
         footer.addStretch()
         self._close_btn = QPushButton("Close")
         footer.addWidget(self._close_btn)
-        layout.addLayout(footer)
+        outer_layout.addLayout(footer)
 
         # ---- Initial orientation enabled state ------------------------------
         self._update_orient_enabled()
@@ -1133,6 +1187,61 @@ class SettingsDialog(QDialog):
         )
         self._icon_embed_btn.clicked.connect(self._on_icon_embed)
         self._icon_unembed_btn.clicked.connect(self._on_icon_unembed)
+
+    # ------------------------------------------------------------------
+    # Show-time geometry — clamp into the visible work area
+    # ------------------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """Ensure the dialog lands fully on a connected display.
+
+        The dialog is launched from a cell that may sit anywhere on
+        the desktop, including pressed against a screen edge.  Before
+        v0.5.1 the dialog's default position routinely landed mostly
+        off-screen because Qt placed it relative to the parent cell.
+        We override ``showEvent`` to find the screen the dialog's
+        upper-left corner currently maps to (or, if it maps to none,
+        the screen nearest the cell), then translate the dialog so
+        the entire frame fits inside that screen's available area
+        (``availableGeometry`` excludes the taskbar / dock).
+        """
+        super().showEvent(event)
+        try:
+            self._clamp_to_screen()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"SettingsDialog._clamp_to_screen failed: {exc!r}")
+
+    def _clamp_to_screen(self) -> None:
+        from PySide6.QtGui import QGuiApplication
+        # Use the dialog's current top-left as the hint.  If Qt has
+        # already snapped it somewhere, that point is on whichever
+        # screen Qt thinks owns the dialog.
+        geom = self.frameGeometry()
+        # Pick the screen containing the top-left of the dialog;
+        # fall back to the screen under the parent cell; fall back
+        # again to the primary screen.
+        screen = QGuiApplication.screenAt(geom.topLeft())
+        if screen is None and self._hex is not None:
+            screen = QGuiApplication.screenAt(self._hex.frameGeometry().center())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return  # No screens? Nothing sensible we can do.
+        avail = screen.availableGeometry()
+        new_x = geom.x()
+        new_y = geom.y()
+        # If wider/taller than the screen, pin to the top-left
+        # corner and let the user scroll/resize.  Otherwise clamp.
+        if geom.width() <= avail.width():
+            new_x = min(max(new_x, avail.left()), avail.right() - geom.width())
+        else:
+            new_x = avail.left()
+        if geom.height() <= avail.height():
+            new_y = min(max(new_y, avail.top()), avail.bottom() - geom.height())
+        else:
+            new_y = avail.top()
+        if (new_x, new_y) != (geom.x(), geom.y()):
+            self.move(new_x, new_y)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1457,13 +1566,13 @@ class SettingsDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# PreferencesDialog â€” app-wide defaults (not per-hex)
+# PreferencesDialog — app-wide defaults (not per-hex)
 # ---------------------------------------------------------------------------
 
 class PreferencesDialog(QDialog):
     """Modal app-wide preferences dialog.
 
-    Opened from any hex's right-click â†’ "Preferencesâ€¦".
+    Opened from any hex's right-click â†’ "Preferences…".
 
     Sections
     --------
@@ -1612,7 +1721,7 @@ class PreferencesDialog(QDialog):
         self._catalog_dir_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._catalog_dir_value: str = cur_catalog_dir
         catalog_row.addWidget(self._catalog_dir_edit, stretch=1)
-        browse_btn = QPushButton("Browseâ€¦")
+        browse_btn = QPushButton("Browse…")
         browse_btn.setFixedWidth(72)
         browse_btn.clicked.connect(self._on_browse_catalog_dir)
         catalog_row.addWidget(browse_btn)
@@ -1757,7 +1866,7 @@ class PreferencesDialog(QDialog):
         s.sync()
 
         _log(
-            f"PreferencesDialog: saved app/* â€” shape={shape_key} orient={orient_key} "
+            f"PreferencesDialog: saved app/* — shape={shape_key} orient={orient_key} "
             f"size={size_px} transp={transp:.2f} aot={aot} snap={snap_px} "
             f"hist_limit={hist_limit} autoload={autoload}"
         )
@@ -1837,7 +1946,7 @@ class _SnapPreviewOverlay(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        # Never accept input â€” it's purely visual.
+        # Never accept input — it's purely visual.
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
         palette = branding.get("palette", {})
@@ -1906,19 +2015,19 @@ class _SnapPreviewOverlay(QMainWindow):
 
 
 # ---------------------------------------------------------------------------
-# _ShakeDetector â€” shake-to-unassociate (Bug 4)
+# _ShakeDetector — shake-to-unassociate (Bug 4)
 # ---------------------------------------------------------------------------
 # Standard mobile-app shake pattern: sample drag-direction at each move event
 # using a sliding window of recent direction vectors.  Count direction
-# reversals (consecutive vectors whose dot product is negative â€” they oppose
+# reversals (consecutive vectors whose dot product is negative — they oppose
 # each other).  If reversals exceed REVERSAL_THRESHOLD within WINDOW_MS, the
 # shake is considered detected.
 #
 # Tuning constants (user-adjustable in a future settings panel):
-#   BUFFER_SIZE         â€” number of direction samples in the sliding window.
-#   REVERSAL_THRESHOLD  â€” minimum reversals to trigger a shake.
-#   WINDOW_MS           â€” time window in milliseconds; older samples are pruned.
-#   MIN_MOVE_PX         â€” minimum pixel movement to register a direction sample
+#   BUFFER_SIZE         — number of direction samples in the sliding window.
+#   REVERSAL_THRESHOLD  — minimum reversals to trigger a shake.
+#   WINDOW_MS           — time window in milliseconds; older samples are pruned.
+#   MIN_MOVE_PX         — minimum pixel movement to register a direction sample
 #                         (prevents noise at very slow drags from creating spurious
 #                         reversal counts).
 
@@ -2008,8 +2117,8 @@ class CellWindow(QMainWindow):
 
     Instance roles
     --------------
-    role = 'standalone' â€” an ordinary user-spawned hexagon.
-    role = 'master'     â€” spawned when two standalone hexes dock edge-to-edge.
+    role = 'standalone' — an ordinary user-spawned hexagon.
+    role = 'master'     — spawned when two standalone hexes dock edge-to-edge.
                           Carries source_a_id and source_b_id.
 
     Signals
@@ -2019,10 +2128,10 @@ class CellWindow(QMainWindow):
         invalidates its vertex cache for this hex.
 
     Public harness-driveable hooks (ADR-001 Â§harness-driveable contract):
-        move_to(x, y)    â€” move to logical screen coords
-        click(mode)      â€” fire single/double/right click handler
-        dock_with(other) â€” programmatic edge-dock (picks best edge pair)
-        dump_state()     â€” serialisable snapshot dict
+        move_to(x, y)    — move to logical screen coords
+        click(mode)      — fire single/double/right click handler
+        dock_with(other) — programmatic edge-dock (picks best edge pair)
+        dump_state()     — serialisable snapshot dict
     """
 
     reshaped = Signal(str)   # hex_id
@@ -2039,7 +2148,7 @@ class CellWindow(QMainWindow):
         is_forest_master: bool = False,
     ) -> None:
         # ----------------------------------------------------------------
-        # Window flags â€” exact set from ADR-001 Â§sub-decision-2
+        # Window flags — exact set from ADR-001 Â§sub-decision-2
         # ----------------------------------------------------------------
         super().__init__(
             parent,
@@ -2137,7 +2246,7 @@ class CellWindow(QMainWindow):
         self._highlight_color = _parse_rgba_hex(palette.get("hexHighlight", "60a5faff"))
         self._accent_color    = _parse_rgba_hex(palette.get("accent",       "f59e0bff"))
         self._menu_bg_color   = _parse_rgba_hex(palette.get("menuBg",       "0f172af0"))
-        # Bug 5 â€” unassociated standalone hex gets a green outline.
+        # Bug 5 — unassociated standalone hex gets a green outline.
         # Tailwind emerald-500 (#10b981) is the default; overridable in branding.
         self._unassociated_stroke_color = _parse_rgba_hex(
             palette.get("unassociatedStroke", "10b981ff")
@@ -2152,7 +2261,7 @@ class CellWindow(QMainWindow):
         # The constructor parameter overrides the persisted value so that
         # clone-spawn can force-inherit the parent's catalog even when the
         # new hex has no persisted setting yet.
-        # Masters always use None â€” they show the merged tree of two sources.
+        # Masters always use None — they show the merged tree of two sources.
         # ----------------------------------------------------------------
         self._catalog_path: str | None = None
 
@@ -2201,7 +2310,7 @@ class CellWindow(QMainWindow):
 
         # ----------------------------------------------------------------
         # Load persisted settings (overrides branding defaults).
-        # Masters get fresh branding defaults â€” they do NOT inherit
+        # Masters get fresh branding defaults — they do NOT inherit
         # per-hex settings of their source hexes.
         # ----------------------------------------------------------------
         if role == "standalone":
@@ -2242,9 +2351,9 @@ class CellWindow(QMainWindow):
         self._hovered: bool = False
 
         # Manual drag state.
-        # _press_global_pos  â€” where the mouse was pressed (global px).
-        # _drag_offset       â€” global press pos minus window top-left at press.
-        # _drag_started      â€” True once the 4 px manhattan threshold is crossed.
+        # _press_global_pos  — where the mouse was pressed (global px).
+        # _drag_offset       — global press pos minus window top-left at press.
+        # _drag_started      — True once the 4 px manhattan threshold is crossed.
         #
         # We use FULLY MANUAL drag (no startSystemMove / DWM involvement).
         # Every previous attempt to make startSystemMove cooperate with the snap
@@ -2260,33 +2369,33 @@ class CellWindow(QMainWindow):
         # Rate-limit timestamps for per-frame event logs (move, tick).
         self._last_move_log_time: float = 0.0
 
-        # Bug 2 â€” group-move: remember position at start of each moveEvent
+        # Bug 2 — group-move: remember position at start of each moveEvent
         # so we can compute the per-frame delta.
         self._last_pos: QPoint | None = None
 
         # ----------------------------------------------------------------
-        # Dock state â€” Amendment 2 (group-association model)
+        # Dock state — Amendment 2 (group-association model)
         # ----------------------------------------------------------------
 
         # For STANDALONE hexes:
-        #   _group_master_id â€” id of the master whose group this hex belongs to.
+        #   _group_master_id — id of the master whose group this hex belongs to.
         #                      None = not in any group.
-        #   _docked_to       â€” ids of hexes currently positionally adjacent
+        #   _docked_to       — ids of hexes currently positionally adjacent
         #                      (touching honeycomb edges). Cleared on break-free.
         self._group_master_id: str | None = None
         self._docked_to: set[str] = set()
 
-        # Legacy shim â€” kept so SnapEngine's dock_group_of call (which reads
+        # Legacy shim — kept so SnapEngine's dock_group_of call (which reads
         # _dock_partners on some code paths) does not crash in-flight.
         # _dock_partners is no longer the source of truth for group membership.
         # Use _group_master_id / _docked_to instead.
-        self._dock_partners: set[str] = set()   # DEPRECATED â€” shim only
+        self._dock_partners: set[str] = set()   # DEPRECATED — shim only
 
         # For MASTER hexes:
-        #   _members     â€” {member_id: QPoint} â€” every group member and its
+        #   _members     — {member_id: QPoint} — every group member and its
         #                  current preferred screen position. ALWAYS a real
         #                  QPoint (never None).
-        #   _positioned  â€” subset of _members currently in the contiguous
+        #   _positioned  — subset of _members currently in the contiguous
         #                  honeycomb cluster anchored at this master.
         #                  Master-drag translates only _positioned members.
         self._members: dict[str, QPoint] = {}
@@ -2295,7 +2404,7 @@ class CellWindow(QMainWindow):
         # Edge-fold auto-hide set (master only).
         # When the master is dragged near a screen edge, positioned members
         # whose bounding box would be >50% off-screen are hidden transiently.
-        # These ids remain in _members and _positioned â€” only their visibility
+        # These ids remain in _members and _positioned — only their visibility
         # is suppressed.  _auto_hidden is purely transient view state and is
         # NOT serialised to .scriptreering files.
         self._auto_hidden: set[str] = set()
@@ -2319,7 +2428,7 @@ class CellWindow(QMainWindow):
         # directly without ``getattr(..., None)``.
         self._saved_ring_path = None  # type: ignore[assignment]
 
-        # Creation timestamp â€” used by _try_spawn_master to pick the oldest
+        # Creation timestamp — used by _try_spawn_master to pick the oldest
         # canonical master when two groups merge.
         import time as _time_mod
         self._creation_time: float = _time_mod.monotonic()
@@ -2327,26 +2436,26 @@ class CellWindow(QMainWindow):
         # ----------------------------------------------------------------
         # Master collapse/expand state machine.
         # Only meaningful when self.role == 'master'.
-        # 'expanded'   â€” member hexes visible at their stored positions.
-        # 'collapsing' â€” animation in flight toward master's centre.
-        # 'collapsed'  â€” member hexes hidden, tucked inside master.
-        # 'expanding'  â€” animation in flight outward to stored positions.
+        # 'expanded'   — member hexes visible at their stored positions.
+        # 'collapsing' — animation in flight toward master's centre.
+        # 'collapsed'  — member hexes hidden, tucked inside master.
+        # 'expanding'  — animation in flight outward to stored positions.
         # ----------------------------------------------------------------
         self._collapse_state: str = "expanded"
         # _home_positions is kept as a shim alias for _members so that
         # any remaining internal call to _shift_home_positions still works.
-        # It IS the same dict object â€” mutations via either name are shared.
+        # It IS the same dict object — mutations via either name are shared.
         self._home_positions: dict[str, QPoint] = self._members
-        # Running animations keyed by hex_id â€” kept alive to avoid GC.
+        # Running animations keyed by hex_id — kept alive to avoid GC.
         self._collapse_animations: dict[str, QPropertyAnimation] = {}
 
         # ----------------------------------------------------------------
-        # Settings dialog (lazy â€” created on first open, then reused)
+        # Settings dialog (lazy — created on first open, then reused)
         # ----------------------------------------------------------------
         self._settings_dialog: SettingsDialog | None = None
 
         # ----------------------------------------------------------------
-        # Menu state â€” per-hex, per ADR-001 sub-decision-4 identity rules.
+        # Menu state — per-hex, per ADR-001 sub-decision-4 identity rules.
         # Per menu-engineer dispatch phase1-tree-view-and-click-semantics.
         # ----------------------------------------------------------------
         # True when this hex is in lock-open mode (double-click toggled it).
@@ -2369,9 +2478,9 @@ class CellWindow(QMainWindow):
         # Double-right-click detection (Bug 3).
         # Qt only fires mouseDoubleClickEvent for the left button.  We
         # track right-press timestamps manually.
-        # _right_press_time â€” monotonic timestamp of the last right-press,
+        # _right_press_time — monotonic timestamp of the last right-press,
         #                     or None if no pending right-press.
-        # _right_click_timer â€” QTimer that fires click("right") after the
+        # _right_click_timer — QTimer that fires click("right") after the
         #                      OS double-click interval elapses, so a single
         #                      right-press still opens the context menu.
         # ----------------------------------------------------------------
@@ -2382,7 +2491,7 @@ class CellWindow(QMainWindow):
         self._right_click_timer.timeout.connect(self._fire_single_right_click)
 
         # ----------------------------------------------------------------
-        # Master single-click deferral (Bug 6 â€” double-click preemption).
+        # Master single-click deferral (Bug 6 — double-click preemption).
         # When role == 'master', a single left-click must not immediately
         # trigger collapse/expand: Qt synthesises mouseReleaseEvent (â†’
         # click("single")) BEFORE mouseDoubleClickEvent (â†’ click("double")),
@@ -2394,7 +2503,7 @@ class CellWindow(QMainWindow):
         # window it cancels the timer; otherwise _fire_pending_master_single_click
         # commits the collapse/expand.
         #
-        # Standalone hexes are NOT deferred â€” their single-click expectation is
+        # Standalone hexes are NOT deferred — their single-click expectation is
         # "open menu NOW" and they have no collapse action to wait for.
         # ----------------------------------------------------------------
         self._pending_master_single_click_timer: _QTimer | None = None
@@ -2428,7 +2537,7 @@ class CellWindow(QMainWindow):
             f"size={self._size_px}px shape={self._shape} orient={self._orientation} "
             f"transparency={self._transparency:.2f} aot={self._always_on_top}"
         )
-        # Bug 2 â€” OS double-click interval verification.
+        # Bug 2 — OS double-click interval verification.
         # QApplication.doubleClickInterval() reads GetDoubleClickTime() on Win11
         # (typically 500 ms), so this should reflect the OS setting.
         # If you see a value very different from your OS setting, check whether
@@ -2461,9 +2570,9 @@ class CellWindow(QMainWindow):
         """Load per-hex settings; fall back to app/* defaults, then branding.
 
         Resolution order for each field:
-          1. hexagon/<id>/<field>   â€” per-hex persisted setting
-          2. app/default_<field>   â€” app-wide default set via Preferences dialog
-          3. branding default      â€” self._<field> as set before this call
+          1. hexagon/<id>/<field>   — per-hex persisted setting
+          2. app/default_<field>   — app-wide default set via Preferences dialog
+          3. branding default      — self._<field> as set before this call
         """
         s = QSettings()
 
@@ -3209,7 +3318,7 @@ class CellWindow(QMainWindow):
     def _compute_stroke_color(self) -> QColor:
         """Return the correct stroke colour based on role and association state.
 
-        Bug 5 â€” green outline rule:
+        Bug 5 — green outline rule:
           - Forest master:                   forest-green leaf colour
                                              (V3 v0.3.15+ — visually
                                              distinct from a normal
@@ -3232,10 +3341,10 @@ class CellWindow(QMainWindow):
             return self._accent_color
 
         if self._group_master_id is None:
-            # Unassociated standalone â€” green outline.
+            # Unassociated standalone — green outline.
             return self._unassociated_stroke_color
 
-        # Associated standalone â€” normal stroke.
+        # Associated standalone — normal stroke.
         return self._stroke_color
 
     def paintEvent(self, event) -> None:
@@ -3809,7 +3918,7 @@ class CellWindow(QMainWindow):
             self._drag_started = False
             _log(f"press @ {self._press_global_pos} id={self._id[:8]}")
         elif event.button() == Qt.RightButton:
-            # Bug 3 â€” double-right-click detection:
+            # Bug 3 — double-right-click detection:
             # Qt only fires mouseDoubleClickEvent for the left button, so we
             # track right-press timestamps manually.
             #
@@ -3827,13 +3936,13 @@ class CellWindow(QMainWindow):
                 self._right_press_time is not None
                 and (now - self._right_press_time) <= interval_s
             ):
-                # Second right-press within interval â€” double-right-click.
+                # Second right-press within interval — double-right-click.
                 self._right_click_timer.stop()
                 self._right_press_time = None
                 _log(f"double-right-click detected id={self._id[:8]}")
                 self.click("double-right")
             else:
-                # First right-press â€” arm the timer; do NOT open context menu yet.
+                # First right-press — arm the timer; do NOT open context menu yet.
                 self._right_press_time = now
                 self._right_click_timer.start(QApplication.doubleClickInterval())
         super().mousePressEvent(event)
@@ -3864,13 +3973,13 @@ class CellWindow(QMainWindow):
             if delta <= 4:
                 return super().mouseMoveEvent(event)  # not a drag yet
 
-            # Threshold crossed â€” commit to manual drag.
+            # Threshold crossed — commit to manual drag.
             self._drag_started = True
             # Reset shake detector at the start of each new drag.
             self._shake_detector.reset()
             _log(f"DRAG STARTED (manual) id={self._id[:8]} role={self.role} group_master={self._group_master_id and self._group_master_id[:8]} positioned={len(self._positioned) if self.role == 'master' else len(self._docked_to)}")
 
-            # Amendment 2 â€” break-free: when a standalone source starts dragging
+            # Amendment 2 — break-free: when a standalone source starts dragging
             # it leaves the positional cluster (_positioned set) but RETAINS its
             # group membership (_group_master_id stays set).
             # The master group-moves positionally-docked members instead.
@@ -3883,12 +3992,12 @@ class CellWindow(QMainWindow):
                 if snap is not None:
                     snap.attach_drag(self._id)
                 else:
-                    _log(f"mouseMoveEvent: snap engine is None â€” attach_drag skipped id={self._id[:8]}")
+                    _log(f"mouseMoveEvent: snap engine is None — attach_drag skipped id={self._id[:8]}")
             except Exception as exc:
                 _log(f"mouseMoveEvent: attach_drag exception: {exc!r}")
 
-        # Manual translation â€” fires moveEvent â†’ hexagonMoved â†’ snap engine tick.
-        # Screen-edge guard (Bug 2 â€” clock-area crash): clamp requested position
+        # Manual translation — fires moveEvent â†’ hexagonMoved â†’ snap engine tick.
+        # Screen-edge guard (Bug 2 — clock-area crash): clamp requested position
         # to the containing screen's available geometry before calling move().
         # If the cursor has drifted outside every known screen (e.g. WM dragged
         # the window off-display), fall back to the primary screen's area.
@@ -3897,7 +4006,7 @@ class CellWindow(QMainWindow):
         new_top_left = self._clamp_to_screen(raw_pos)
         self.move(new_top_left.x(), new_top_left.y())
 
-        # Bug 4 â€” shake-to-unassociate: sample movement direction during drag.
+        # Bug 4 — shake-to-unassociate: sample movement direction during drag.
         # Only meaningful for standalone hexes that are members of a group.
         # Guard: if _group_master_id is None (not in a group) the shake handler
         # is a no-op anyway, but check explicitly before sampling to avoid
@@ -3968,7 +4077,7 @@ class CellWindow(QMainWindow):
         super().mouseDoubleClickEvent(event)
 
     # ------------------------------------------------------------------
-    # moveEvent â€” emit hexagonMoved so SnapEngine tick uses fresh coords.
+    # moveEvent — emit hexagonMoved so SnapEngine tick uses fresh coords.
     # Amendment 2: master-drag translates only POSITIONALLY-DOCKED members.
     # ------------------------------------------------------------------
 
@@ -3985,10 +4094,10 @@ class CellWindow(QMainWindow):
             self._last_move_log_time = _now
         registry.hexagonMoved.emit(self._id)
 
-        # Amendment 2 â€” master group-drag: translate only the POSITIONALLY-DOCKED
+        # Amendment 2 — master group-drag: translate only the POSITIONALLY-DOCKED
         # members (those in self._positioned). Members that have broken free stay
         # where they are on screen; their stored position in self._members is NOT
-        # updated during a master drag â€” they remember their independent position.
+        # updated during a master drag — they remember their independent position.
         #
         # TODO (future dispatch): when master reaches a screen edge, nudge
         # positioned members to nearest on-screen honeycomb positions rather
@@ -4291,7 +4400,7 @@ class CellWindow(QMainWindow):
         preferences_action = menu.addAction("Preferences…")
         menu.addSeparator()
 
-        # ---- Close / exit actions â€” role-aware ----
+        # ---- Close / exit actions — role-aware ----
         # The user contract is: every cell offers a way to close
         # itself and a way to exit ScripTreeRing entirely. Master
         # cells (rings) additionally offer "close ring" (members
@@ -4462,7 +4571,7 @@ class CellWindow(QMainWindow):
             snap = _get_snap_engine()
             master = load_ring(path, self._branding, registry, snap)
             master._saved_ring_path = path
-            _log(f"Ring loaded from {path} â€” master {master._id[:8]}")
+            _log(f"Ring loaded from {path} — master {master._id[:8]}")
         except Exception as exc:
             _log(f"_load_ring_dialog: load_ring failed: {exc!r}")
             QMessageBox.warning(None, "Load failed", f"Could not load ring:\n{exc}")
@@ -4501,7 +4610,7 @@ class CellWindow(QMainWindow):
 
         if scope == "system" and not _is_admin():
             # Trigger UAC elevation for system-scope registration.
-            _log(f"_autoload_set_scope(system): not admin â€” requesting elevation")
+            _log(f"_autoload_set_scope(system): not admin — requesting elevation")
             try:
                 elevate_for_system_autostart(_Path(saved_path))
             except Exception as exc:
@@ -4532,7 +4641,7 @@ class CellWindow(QMainWindow):
 
         saved_path = getattr(self, "_saved_ring_path", None)
         if saved_path is None:
-            _log("_autoload_disable: no saved path â€” nothing to disable")
+            _log("_autoload_disable: no saved path — nothing to disable")
             return
 
         for scope in ("user", "system"):
@@ -4874,7 +4983,7 @@ class CellWindow(QMainWindow):
         # Standalone member: leave the group.
         mid = self._group_master_id
         if mid is None:
-            _log(f"_explicit_leave_group: {self._id[:8]} not in any group â€” no-op")
+            _log(f"_explicit_leave_group: {self._id[:8]} not in any group — no-op")
             return
 
         master = registry.get(mid)
@@ -4952,9 +5061,9 @@ class CellWindow(QMainWindow):
     def _on_shake_detected(self) -> None:
         """Shake gesture handler: fully unassociate this hex from its master's group.
 
-        Bug 4 â€” shake-to-unassociate.  Called from mouseMoveEvent when the
+        Bug 4 — shake-to-unassociate.  Called from mouseMoveEvent when the
         _ShakeDetector triggers.  This is a FULL unassociation (removes from
-        master._members, clears _group_master_id) â€” stronger than break-free,
+        master._members, clears _group_master_id) — stronger than break-free,
         which only leaves the positional cluster while retaining membership.
 
         Steps:
@@ -4972,7 +5081,7 @@ class CellWindow(QMainWindow):
 
         mid = self._group_master_id
         if mid is None:
-            return  # already unassociated â€” no-op
+            return  # already unassociated — no-op
 
         master = registry.get(mid)
         if master is not None:
@@ -4988,7 +5097,7 @@ class CellWindow(QMainWindow):
         self._dock_partners.clear()
 
         _log(
-            f"shake detected â€” {self._id[:8]} unassociated from master {old_master_short}"
+            f"shake detected — {self._id[:8]} unassociated from master {old_master_short}"
         )
 
         # Visual feedback: briefly flash highlight colour for 200 ms then
@@ -5021,7 +5130,7 @@ class CellWindow(QMainWindow):
         3. Update master._members[self._id] to the current position so
            collapse/expand knows where this member last was.
         4. Clear self._docked_to.
-        5. _group_master_id is PRESERVED â€” still a group member.
+        5. _group_master_id is PRESERVED — still a group member.
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
@@ -5409,7 +5518,7 @@ class CellWindow(QMainWindow):
         member rect and the available rect is less than half the member area.
 
         The member's preferred position stored in _members is NEVER changed
-        by this method â€” edge-fold is a transient view state only.
+        by this method — edge-fold is a transient view state only.
         """
         if self.role != "master" or not self._positioned:
             return
@@ -5500,13 +5609,13 @@ class CellWindow(QMainWindow):
             try:
                 screen = app_inst.screenAt(raw_pos)
             except Exception as _e:
-                _log(f"_clamp_to_screen: screenAt raised {_e!r} â€” falling back to primary")
+                _log(f"_clamp_to_screen: screenAt raised {_e!r} — falling back to primary")
 
         if screen is None:
             screen = QGuiApplication.primaryScreen() if app_inst is not None else None
 
         if screen is None:
-            return raw_pos  # no display info â€” pass through unclamped
+            return raw_pos  # no display info — pass through unclamped
 
         avail = screen.availableGeometry()
         max_x = avail.right()  - self._size_px
@@ -5524,7 +5633,7 @@ class CellWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     # Harness-driveable public hooks (ADR-001 Â§harness-driveable contract)
-    # These are PRODUCTION methods â€” real input handlers delegate to them.
+    # These are PRODUCTION methods — real input handlers delegate to them.
     # They are NOT gated by any build flag.
     # ------------------------------------------------------------------
 
@@ -5540,16 +5649,16 @@ class CellWindow(QMainWindow):
         """Programmatically fire the same handler a real click would.
 
         mode:
-            "single"       â€” single left-click (tool launch in standalone mode,
+            "single"       — single left-click (tool launch in standalone mode,
                              OR collapse/expand toggle when role == 'master').
-            "double"       â€” double left-click (lock-open tree view in standalone
+            "double"       — double left-click (lock-open tree view in standalone
                              mode, OR open merged tree when role == 'master').
-            "right"        â€” single right-click; opens the context menu at window centre.
-            "double-right" â€” double right-click; opens the composite editor for ALL
+            "right"        — single right-click; opens the context menu at window centre.
+            "double-right" — double right-click; opens the composite editor for ALL
                              roles (standalone and master).  For standalones this is
                              identical to double-left (both call show_composite_for).
 
-        Click-mode contract (sacred â€” per menu-engineer.md hard rule 1):
+        Click-mode contract (sacred — per menu-engineer.md hard rule 1):
             standalone single         â†’ open tree in standalone mode.
             standalone double (1st)   â†’ open tree in lock-open mode; _locked_open=True.
             standalone double (2nd)   â†’ close the open menu; _locked_open=False.
@@ -5560,13 +5669,13 @@ class CellWindow(QMainWindow):
             right (all roles)         â†’ context menu (unchanged).
 
         Note: for standalones, double-left and double-right are currently equivalent.
-        This redundancy is intentional â€” user confirmed "double right clicking any of
+        This redundancy is intentional — user confirmed "double right clicking any of
         the hexes should do the same thing."  Future disambiguation (e.g. standalone
         double-right = open composite for self only, double-left = lock-open tree)
         can be added without breaking the master contract.
 
         Per ADR-001 Â§harness-driveable contract: real mouse handlers delegate
-        here.  This IS the one code path â€” not a test-only copy.
+        here.  This IS the one code path — not a test-only copy.
         Per menu-engineer dispatch phase1-tree-view-and-click-semantics.
         """
         if mode == "right":
@@ -5584,10 +5693,10 @@ class CellWindow(QMainWindow):
             if self.role == "master":
                 if self._pending_master_single_click_timer is not None:
                     # A timer is already running (rapid repeated single-clicks).
-                    # Ignore the extra signal â€” the pending fire will still happen.
+                    # Ignore the extra signal — the pending fire will still happen.
                     _log(
                         f"click(single) master id={self._id[:8]} "
-                        "â€” deferred fire already pending; ignoring"
+                        "— deferred fire already pending; ignoring"
                     )
                     return
                 from PySide6.QtCore import QTimer as _QTimer
@@ -5600,7 +5709,7 @@ class CellWindow(QMainWindow):
                 self._pending_master_single_click_timer.start(interval)
                 _log(
                     f"click(single) master id={self._id[:8]} "
-                    f"â€” deferred {interval} ms waiting for possible double-click"
+                    f"— deferred {interval} ms waiting for possible double-click"
                 )
                 return
 
@@ -5684,13 +5793,13 @@ class CellWindow(QMainWindow):
             # Cancel any pending master single-click before acting on double.
             # This is the normal path: mouseReleaseEvent fired click("single")
             # (which armed the timer), then mouseDoubleClickEvent fires click("double")
-            # within the doubleClickInterval â€” we cancel the deferred toggle so the
+            # within the doubleClickInterval — we cancel the deferred toggle so the
             # slide never happens and only the double-click action executes.
             if self._pending_master_single_click_timer is not None:
                 self._pending_master_single_click_timer.stop()
                 self._pending_master_single_click_timer.deleteLater()
                 self._pending_master_single_click_timer = None
-                _log(f"click(double) id={self._id[:8]} â€” cancelled pending master single-click")
+                _log(f"click(double) id={self._id[:8]} — cancelled pending master single-click")
 
             # Master double-LEFT-click  → in-process popup menu with each
             #                              member's catalog as a sub-folder.
@@ -5733,8 +5842,8 @@ class CellWindow(QMainWindow):
                         )
                         self._locked_open = False
             else:
-                # Second double-click: unlock â€” close the open menu and clear flag.
-                _log(f"click(double) id={self._id} â€” unlock; closing lock-open tree")
+                # Second double-click: unlock — close the open menu and clear flag.
+                _log(f"click(double) id={self._id} — unlock; closing lock-open tree")
                 self._locked_open = False
                 if self._menu_window is not None:
                     try:
@@ -5749,7 +5858,7 @@ class CellWindow(QMainWindow):
                 self._pending_master_single_click_timer.stop()
                 self._pending_master_single_click_timer.deleteLater()
                 self._pending_master_single_click_timer = None
-                _log(f"click(double-right) id={self._id[:8]} â€” cancelled pending master single-click")
+                _log(f"click(double-right) id={self._id[:8]} — cancelled pending master single-click")
 
             # double-right-click: open composite editor for ALL hex roles.
             #
@@ -5758,7 +5867,7 @@ class CellWindow(QMainWindow):
             #   master     + locked     â†’ unlock and close
             #   standalone + not locked â†’ same as double-LEFT for standalones
             #                             (show_composite_for(self)); both LEFT and RIGHT
-            #                             do the same thing for standalones â€” that is
+            #                             do the same thing for standalones — that is
             #                             intentional and the user confirmed it is fine.
             #   standalone + locked     â†’ unlock and close
             #
@@ -5789,7 +5898,7 @@ class CellWindow(QMainWindow):
                 # Already in lock-open: treat second double-right as unlock.
                 _log(
                     f"click(double-right) {self.role} {self._id[:8]} "
-                    "â€” unlocking composite editor"
+                    "— unlocking composite editor"
                 )
                 self._locked_open = False
                 if self._menu_window is not None:
@@ -5832,7 +5941,7 @@ class CellWindow(QMainWindow):
         """
         _log(
             f"_fire_pending_master_single_click id={self._id[:8]} "
-            "â€” double-click window elapsed; committing collapse/expand"
+            "— double-click window elapsed; committing collapse/expand"
         )
         self._pending_master_single_click_timer = None
         self._toggle_collapse()
@@ -5844,7 +5953,7 @@ class CellWindow(QMainWindow):
         Ignores the click if an animation is currently in flight.
         """
         if self._collapse_state in ("collapsing", "expanding"):
-            _log(f"_toggle_collapse {self._id}: animation in flight â€” click ignored")
+            _log(f"_toggle_collapse {self._id}: animation in flight — click ignored")
             return
 
         if self._collapse_state == "expanded":
@@ -5976,7 +6085,7 @@ class CellWindow(QMainWindow):
     def _shift_home_positions(self, delta_x: int, delta_y: int) -> None:
         """Translate ALL stored member positions by (delta_x, delta_y).
 
-        This is the old alias â€” kept for any residual callers.
+        This is the old alias — kept for any residual callers.
         Under Amendment 2 this means translating self._members (which IS
         self._home_positions since they share the same dict object).
         """
@@ -6018,7 +6127,7 @@ class CellWindow(QMainWindow):
             _log(
                 f"dock_with: shape/orientation mismatch "
                 f"({self._shape}/{self._orientation} vs "
-                f"{other._shape}/{other._orientation}) â€” no snap"
+                f"{other._shape}/{other._orientation}) — no snap"
             )
             return
 
@@ -6046,7 +6155,7 @@ class CellWindow(QMainWindow):
                 best_slot = (slot_cx, slot_cy)
 
         if best_slot is None:
-            _log(f"dock_with: no slot found â€” should not happen")
+            _log(f"dock_with: no slot found — should not happen")
             return
 
         new_x = round(best_slot[0] - self._size_px / 2)
@@ -6082,7 +6191,7 @@ class CellWindow(QMainWindow):
                 "h": geo.height(),
             },
             "mode": "standalone",
-            # Shim â€” empty in the new model; kept so harness code that reads it
+            # Shim — empty in the new model; kept so harness code that reads it
             # doesn't crash (it just gets an empty list for non-master hexes).
             "dock_partners": list(self._dock_partners),
             "always_on_top": self._always_on_top,
@@ -6124,7 +6233,7 @@ def _honeycomb_master_pos(
 
     Geometry derivation (flat-top hex inscribed in hex_size Ã— hex_size square):
       circumradius  R = hex_size / 2
-      apothem       a = R * cos(30Â°) = R * sqrt(3)/2 = hex_size * sqrt(3) / 4
+      apothem       a = R * cos(30°) = R * sqrt(3)/2 = hex_size * sqrt(3) / 4
       flat-to-flat  = 2a = hex_size * sqrt(3) / 2   â† called flat_to_flat below
 
     For the master to sit flush ABOVE the source centroid (master bottom flat edge
@@ -6134,11 +6243,11 @@ def _honeycomb_master_pos(
       master_top_left_y   = master_center_y - R = centroid_y - flat_to_flat - hex_size/2
 
     NOTE: centroid is computed from each source window's CENTRE (geometry().center()),
-    not its top-left pos().  This is essential â€” using pos() shifts the centroid
+    not its top-left pos().  This is essential — using pos() shifts the centroid
     by R in both axes and causes an R-pixel overlap.
 
     The hex bounding boxes DO overlap by (R - a) = R(1 - sqrt(3)/2) â‰ˆ 0.134R pixels
-    in each direction â€” this is expected and correct because the polygon corners are
+    in each direction — this is expected and correct because the polygon corners are
     empty; only the flat edges matter.
 
     If placement above goes off-screen (cand_y_above < avail.top()), place below.
@@ -6191,7 +6300,7 @@ def _honeycomb_master_pos(
         else:
             cand_y = min(cand_y_below, avail.bottom() - hex_size)
     else:
-        # No screen info â€” prefer above, fall back to below if y < 0.
+        # No screen info — prefer above, fall back to below if y < 0.
         cand_y = cand_y_above if cand_y_above >= 0 else cand_y_below
 
     return (cand_x, cand_y)
@@ -6202,26 +6311,26 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
 
     Amendment 2 decision tree (4 cases):
     â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    Case 1 â€” both standalone (no group):
+    Case 1 — both standalone (no group):
         Spawn a fresh master. Both become members. Both go into _positioned.
         Master placed at the deterministic honeycomb cell adjacent to both.
 
-    Case 2 â€” tgt (b) is in a group, src (a) is standalone:
+    Case 2 — tgt (b) is in a group, src (a) is standalone:
         a joins b's master's group. master._members[a._id] = a.pos().
         a added to master._positioned (it just snapped into the cluster).
         a._group_master_id = master._id. Master does NOT move.
 
-    Case 3 â€” src (a) is in a group, tgt (b) is standalone:
+    Case 3 — src (a) is in a group, tgt (b) is standalone:
         b joins a's master's group. Same as Case 2 mirrored.
 
-    Case 4 â€” both in DIFFERENT groups:
+    Case 4 — both in DIFFERENT groups:
         a TRANSFERS from its current master to b's master.
         Remove a from old master's _members/_positioned.
         If old master drops below 2 members, close it.
         Add a to new master's _members/_positioned.
         a._group_master_id = new master._id.
 
-    Case 5 â€” both in the SAME group:
+    Case 5 — both in the SAME group:
         This is a positional re-snap (member moved and snapped back).
         Update master._members[a._id] = a.pos(), add a back to _positioned.
         No new master, no changes to membership.
@@ -6347,7 +6456,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         _log(f"Case 3 (tgt joins src group): {b._id[:8]} -> group {src_master_id[:8]}")
         return
 
-    # ---- Case 1: both standalone â€” fresh master -----------------------------
+    # ---- Case 1: both standalone — fresh master -----------------------------
     _log(f"Case 1 (fresh master): spawning for {a._id[:8]} + {b._id[:8]}")
 
     # Deterministic pairwise master_id (stable across dock/undock/re-dock).
@@ -6406,7 +6515,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         cand_x = round(chosen_cx - hex_size / 2)
         cand_y = round(chosen_cy - hex_size / 2)
     else:
-        _log(f"_try_spawn_master: no adjacent-to-both cell â€” using centroid fallback")
+        _log(f"_try_spawn_master: no adjacent-to-both cell — using centroid fallback")
         cand_x, cand_y = _honeycomb_master_pos({a._id, b._id}, hex_size, registry, avail)
 
     # Create the master.
@@ -6446,7 +6555,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     a._docked_to.clear()
     b._docked_to.clear()
     _update_docked_to(a, b, registry)
-    # Bug 5: refresh outline colour â€” both are now associated; green â†’ normal.
+    # Bug 5: refresh outline colour — both are now associated; green â†’ normal.
     a.update()
     b.update()
 
@@ -6507,7 +6616,7 @@ def _check_undock(moved_hex: CellWindow) -> None:
     but does NOT remove it from the group (_group_master_id, master._members).
 
     The master is closed only when len(master._members) < 2 via
-    _check_master_validity (not here â€” drift just breaks position, not membership).
+    _check_master_validity (not here — drift just breaks position, not membership).
     """
     from scriptree.shell.cell_registry import CellRegistry
 
@@ -6560,7 +6669,7 @@ def _check_undock(moved_hex: CellWindow) -> None:
 def _check_master_validity(master: CellWindow, registry) -> None:
     """Close the master if fewer than 2 members remain in its group (Amendment 2).
 
-    Uses len(master._members) â€” not dock_partners, not home_positions count.
+    Uses len(master._members) — not dock_partners, not home_positions count.
     Called after a member explicitly leaves the group (not on cluster break-free,
     which preserves membership).
     """
