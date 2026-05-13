@@ -4354,13 +4354,16 @@ class CellWindow(QMainWindow):
             self._explicit_leave_group()
         elif chosen == about_action:
             # None parent: inherits OS chrome, not the hex's translucent palette.
+            try:
+                from scriptree import __version__ as _ver
+            except Exception:  # noqa: BLE001
+                _ver = "(unknown)"
             msg = QMessageBox(None)
             msg.setWindowTitle(f"About {brand}")
             msg.setText(
                 f"<b>{app_name_long}</b><br>"
                 f"{tagline}<br><br>"
-                f"Version: 0.0.1-demo<br>"
-                f"Build: phase-1 demo"
+                f"<b>Version:</b> {_ver}"
             )
             msg.exec()
         elif chosen == settings_action:

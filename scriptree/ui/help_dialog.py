@@ -288,15 +288,27 @@ def _first_leaf(node: HelpNode) -> Path | None:
 
 
 def show_about(parent: QWidget | None = None) -> None:
-    """Show a tiny 'About ScripTree' dialog."""
+    """Show the 'About ScripTree' dialog.
+
+    The version line is sourced from ``scriptree.__version__`` so it
+    stays in sync with ``pyproject.toml``.  Falls back to "(unknown)"
+    if the package somehow can't be introspected — the dialog still
+    opens with a useful blurb either way.
+    """
     from PySide6.QtWidgets import QMessageBox
+
+    try:
+        from scriptree import __version__ as _ver
+    except Exception:  # noqa: BLE001
+        _ver = "(unknown)"
 
     QMessageBox.about(
         parent,
         "About ScripTree",
-        "<h3>ScripTree</h3>"
-        "<p>A universal GUI generator for command-line tools.</p>"
-        "<p>Built with Python and PySide6. See the Help menu for "
-        "documentation on building tools, configurations, and "
-        "environment overrides.</p>",
+        f"<h3>ScripTree</h3>"
+        f"<p><b>Version:</b> {_ver}</p>"
+        f"<p>A universal GUI generator for command-line tools.</p>"
+        f"<p>Built with Python and PySide6.  See the Help menu for "
+        f"documentation on building tools, configurations, and "
+        f"environment overrides.</p>",
     )
