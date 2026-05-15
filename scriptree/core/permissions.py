@@ -256,6 +256,21 @@ CAPABILITIES: dict[str, str] = {
         "(catalog cell.click_action = \"run\", with sequential or "
         "parallel run mode for trees)"
     ),
+    # Dynamic choice/value providers (v0.6.0).  A tool can declare a
+    # ``choices_provider`` that runs an external command at form-open
+    # time to populate a dropdown / checkbox-list / scalar field.
+    # Running an arbitrary command to *build a form* is a new
+    # capability, gated like ``interactive_stdin`` /
+    # ``load_user_plugins``.  When the file is missing or read-only
+    # the tool still loads, but the dynamic params render disabled
+    # with a one-line "dynamic choices disabled by policy" note (the
+    # tool stays usable if those params aren't required — same
+    # fallback as ``interactive``).  Default ALLOWED so the feature
+    # works out of the box.
+    "dynamic_choices": (
+        "Allow tools to run an external command at form-open time "
+        "to populate parameter choices/values (choices_provider)"
+    ),
 }
 
 

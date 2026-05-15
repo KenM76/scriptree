@@ -16,6 +16,7 @@ from .model import (
     ParamDef,
     ParamType,
     ParseSource,
+    ProviderSpec,
     Section,
     ToolDef,
     TreeDef,
@@ -187,11 +188,22 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         except (TypeError, ValueError):
             return default
 
+    params = [_param_from_dict(p) for p in data.get("params", [])]
+    # v0.6.0 — validate the depends_on dependency graph at load time.
+    # An unknown depends_on id or a cycle is a structural authoring
+    # bug → fail loud here, the same fail-at-load stance the schema
+    # takes for a bad widget/type pairing.  Runtime provider
+    # *execution* failures still fail soft (see core/providers.py).
+    if any(getattr(p, "choices_provider", None) is not None
+           for p in params):
+        from .providers import provider_run_order
+        provider_run_order(params)  # raises ValueError on cycle / bad id
+
     return ToolDef(
         name=data["name"],
         executable=data["executable"],
         argument_template=_load_template(data.get("argument_template", [])),
-        params=[_param_from_dict(p) for p in data.get("params", [])],
+        params=params,
         description=data.get("description", ""),
         working_directory=data.get("working_directory"),
         source=ParseSource(
@@ -270,7 +282,62 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["visible_when"] = p.visible_when
     if p.required_when:
         d["required_when"] = p.required_when
+    # v0.6.0 — dynamic providers.  Same compactness rule: emit only
+    # when set so a v3 file authored before this feature round-trips
+    # byte-identical.
+    if p.choices_provider is not None:
+        d["choices_provider"] = _provider_to_dict(p.choices_provider)
+    if p.depends_on:
+        d["depends_on"] = list(p.depends_on)
+    if p.select_all:
+        d["select_all"] = True
     return d
+
+
+def _provider_to_dict(ps: ProviderSpec) -> dict[str, Any]:
+    """Serialise a :class:`ProviderSpec`.  ``command`` is always
+    emitted (required); the rest only when not at their defaults so
+    the JSON stays minimal."""
+    d: dict[str, Any] = {"command": list(ps.command)}
+    if ps.working_directory:
+        d["working_directory"] = ps.working_directory
+    if ps.refresh != "on_open":
+        d["refresh"] = ps.refresh
+    if ps.timeout_sec != 15:
+        d["timeout_sec"] = ps.timeout_sec
+    if ps.cache != "form_session":
+        d["cache"] = ps.cache
+    return d
+
+
+def _provider_from_dict(
+    raw: Any, *, param_id: str,
+) -> ProviderSpec | None:
+    """Parse a ``choices_provider`` block.  ``None`` / missing →
+    ``None`` (static behaviour).  A malformed block raises
+    ``ValueError`` (structural authoring bug → fail loud at load,
+    same stance as a bad widget/type pairing)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"ParamDef {param_id!r}: 'choices_provider' must be an "
+            f"object, got {type(raw).__name__}."
+        )
+    try:
+        return ProviderSpec(
+            command=list(raw.get("command", [])),
+            working_directory=raw.get("working_directory") or None,
+            refresh=str(raw.get("refresh", "on_open")),
+            timeout_sec=raw.get("timeout_sec", 15),
+            cache=str(raw.get("cache", "form_session")),
+        )
+    except ValueError as exc:
+        # Re-raise with the param id so the author can find it.
+        raise ValueError(
+            f"ParamDef {param_id!r}: invalid 'choices_provider' — "
+            f"{exc}"
+        ) from None
 
 
 def _normalize_choices(
@@ -367,6 +434,11 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         no_split=bool(d.get("no_split", False)),
         visible_when=str(d.get("visible_when", "") or ""),
         required_when=str(d.get("required_when", "") or ""),
+        choices_provider=_provider_from_dict(
+            d.get("choices_provider"), param_id=param_id,
+        ),
+        depends_on=[str(x) for x in (d.get("depends_on") or [])],
+        select_all=bool(d.get("select_all", False)),
     )
 
 

@@ -51,6 +51,9 @@ class TestCanonicalEnumValues:
         assert values == sorted([
             "text", "textarea", "number", "checkbox",
             "dropdown", "file", "save_file", "folder", "radio",
+            # v0.6.0 — dynamic-providers feature added the
+            # checkbox-list widget for multiselect params.
+            "checkbox_list",
         ])
 
     def test_no_v2_aliases_present(self) -> None:

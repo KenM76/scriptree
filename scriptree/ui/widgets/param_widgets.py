@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -377,6 +378,220 @@ class DropdownWidget(ParamWidget):
             idx = self._combo.findText(str(value))
         if idx >= 0:
             self._combo.setCurrentIndex(idx)
+
+    def set_choices(
+        self,
+        choices: list[str],
+        labels: list[str] | None = None,
+        default: Any = None,
+    ) -> None:
+        """Repopulate the combo at runtime (v0.6.0 — dynamic
+        providers).  Preserves the current selection if it's still
+        present in the new ``choices``; otherwise falls back to
+        ``default`` (when given and present) or the first item.
+
+        Signals are blocked during the rebuild so a single
+        ``valueChanged`` fires at the end iff the effective value
+        actually changed.
+        """
+        labels = labels or []
+        prev = self.get_value()
+        self._combo.blockSignals(True)
+        try:
+            self._combo.clear()
+            for i, value in enumerate(choices):
+                label = (
+                    labels[i] if i < len(labels) and labels[i]
+                    else value
+                )
+                self._combo.addItem(label, value)
+            target = None
+            if prev in choices:
+                target = prev
+            elif isinstance(default, str) and default in choices:
+                target = default
+            if target is not None:
+                idx = self._combo.findData(target)
+                if idx >= 0:
+                    self._combo.setCurrentIndex(idx)
+        finally:
+            self._combo.blockSignals(False)
+        if self.get_value() != prev:
+            self.valueChanged.emit(self.get_value())
+
+
+class CheckboxListWidget(ParamWidget):
+    """A scrollable column of checkboxes for a ``multiselect`` param
+    (v0.6.0).
+
+    Value model is identical to the multi-select dropdown — a
+    ``list[str]`` of the *checked* choice values, in choice order —
+    so ``build_full_argv`` emits it exactly as before (the runner
+    comma-joins a list into one argv token; see
+    ``core/runner.py``).  Cosmetic labels come from
+    ``param.label_for_choice`` for static choices, or the parallel
+    label list passed to :meth:`set_choices` for provider-populated
+    ones.
+
+    ``param.select_all`` adds a tri-state master checkbox above the
+    list:
+
+      * checked   → all selected
+      * unchecked → none selected
+      * partial   → some selected (user toggling it from partial
+                    selects all, matching common UX)
+
+    Empty choice list ⇒ a disabled ``(no items)`` row instead of an
+    empty box, so a provider that legitimately returns nothing
+    doesn't look broken.
+    """
+
+    def __init__(self, param: ParamDef) -> None:
+        super().__init__()
+        self._select_all = bool(getattr(param, "select_all", False))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self._master: QCheckBox | None = None
+        if self._select_all:
+            self._master = QCheckBox("Select all")
+            self._master.setTristate(True)
+            self._master.clicked.connect(self._on_master_clicked)
+            outer.addWidget(self._master)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setMaximumHeight(160)
+        self._inner = QWidget()
+        self._inner_layout = QVBoxLayout(self._inner)
+        self._inner_layout.setContentsMargins(2, 2, 2, 2)
+        self._inner_layout.setSpacing(1)
+        self._inner_layout.addStretch(1)
+        self._scroll.setWidget(self._inner)
+        outer.addWidget(self._scroll)
+
+        # value -> QCheckBox.  Insertion order == choice order.
+        self._boxes: dict[str, QCheckBox] = {}
+        self._empty_row: QLabel | None = None
+
+        # Seed from static choices (provider mode replaces these via
+        # set_choices()).
+        init_default = param.default if isinstance(param.default, list) else []
+        self.set_choices(
+            list(param.choices),
+            [param.label_for_choice(v) for v in param.choices],
+            init_default,
+        )
+
+    # -- population --------------------------------------------------
+
+    def _clear_rows(self) -> None:
+        for box in self._boxes.values():
+            box.setParent(None)
+            box.deleteLater()
+        self._boxes.clear()
+        if self._empty_row is not None:
+            self._empty_row.setParent(None)
+            self._empty_row.deleteLater()
+            self._empty_row = None
+
+    def set_choices(
+        self,
+        choices: list[str],
+        labels: list[str] | None = None,
+        default: Any = None,
+    ) -> None:
+        """(Re)build the checkbox rows.  Preserves any prior
+        selection that's still a valid choice; otherwise applies
+        ``default`` (a list for multiselect)."""
+        labels = labels or []
+        prev_selected = set(self.get_value())
+        self._clear_rows()
+
+        # Insert before the trailing stretch (last layout item).
+        insert_at = max(0, self._inner_layout.count() - 1)
+
+        if not choices:
+            self._empty_row = QLabel("(no items)")
+            self._empty_row.setEnabled(False)
+            self._empty_row.setStyleSheet("QLabel { color: #888; }")
+            self._inner_layout.insertWidget(insert_at, self._empty_row)
+            self._sync_master()
+            return
+
+        default_set = set(default) if isinstance(default, list) else set()
+        # Spec §6: preserve any prior selection still present in the
+        # new choices; if NONE of the prior selections survive (or
+        # there was no prior selection at all), fall back to
+        # ``default``.
+        surviving = prev_selected & set(choices)
+        effective = surviving if surviving else default_set
+        for i, value in enumerate(choices):
+            label = (
+                labels[i] if i < len(labels) and labels[i] else value
+            )
+            box = QCheckBox(label)
+            if value in effective:
+                box.setChecked(True)
+            box.toggled.connect(self._on_item_toggled)
+            self._boxes[value] = box
+            self._inner_layout.insertWidget(insert_at + i, box)
+
+        self._sync_master()
+
+    # -- selection logic ---------------------------------------------
+
+    def _on_item_toggled(self, _checked: bool) -> None:
+        self._sync_master()
+        self.valueChanged.emit(self.get_value())
+
+    def _on_master_clicked(self, _checked: bool) -> None:
+        # From any state, a click drives all rows to the master's new
+        # binary state (Qt advances tristate on click; we normalise:
+        # partial/unchecked → select all, checked → clear all).
+        if self._master is None:
+            return
+        select_all = self._master.checkState() != Qt.CheckState.Checked
+        for box in self._boxes.values():
+            box.blockSignals(True)
+            box.setChecked(select_all)
+            box.blockSignals(False)
+        self._sync_master()
+        self.valueChanged.emit(self.get_value())
+
+    def _sync_master(self) -> None:
+        if self._master is None:
+            return
+        total = len(self._boxes)
+        checked = sum(1 for b in self._boxes.values() if b.isChecked())
+        self._master.blockSignals(True)
+        if total == 0 or checked == 0:
+            self._master.setCheckState(Qt.CheckState.Unchecked)
+        elif checked == total:
+            self._master.setCheckState(Qt.CheckState.Checked)
+        else:
+            self._master.setCheckState(Qt.CheckState.PartiallyChecked)
+        self._master.setEnabled(total > 0)
+        self._master.blockSignals(False)
+
+    # -- value API ---------------------------------------------------
+
+    def get_value(self) -> list[str]:
+        return [v for v, b in self._boxes.items() if b.isChecked()]
+
+    def set_value(self, value: Any) -> None:
+        if isinstance(value, str):
+            wanted = {value} if value else set()
+        elif isinstance(value, (list, tuple, set)):
+            wanted = {str(x) for x in value}
+        else:
+            wanted = set()
+        for v, box in self._boxes.items():
+            box.blockSignals(True)
+            box.setChecked(v in wanted)
+            box.blockSignals(False)
+        self._sync_master()
 
 
 class RadioWidget(ParamWidget):
@@ -760,6 +975,7 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.NUMBER: NumberWidget,
         WidgetKind.CHECKBOX: CheckboxWidget,
         WidgetKind.DROPDOWN: DropdownWidget,
+        WidgetKind.CHECKBOX_LIST: CheckboxListWidget,
         WidgetKind.RADIO: RadioWidget,
         WidgetKind.FILE: FileOpenWidget,
         WidgetKind.SAVE_FILE: FileSaveWidget,

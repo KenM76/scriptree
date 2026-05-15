@@ -78,6 +78,11 @@ class Widget(str, Enum):
     SAVE_FILE = "save_file"
     FOLDER = "folder"
     RADIO = "radio"
+    # v0.6.0 — multiselect rendered as a scrollable list of
+    # checkboxes (one per choice) with an optional tri-state
+    # select-all/none master.  See ``ParamDef.select_all`` and the
+    # dynamic-providers feature.
+    CHECKBOX_LIST = "checkbox_list"
 
 
 # Which widgets are valid for each param type. The editor uses this to
@@ -89,12 +94,96 @@ VALID_WIDGETS: dict[ParamType, tuple[Widget, ...]] = {
     ParamType.BOOLEAN: (Widget.CHECKBOX,),
     ParamType.PATH: (Widget.FILE, Widget.SAVE_FILE, Widget.FOLDER),
     ParamType.ENUM: (Widget.DROPDOWN, Widget.RADIO),
-    ParamType.MULTISELECT: (Widget.DROPDOWN,),
+    ParamType.MULTISELECT: (Widget.DROPDOWN, Widget.CHECKBOX_LIST),
 }
 
 
 def default_widget_for(ptype: ParamType) -> Widget:
     return VALID_WIDGETS[ptype][0]
+
+
+# Allowed values for ProviderSpec.refresh and .cache.  Kept as module
+# constants so io.py / validate / the editor share one source of truth.
+PROVIDER_REFRESH_MODES = ("on_open", "manual", "on_change")
+PROVIDER_CACHE_MODES = ("form_session", "none")
+PROVIDER_DEFAULT_TIMEOUT_SEC = 15
+
+
+@dataclass
+class ProviderSpec:
+    """A dynamic choices/value provider for a :class:`ParamDef`.
+
+    v0.6.0 — when set, the param's choices (enum / multiselect /
+    checkbox_list) **or** its scalar value (text / path / number /
+    …) come from running an external ``command`` at form-open /
+    refresh time, NOT from a static ``choices`` list baked into the
+    ``.scriptree`` file.
+
+    ``command`` is an argv list (never a shell string).  Relative
+    paths resolve against the ``.scriptree`` file's directory, same
+    as ``ToolDef.executable``; bare names resolve via PATH.
+
+    The provider receives the current values of ``ParamDef.depends_on``
+    params as a single JSON object on **stdin**::
+
+        {"depends_on": {"source": "X.SLDDRW"}, "param_id": "pages"}
+
+    and must print one JSON document to **stdout**.  For choice-type
+    params::
+
+        {"choices": [...], "choice_labels": [...], "default": [...]}
+
+    For scalar params::
+
+        {"value": "..."}
+
+    Anything other than exit 0 + valid JSON ⇒ the param renders in a
+    soft error state; the rest of the form stays usable.
+
+    This object is **pure data** — execution lives in
+    ``scriptree.core.providers`` (no Qt, reuses ``core.runner``
+    path/env resolution + ``core.sanitize``).
+    """
+
+    command: list[str] = field(default_factory=list)
+    working_directory: str | None = None
+    refresh: str = "on_open"        # on_open | manual | on_change
+    timeout_sec: int = PROVIDER_DEFAULT_TIMEOUT_SEC
+    cache: str = "form_session"     # form_session | none
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command, list) or not self.command:
+            raise ValueError(
+                "ProviderSpec.command must be a non-empty argv list "
+                f"(got {self.command!r})"
+            )
+        if not all(isinstance(tok, str) for tok in self.command):
+            raise ValueError(
+                "ProviderSpec.command entries must all be strings "
+                f"(got {self.command!r})"
+            )
+        if self.refresh not in PROVIDER_REFRESH_MODES:
+            raise ValueError(
+                f"ProviderSpec.refresh must be one of "
+                f"{PROVIDER_REFRESH_MODES}, got {self.refresh!r}"
+            )
+        if self.cache not in PROVIDER_CACHE_MODES:
+            raise ValueError(
+                f"ProviderSpec.cache must be one of "
+                f"{PROVIDER_CACHE_MODES}, got {self.cache!r}"
+            )
+        try:
+            self.timeout_sec = int(self.timeout_sec)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"ProviderSpec.timeout_sec must be an int, got "
+                f"{self.timeout_sec!r}"
+            ) from None
+        if self.timeout_sec <= 0:
+            raise ValueError(
+                f"ProviderSpec.timeout_sec must be > 0, got "
+                f"{self.timeout_sec}"
+            )
 
 
 @dataclass
@@ -182,6 +271,31 @@ class ParamDef:
     visible_when: str = ""
     required_when: str = ""
 
+    # v0.6.0 — dynamic choice/value providers + cascading params.
+    #
+    # ``choices_provider``: when set, this param's choices (for
+    # enum / multiselect / checkbox_list) OR its scalar value (for
+    # text / path / number / …) are produced by running an external
+    # command at form-open / refresh time instead of coming from the
+    # static ``choices`` list.  Mutually exclusive with a non-empty
+    # static ``choices`` (loader raises).  See :class:`ProviderSpec`.
+    #
+    # ``depends_on``: ids of upstream params whose current values are
+    # forwarded to this param's provider on stdin, and whose change
+    # re-runs the provider when ``ProviderSpec.refresh == "on_change"``.
+    # A ``depends_on`` cycle is a load-time error (fail loud, like a
+    # structural ``visible_when`` problem).
+    #
+    # ``select_all``: only meaningful with ``widget ==
+    # CHECKBOX_LIST`` — renders a tri-state master select-all/none
+    # control above the list.
+    #
+    # All three default to "absent" semantics so a v3 file without
+    # them is byte-identical and behaves exactly as before.
+    choices_provider: ProviderSpec | None = None
+    depends_on: list[str] = field(default_factory=list)
+    select_all: bool = False
+
     def label_for_choice(self, value: str) -> str:
         """Return the descriptive label for a choice value, or the value itself.
 
@@ -207,6 +321,28 @@ class ParamDef:
                 f"Widget {self.widget.value!r} is not valid for type "
                 f"{self.type.value!r}. Valid widgets: "
                 f"{[w.value for w in VALID_WIDGETS[self.type]]}"
+            )
+        # v0.6.0 — dynamic-provider structural invariants.  These
+        # fail loud at construction (and therefore at load), the
+        # same stance the schema takes for an invalid widget/type
+        # pairing: a structurally-broken provider config is an
+        # authoring bug, not a runtime soft-fail.
+        if self.choices_provider is not None and self.choices:
+            raise ValueError(
+                f"ParamDef {self.id!r}: cannot set both a static "
+                f"'choices' list and a 'choices_provider'. Use one "
+                f"or the other."
+            )
+        if self.select_all and self.widget is not Widget.CHECKBOX_LIST:
+            raise ValueError(
+                f"ParamDef {self.id!r}: 'select_all' is only valid "
+                f"with widget 'checkbox_list' (got "
+                f"{self.widget.value!r})."
+            )
+        if self.id in self.depends_on:
+            raise ValueError(
+                f"ParamDef {self.id!r}: 'depends_on' must not list "
+                f"the param itself (trivial cycle)."
             )
         if not self.label:
             self.label = self.id.replace("_", " ").capitalize()
