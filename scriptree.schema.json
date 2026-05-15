@@ -99,8 +99,8 @@
         },
         "widget": {
           "type": "string",
-          "enum": ["text", "textarea", "number", "checkbox", "dropdown", "file", "save_file", "folder", "radio"],
-          "description": "HTML5-aligned widget kind. 'file' = HTML <input type=file>, 'save_file' = file-save variant, 'radio' = HTML radio group. Must be compatible with the param's type."
+          "enum": ["text", "textarea", "number", "checkbox", "dropdown", "checkbox_list", "file", "save_file", "folder", "radio"],
+          "description": "HTML5-aligned widget kind. 'file' = HTML <input type=file>, 'save_file' = file-save variant, 'radio' = HTML radio group, 'checkbox_list' = scrollable checkbox column for multiselect (v0.6.0). Must be compatible with the param's type."
         },
         "required": {
           "type": "boolean",
@@ -145,6 +145,40 @@
         "required_when": {
           "type": "string",
           "description": "Conditional requirement expression. Same grammar as visible_when. Overrides static `required` when set."
+        },
+        "choices_provider": {
+          "type": "object",
+          "description": "v0.6.0 — dynamic provider. Run an external command at form-open/refresh time to populate this param's choices (enum/multiselect/checkbox_list) or scalar value (text/path/number/…). Mutually exclusive with a non-empty static `choices`. See help/LLM/dynamic_providers.md.",
+          "required": ["command"],
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1,
+              "description": "Argv list (NOT a shell string). First entry resolves against the .scriptree dir like `executable`; bare names via PATH."
+            },
+            "working_directory": {"type": "string"},
+            "refresh": {
+              "type": "string",
+              "enum": ["on_open", "manual", "on_change"],
+              "description": "on_open (run at form build), manual (Refresh click only), on_change (debounced re-run when a depends_on value changes)."
+            },
+            "timeout_sec": {"type": "integer", "minimum": 1},
+            "cache": {
+              "type": "string",
+              "enum": ["form_session", "none"]
+            }
+          }
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "v0.6.0 — upstream param ids forwarded to this param's choices_provider on stdin; a change re-runs it when refresh='on_change'. A cycle or unknown id is a load error."
+        },
+        "select_all": {
+          "type": "boolean",
+          "default": false,
+          "description": "v0.6.0 — only valid with widget 'checkbox_list'. Adds a tri-state select-all/none master checkbox."
         }
       },
       "allOf": [

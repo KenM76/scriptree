@@ -350,6 +350,16 @@ class ToolEditorView(QWidget):
         self._prop_section.currentIndexChanged.connect(
             self._on_prop_section_changed
         )
+        # v0.6.0 — dynamic provider editor.  The button text reflects
+        # whether the selected param currently has a provider so the
+        # author can see at a glance which params are dynamic.
+        self._prop_provider_btn = QPushButton("Provider…")
+        self._prop_provider_btn.setToolTip(
+            "Configure a dynamic choices/value provider: run an "
+            "external command at form-open time to populate this "
+            "field, optionally cascading from other params."
+        )
+        self._prop_provider_btn.clicked.connect(self._on_edit_provider)
 
         # v0.4.0 — every property row gets a hover tooltip on BOTH
         # the label and the input.  Previously the only tooltips on
@@ -460,6 +470,13 @@ class ToolEditorView(QWidget):
             "buttons above the param list to manage them.  Empty "
             "section falls into a synthetic 'Other' bucket at the "
             "end of the form.",
+        )
+        self._add_prop_row(
+            "Provider:", self._prop_provider_btn,
+            "Dynamic choices/value provider (v0.6.0).  Runs an "
+            "external command at form-open time to populate this "
+            "field — live dropdowns, dependent checkbox lists, "
+            "auto-detected paths.  Click to configure.",
         )
         middle.addWidget(right_box)
         middle.setStretchFactor(0, 1)
@@ -915,6 +932,13 @@ class ToolEditorView(QWidget):
             if sec_idx < 0:
                 sec_idx = 0
             self._prop_section.setCurrentIndex(sec_idx)
+            # v0.6.0 — surface whether this param is dynamic right on
+            # the button so the author doesn't have to open it to
+            # find out.
+            if param.choices_provider is not None:
+                self._prop_provider_btn.setText("Provider ✓")
+            else:
+                self._prop_provider_btn.setText("Provider…")
             # v0.4.0 — hide rows that don't apply to this param's
             # type / widget combo to keep the panel uncluttered.
             self._refresh_prop_visibility()
@@ -1035,6 +1059,25 @@ class ToolEditorView(QWidget):
             values, labels = _parse_choices(text)
             param.choices = values
             param.choice_labels = labels
+            self._update_preview()
+
+    def _on_edit_provider(self) -> None:
+        """Open the dynamic-provider editor for the selected param."""
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param is None:
+            return
+        from .provider_editor import ProviderEditorDialog, apply_to_param
+        other_ids = [
+            p.id for p in self._tool.params if p.id != param.id
+        ]
+        dlg = ProviderEditorDialog(param, other_ids, parent=self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            apply_to_param(dlg, param)
+            # Refresh the panel (Choices row may now be irrelevant,
+            # button label flips to "Provider ✓") and the preview.
+            self._load_param_into_panel(param)
             self._update_preview()
 
     def _on_prop_filter_changed(self, text: str) -> None:

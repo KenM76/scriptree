@@ -382,3 +382,222 @@ class TestPermissionGate:
         ps = load_permissions()
         assert ps.can("dynamic_choices") is True
         reset_cached_permissions()
+
+
+# ===========================================================================
+# Qt-backed orchestration (ToolRunnerView wiring)
+# ===========================================================================
+
+@pytest.fixture(scope="module")
+def _qapp():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def _emit(code: str) -> ProviderSpec:
+    return ProviderSpec(command=_py(code))
+
+
+class TestRunnerOrchestration:
+
+    def _view(self, tmp_path: Path, params, argv=None):
+        from scriptree.core.io import save_tool
+        from scriptree.ui.tool_runner import ToolRunnerView
+        t = ToolDef(name="T", executable="echo", params=params,
+                    argument_template=argv or [])
+        p = tmp_path / "t.scriptree"
+        save_tool(t, p)
+        return ToolRunnerView(load_tool(p), file_path=str(p))
+
+    def test_on_open_populates_choice_and_scalar(
+        self, _qapp, tmp_path: Path,
+    ) -> None:
+        src = ParamDef(
+            id="source", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=_emit(
+                "import json;print(json.dumps("
+                "{'choices':['A','B'],'choice_labels':['Ay','Bee']}))"
+            ),
+        )
+        scal = ParamDef(
+            id="active", type=ParamType.PATH, widget=Widget.FILE,
+            choices_provider=_emit(
+                "import json;print(json.dumps({'value':'C:/x'}))"
+            ),
+        )
+        v = self._view(tmp_path, [src, scal])
+        assert v._widgets["source"].get_value() == "A"
+        assert v._widgets["active"].get_value() == "C:/x"
+
+    def test_on_change_cascade_via_debounce(
+        self, _qapp, tmp_path: Path,
+    ) -> None:
+        src = ParamDef(
+            id="source", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=_emit(
+                "import json;print(json.dumps({'choices':['A','B']}))"
+            ),
+        )
+        pages = ParamDef(
+            id="pages", type=ParamType.MULTISELECT,
+            widget=Widget.CHECKBOX_LIST, depends_on=["source"],
+            choices_provider=_emit(
+                "import sys,json;d=json.load(sys.stdin);"
+                "s=d['depends_on'].get('source','?');"
+                "print(json.dumps({'choices':[s+':1',s+':2']}))"
+            ),
+        )
+        # pages provider is on_open by default → set it on_change.
+        pages.choices_provider.refresh = "on_change"
+        v = self._view(tmp_path, [src, pages])
+        pw = v._widgets["pages"]
+        assert list(pw._boxes.keys()) == ["A:1", "A:2"]
+        v._widgets["source"].set_value("B")
+        v._widgets["source"].valueChanged.emit("B")
+        # Fire the debounce timer synchronously.
+        v._provider_debounce["pages"].timeout.emit()
+        assert list(pw._boxes.keys()) == ["B:1", "B:2"]
+
+    def test_refresh_all_button_present_and_works(
+        self, _qapp, tmp_path: Path,
+    ) -> None:
+        src = ParamDef(
+            id="source", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=_emit(
+                "import json;print(json.dumps({'choices':['A']}))"
+            ),
+        )
+        v = self._view(tmp_path, [src])
+        assert getattr(v, "_refresh_all_added", False) is True
+        assert "source" in v._provider_refresh_btns
+        v._refresh_all_providers()  # must not raise
+        assert v._widgets["source"].get_value() == "A"
+
+    def test_provider_failure_is_soft(
+        self, _qapp, tmp_path: Path,
+    ) -> None:
+        bad = ParamDef(
+            id="oops", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=_emit("import sys;sys.exit(9)"),
+        )
+        ok = ParamDef(id="fine", type=ParamType.STRING,
+                      widget=Widget.TEXT)
+        v = self._view(tmp_path, [bad, ok])
+        # Failed provider tracked; the rest of the form is usable.
+        assert "oops" in v._provider_errors
+        v._widgets["fine"].set_value("hello")
+        assert v._widgets["fine"].get_value() == "hello"
+
+    def test_form_session_cache_memoizes(
+        self, _qapp, tmp_path: Path,
+    ) -> None:
+        # Provider writes a marker file each run; with form_session
+        # cache + no upstream change, a second _run_provider must
+        # NOT spawn again.
+        marker = tmp_path / "runs.log"
+        code = (
+            f"open(r'{marker}','a').write('x');"
+            "import json;print(json.dumps({'choices':['Z']}))"
+        )
+        p = ParamDef(
+            id="c", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=ProviderSpec(
+                command=_py(code), cache="form_session"),
+        )
+        v = self._view(tmp_path, [p])
+        runs_after_open = marker.read_text().count("x")
+        assert runs_after_open == 1
+        # Non-bypass re-run hits cache (no new spawn).
+        v._run_provider(v._tool.params[0], bypass_cache=False)
+        assert marker.read_text().count("x") == 1
+        # Explicit Refresh bypasses cache (new spawn).
+        v._refresh_provider("c", bypass_cache=True)
+        assert marker.read_text().count("x") == 2
+
+    def test_permission_denied_disables_provider_widgets(
+        self, _qapp, tmp_path: Path, monkeypatch,
+    ) -> None:
+        import scriptree.ui.permission_guards as pg
+        monkeypatch.setattr(
+            pg, "perm_check",
+            lambda cap, **kw: cap != "dynamic_choices",
+        )
+        src = ParamDef(
+            id="source", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=_emit(
+                "import json;print(json.dumps({'choices':['A']}))"
+            ),
+        )
+        v = self._view(tmp_path, [src])
+        w = v._widgets["source"]
+        assert w.isEnabled() is False
+        assert "disabled by policy" in w.toolTip()
+
+
+# ===========================================================================
+# Editor dialog (ProviderEditorDialog)
+# ===========================================================================
+
+class TestProviderEditorDialog:
+
+    def test_enable_fill_apply_sets_provider_and_clears_choices(
+        self, _qapp,
+    ) -> None:
+        from scriptree.ui.provider_editor import (
+            ProviderEditorDialog, apply_to_param,
+        )
+        p = ParamDef(
+            id="pages", type=ParamType.MULTISELECT,
+            widget=Widget.CHECKBOX_LIST, choices=["o1", "o2"],
+        )
+        dlg = ProviderEditorDialog(p, ["source", "dest"])
+        dlg._enable.setChecked(True)
+        dlg._command.setPlainText("prov.exe\nlist\n--json")
+        dlg._refresh.setCurrentIndex(
+            dlg._refresh.findData("on_change"))
+        dlg._timeout.setValue(25)
+        dlg._dep_boxes["source"].setChecked(True)
+        dlg._select_all.setChecked(True)
+        dlg._on_accept()
+        apply_to_param(dlg, p)
+        assert p.choices_provider.command == ["prov.exe", "list",
+                                              "--json"]
+        assert p.choices_provider.refresh == "on_change"
+        assert p.choices_provider.timeout_sec == 25
+        assert p.depends_on == ["source"]
+        assert p.select_all is True
+        # Mutually exclusive — static choices cleared.
+        assert p.choices == [] and p.choice_labels == []
+
+    def test_disable_clears_provider(self, _qapp) -> None:
+        from scriptree.ui.provider_editor import (
+            ProviderEditorDialog, apply_to_param,
+        )
+        p = ParamDef(
+            id="x", type=ParamType.ENUM, widget=Widget.DROPDOWN,
+            choices_provider=ProviderSpec(command=["p"]),
+        )
+        dlg = ProviderEditorDialog(p, [])
+        assert dlg._enable.isChecked() is True  # seeded from existing
+        dlg._enable.setChecked(False)
+        dlg._on_accept()
+        apply_to_param(dlg, p)
+        assert p.choices_provider is None
+
+    def test_select_all_gated_to_checkbox_list(self, _qapp) -> None:
+        from scriptree.ui.provider_editor import ProviderEditorDialog
+        p = ParamDef(id="x", type=ParamType.ENUM,
+                     widget=Widget.DROPDOWN)
+        dlg = ProviderEditorDialog(p, [])
+        assert dlg._select_all.isEnabled() is False
+
+    def test_invalid_command_keeps_dialog_open(self, _qapp) -> None:
+        from scriptree.ui.provider_editor import ProviderEditorDialog
+        p = ParamDef(id="y", type=ParamType.ENUM,
+                     widget=Widget.DROPDOWN)
+        dlg = ProviderEditorDialog(p, [])
+        dlg._enable.setChecked(True)
+        dlg._command.setPlainText("   ")
+        dlg._on_accept()
+        assert dlg._error.text()  # error surfaced
+        assert dlg.result_provider is None  # not accepted

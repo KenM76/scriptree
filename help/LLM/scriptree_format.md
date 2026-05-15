@@ -200,11 +200,28 @@ A field hidden by `visible_when`:
 | `boolean`     | `checkbox`                            |
 | `path`        | `file`, `save_file`, `folder`         |
 | `enum`        | `dropdown`, `radio`                   |
-| `multiselect` | `dropdown` (multi-select mode)        |
+| `multiselect` | `dropdown`, `checkbox_list`           |
 
 Changing `type` in the editor narrows the `widget` dropdown
 automatically. Hand-edited files with incompatible combinations load
 but the editor snaps the widget back on first save.
+
+### Dynamic providers (v0.6.0) — `choices_provider` / `depends_on` / `select_all`
+
+Three optional `ParamDef` fields make a parameter *dynamic* — its
+choices (enum / multiselect / checkbox_list) or scalar value
+(text / path / number / …) come from running an external command at
+form-open / refresh time instead of a static `choices` list:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `choices_provider` | object \| null | null | `{command:[…], working_directory?, refresh?, timeout_sec?, cache?}`. Mutually exclusive with a non-empty static `choices` (loader rejects both). |
+| `depends_on` | list[str] | `[]` | Upstream param ids sent to the provider on stdin; a change re-runs it when `refresh:"on_change"`. Cycle / unknown id ⇒ load error. |
+| `select_all` | bool | false | Only with `widget:"checkbox_list"` — adds a tri-state select-all/none master. |
+
+All optional and omitted-at-default, so a v3 file without them is
+byte-identical and behaves exactly as before — no `schema_version`
+bump. Full contract: [`LLM/dynamic_providers.md`](LLM/dynamic_providers.md).
 
 ### `choices` and `choice_labels` fields
 

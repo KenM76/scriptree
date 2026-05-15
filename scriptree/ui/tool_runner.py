@@ -1656,10 +1656,19 @@ class ToolRunnerView(QWidget):
                 widget = build_widget_for(param)
                 self._widgets[param.id] = widget
                 label_text = param.label + (" *" if param.required else "")
+                # v0.6.0 — a param with a choices_provider gets a small
+                # per-param Refresh button beside it (the user may
+                # open another drawing / container after the form is
+                # up).  The ParamWidget itself stays the entry in
+                # ``self._widgets`` so get/set_value is unchanged; we
+                # wrap it + the button in a thin container row.
+                row_widget: QWidget = widget
+                if getattr(param, "choices_provider", None) is not None:
+                    row_widget = self._wrap_with_refresh(param.id, widget)
                 form.add_param_row(
                     param.id,
                     label_text,
-                    widget,
+                    row_widget,
                     tooltip=param.description,
                 )
                 widget.valueChanged.connect(self._update_live_cmd)
@@ -1713,6 +1722,260 @@ class ToolRunnerView(QWidget):
 
         # Flush any trailing tab widget.
         _flush_tab_widget()
+
+        # v0.6.0 — dynamic choice/value providers.  Runs AFTER every
+        # widget exists so upstream lookups + topo population work.
+        self._init_providers()
+
+    # ==================================================================
+    # v0.6.0 — dynamic provider orchestration
+    # ==================================================================
+    #
+    # Design notes:
+    #  * Providers run **synchronously**, bounded by
+    #    ``ProviderSpec.timeout_sec``.  An async/threaded variant with
+    #    a live spinner is a future refinement; synchronous keeps the
+    #    integration into this 4k-line view deterministic + testable
+    #    and the timeout caps the worst-case stall.
+    #  * ``build_full_argv`` purity is untouched — providers only run
+    #    in this form-population phase, never during argv assembly.
+    #  * Failures fail **soft** per the contract: the param shows an
+    #    error tooltip + (for choice widgets) a "(no items)" body,
+    #    the rest of the form stays usable, Run is blocked only if
+    #    the param is required (the existing required-check already
+    #    treats an empty value as missing).
+
+    def _wrap_with_refresh(
+        self, param_id: str, widget: QWidget,
+    ) -> QWidget:
+        """Return a container = [widget(stretch), ⟳ refresh button].
+
+        The ParamWidget remains the ``self._widgets`` entry; only the
+        visual row is wrapped.  The button is disabled later if the
+        ``dynamic_choices`` capability is denied.
+        """
+        from PySide6.QtWidgets import QHBoxLayout, QToolButton, QWidget
+        container = QWidget()
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(widget, stretch=1)
+        btn = QToolButton()
+        btn.setText("⟳")  # ⟳ clockwise open circle arrow
+        btn.setToolTip("Refresh this field from its provider")
+        btn.setAutoRaise(True)
+        btn.clicked.connect(
+            lambda _=False, pid=param_id: self._refresh_provider(
+                pid, bypass_cache=True,
+            )
+        )
+        lay.addWidget(btn)
+        if not hasattr(self, "_provider_refresh_btns"):
+            self._provider_refresh_btns = {}
+        self._provider_refresh_btns[param_id] = btn
+        return container
+
+    def _provider_params(self) -> list[Any]:
+        return [
+            p for p in self._tool.params
+            if getattr(p, "choices_provider", None) is not None
+        ]
+
+    def _init_providers(self) -> None:
+        prov_params = self._provider_params()
+        # Per-rebuild state.
+        self._provider_cache: dict[str, Any] = {}
+        self._provider_errors: dict[str, str] = {}
+        self._provider_debounce: dict[str, Any] = {}
+        if not prov_params:
+            return
+
+        from .permission_guards import perm_check
+        self._providers_allowed = bool(perm_check("dynamic_choices"))
+
+        if not self._providers_allowed:
+            note = (
+                "Dynamic choices disabled by policy "
+                "(capability: dynamic_choices)."
+            )
+            for p in prov_params:
+                w = self._widgets.get(p.id)
+                if w is not None:
+                    w.setEnabled(False)
+                    w.setToolTip(note)
+                btn = getattr(self, "_provider_refresh_btns", {}).get(p.id)
+                if btn is not None:
+                    btn.setEnabled(False)
+                    btn.setToolTip(note)
+            return
+
+        # Form-level "Refresh all" — the driving use case (the user
+        # opened another drawing/container after the form was up).
+        self._add_refresh_all_button()
+
+        # Initial population in dependency order.  on_open + on_change
+        # both populate now; manual waits for a click.
+        from scriptree.core.providers import provider_run_order
+        try:
+            order = provider_run_order(self._tool.params)
+        except ValueError:
+            # Structural errors are caught at load; defensive only.
+            order = [p.id for p in prov_params]
+        by_id = {p.id: p for p in self._tool.params}
+        for pid in order:
+            p = by_id.get(pid)
+            if p is None or getattr(p, "choices_provider", None) is None:
+                continue
+            if p.choices_provider.refresh in ("on_open", "on_change"):
+                self._run_provider(p)
+
+        # Wire on_change cascades: when any upstream value changes,
+        # debounce ~250 ms then re-run this provider.
+        from PySide6.QtCore import QTimer
+        for p in prov_params:
+            if p.choices_provider.refresh != "on_change":
+                continue
+            for dep in p.depends_on:
+                dep_w = self._widgets.get(dep)
+                if dep_w is None:
+                    continue
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.setInterval(250)
+                timer.timeout.connect(
+                    lambda pid=p.id: self._refresh_provider(
+                        pid, bypass_cache=False,
+                    )
+                )
+                self._provider_debounce[p.id] = timer
+                dep_w.valueChanged.connect(
+                    lambda _v=None, t=timer: t.start()
+                )
+
+    def _add_refresh_all_button(self) -> None:
+        if getattr(self, "_refresh_all_added", False):
+            return
+        from PySide6.QtWidgets import QPushButton
+        btn = QPushButton("⟳  Refresh dynamic fields")
+        btn.setToolTip(
+            "Re-run every dynamic field's provider (e.g. after you "
+            "open another document in the external app)."
+        )
+        btn.clicked.connect(self._refresh_all_providers)
+        # Top of the form area (index 0; the trailing stretch keeps
+        # the rest below).
+        self._form_outer_layout.insertWidget(0, btn)
+        self._refresh_all_added = True
+
+    def _upstream_values(self, param: Any) -> dict[str, str]:
+        """Current values of ``param.depends_on``, coerced to strings
+        (a list value is comma-joined — same shape the runner emits)."""
+        out: dict[str, str] = {}
+        for dep in getattr(param, "depends_on", []) or []:
+            w = self._widgets.get(dep)
+            if w is None:
+                continue
+            v = w.get_value()
+            if isinstance(v, (list, tuple)):
+                out[dep] = ",".join(str(x) for x in v)
+            else:
+                out[dep] = "" if v is None else str(v)
+        return out
+
+    def _run_provider(
+        self, param: Any, *, bypass_cache: bool = False,
+    ) -> None:
+        from scriptree.core.providers import resolve_provider
+        spec = param.choices_provider
+        upstream = self._upstream_values(param)
+        cache_key = (
+            tuple(spec.command),
+            tuple(sorted(upstream.items())),
+        )
+        use_cache = (
+            spec.cache == "form_session" and not bypass_cache
+        )
+        if use_cache and param.id in self._provider_cache:
+            cached_key, cached_res = self._provider_cache[param.id]
+            if cached_key == cache_key:
+                self._apply_provider_result(param, cached_res)
+                return
+
+        result = resolve_provider(
+            spec,
+            param_id=param.id,
+            param_type=param.type,
+            upstream_values=upstream,
+            tool_file=getattr(self._tool, "loaded_from", None),
+            env=None,  # inherit process env (PATH-prepend parity is
+                       # a documented v1 limitation — see the
+                       # dynamic_providers doc)
+        )
+        if spec.cache == "form_session":
+            self._provider_cache[param.id] = (cache_key, result)
+        self._apply_provider_result(param, result)
+
+    def _apply_provider_result(self, param: Any, result: Any) -> None:
+        w = self._widgets.get(param.id)
+        if w is None:
+            return
+        if not result.ok:
+            self._provider_errors[param.id] = result.error
+            tip = result.error
+            if result.detail:
+                tip += "\n\n" + result.detail
+            w.setToolTip(tip)
+            # Choice widgets: empty the list so it visibly reads
+            # "(no items)"; scalar widgets keep whatever they had.
+            if hasattr(w, "set_choices"):
+                try:
+                    w.set_choices([], [], None)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._update_live_cmd()
+            return
+        self._provider_errors.pop(param.id, None)
+        if result.is_scalar:
+            w.set_value(result.value)
+        elif hasattr(w, "set_choices"):
+            w.set_choices(
+                result.choices, result.choice_labels, result.default,
+            )
+        # Restore the description tooltip on success.
+        if getattr(param, "description", ""):
+            w.setToolTip(param.description)
+        self._update_live_cmd()
+
+    def _refresh_provider(
+        self, param_id: str, *, bypass_cache: bool = True,
+    ) -> None:
+        if not getattr(self, "_providers_allowed", True):
+            return
+        by_id = {p.id: p for p in self._tool.params}
+        p = by_id.get(param_id)
+        if p is None or getattr(p, "choices_provider", None) is None:
+            return
+        self._run_provider(p, bypass_cache=bypass_cache)
+        # A refreshed upstream may feed dependents — re-run any
+        # on_change provider that depends on this one.
+        for other in self._provider_params():
+            if (other.choices_provider.refresh == "on_change"
+                    and param_id in (other.depends_on or [])):
+                self._run_provider(other, bypass_cache=bypass_cache)
+
+    def _refresh_all_providers(self) -> None:
+        if not getattr(self, "_providers_allowed", True):
+            return
+        from scriptree.core.providers import provider_run_order
+        try:
+            order = provider_run_order(self._tool.params)
+        except ValueError:
+            order = [p.id for p in self._provider_params()]
+        by_id = {p.id: p for p in self._tool.params}
+        for pid in order:
+            p = by_id.get(pid)
+            if p is not None and getattr(p, "choices_provider", None):
+                self._run_provider(p, bypass_cache=True)
 
     def _install_tab_context_menu(self, tab_widget: QTabWidget) -> None:
         """Wire a right-click context menu onto ``tab_widget``'s tab bar.
@@ -1953,6 +2216,15 @@ class ToolRunnerView(QWidget):
         quirks Qt has around selection state.
         """
         if self._updating:
+            return
+        # v0.6.0 — provider on_open population runs inside
+        # ``_populate_form_rows`` (form-build phase), which finishes
+        # *before* the live-command widget is created.  set_choices /
+        # set_value emit ``valueChanged`` during that population, so
+        # this can be called early.  No-op until the preview widget
+        # exists; __init__ does a definitive _update_live_cmd() once
+        # the whole view is constructed.
+        if not hasattr(self, "_live_cmd"):
             return
         # v0.4.0 — refresh visible_when-driven row visibility before
         # collecting values, so the argv preview matches what the

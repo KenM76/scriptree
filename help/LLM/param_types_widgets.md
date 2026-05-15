@@ -39,6 +39,7 @@ accept the files.
 | `number`     | `QSpinBox` / `QDoubleSpinBox`         | integer / number      |
 | `checkbox`   | `QCheckBox`                           | booleans              |
 | `dropdown`   | `QComboBox`                           | enums, multiselects   |
+| `checkbox_list` | scroll of `QCheckBox` (+ optional tri-state master) | multiselects, esp. dynamic provider-populated lists |
 | `radio`      | `QButtonGroup` of `QRadioButton`      | enums (small sets)    |
 | `file`       | line edit + Browse (`getOpenFileName`) | existing input files  |
 | `save_file`  | line edit + Browse (`getSaveFileName`) | output files to write |
@@ -81,7 +82,14 @@ implementation's fallback.
 | `boolean`     | `checkbox`                          |
 | `path`        | `file`, `save_file`, `folder`       |
 | `enum`        | `dropdown`, `radio`                 |
-| `multiselect` | `dropdown`                          |
+| `multiselect` | `dropdown`, `checkbox_list`         |
+
+> **v0.6.0** — `multiselect` may now render as `checkbox_list` (a
+> scrollable column of checkboxes with an optional select-all/none
+> master via `select_all: true`). Any param type may also pull its
+> choices/value from an external command at form-open time via
+> `choices_provider`. See
+> [`dynamic_providers.md`](dynamic_providers.md).
 
 Hand-edited files with illegal combinations load, but on first save the
 editor snaps the widget to the first legal value. `scriptree validate`

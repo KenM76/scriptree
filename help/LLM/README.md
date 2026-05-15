@@ -137,6 +137,11 @@ the declared sections.
   sketch and all the edge cases the tests pin down.
 - [`param_types_widgets.md`](param_types_widgets.md) — the type × widget
   matrix, allowed combinations, default values per type, coercion rules.
+- [`dynamic_providers.md`](dynamic_providers.md) — v0.6.0
+  `choices_provider` / `depends_on` / `select_all`: populate a param's
+  choices or value from an external command at form-open time
+  (cascading dropdowns, dependent checkbox lists, auto-detected
+  paths). The full provider stdin/stdout contract.
 - [`parsers/`](parsers) — rules for generating CLI tools whose `--help`
   output will import cleanly into ScripTree on the first try. One file
   per tool family (`python_scripts.md`, `windows_exe.md`,
