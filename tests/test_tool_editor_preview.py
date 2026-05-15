@@ -214,3 +214,47 @@ FIND [/V] [/C] [/N] [/I] [/OFF[LINE]] "string" [[drive:][path]filename[ ...]]
             i for i, p in enumerate(tool.params) if p.id == "string"
         )
         assert isinstance(widgets[string_idx], TextWidget)
+
+
+# --- v0.6.2 — Close button + unsaved-changes guard --------------------------
+
+class TestCloseAndDirtyGuard:
+    def test_close_button_present(self) -> None:
+        ed = ToolEditorView(_tool())
+        assert ed._btn_close.text() == "Close"
+        assert ed._btn_cancel.text() == "Cancel"
+
+    def test_clean_after_construction(self) -> None:
+        ed = ToolEditorView(_tool())
+        assert ed.is_dirty() is False
+
+    def test_dirty_after_edit(self) -> None:
+        ed = ToolEditorView(_tool())
+        ed._tool.description = "changed"
+        assert ed.is_dirty() is True
+
+    def test_confirm_leave_true_when_clean(self) -> None:
+        ed = ToolEditorView(_tool())
+        # No dialog when clean — leaves silently.
+        assert ed._confirm_leave() is True
+
+    def test_clean_again_after_save(self, tmp_path) -> None:
+        import json
+        p = tmp_path / "t.scriptree"
+        p.write_text(json.dumps({
+            "schema_version": 3, "name": "demo",
+            "executable": "/bin/echo", "params": [],
+        }), encoding="utf-8")
+        from scriptree.core.io import load_tool
+        ed = ToolEditorView(load_tool(str(p)), file_path=str(p))
+        ed._tool.description = "after"
+        assert ed.is_dirty() is True
+        ed._on_save()
+        assert ed.is_dirty() is False  # baseline reset on save
+
+    def test_close_when_clean_emits_cancelled(self) -> None:
+        ed = ToolEditorView(_tool())
+        fired = []
+        ed.cancelled.connect(lambda: fired.append(True))
+        ed._on_close()  # clean → leaves without a dialog
+        assert fired == [True]

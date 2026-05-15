@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.io import save_tool
+from ..core.io import save_tool, tool_to_dict
 from ..core.model import (
     VALID_WIDGETS,
     ParamDef,
@@ -101,6 +101,14 @@ class ToolEditorView(QWidget):
         self._refresh_param_list()
         if self._tool.params:
             self._param_list.setCurrentRow(0)
+
+        # v0.6.2 — unsaved-changes detection.  Snapshot the tool's
+        # serialised form right after construction; ``is_dirty()``
+        # compares the live tool against it.  Serialised comparison
+        # (not object identity) is robust to the in-place mutation
+        # the property-panel handlers do, and ignores incidental
+        # object churn.  Refreshed after every successful save.
+        self._baseline = tool_to_dict(self._tool)
 
     # --- UI construction -------------------------------------------------
 
@@ -635,13 +643,27 @@ class ToolEditorView(QWidget):
         # Buttons.
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
+        # v0.6.2 — "Close" returns to the form (runner) window, with
+        # an unsaved-changes guard.  "Cancel" is the explicit
+        # discard-and-leave action; it carries the same guard so no
+        # exit path can silently drop edits.
+        self._btn_close = QPushButton("Close")
+        self._btn_close.setToolTip(
+            "Return to the tool's form. Prompts to save if there "
+            "are unsaved changes."
+        )
+        self._btn_close.clicked.connect(self._on_close)
         self._btn_cancel = QPushButton("Cancel")
+        self._btn_cancel.setToolTip(
+            "Discard edits and return to the tool's form."
+        )
         self._btn_cancel.clicked.connect(self._on_cancel)
         self._btn_save = QPushButton("Save")
         self._btn_save.setDefault(True)
         self._btn_save.clicked.connect(self._on_save)
         self._btn_save_as = QPushButton("Save as...")
         self._btn_save_as.clicked.connect(self._on_save_as)
+        btn_row.addWidget(self._btn_close)
         btn_row.addWidget(self._btn_cancel)
         btn_row.addWidget(self._btn_save_as)
         btn_row.addWidget(self._btn_save)
@@ -1556,6 +1578,9 @@ class ToolEditorView(QWidget):
         self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
+        # Edits are now persisted — reset the dirty baseline so a
+        # subsequent Close doesn't re-warn about already-saved work.
+        self._baseline = tool_to_dict(self._tool)
         self.saved.emit(self._tool, path)
 
     def _on_save_as(self) -> None:
@@ -1575,6 +1600,9 @@ class ToolEditorView(QWidget):
         self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
+        # Edits are now persisted — reset the dirty baseline so a
+        # subsequent Close doesn't re-warn about already-saved work.
+        self._baseline = tool_to_dict(self._tool)
         self.saved.emit(self._tool, path)
 
     def _maybe_relativize_paths(self, save_path: str) -> None:
@@ -1633,8 +1661,73 @@ class ToolEditorView(QWidget):
         )
         return path or None
 
+    def is_dirty(self) -> bool:
+        """True iff the tool has unsaved edits.
+
+        Serialised comparison against the post-construction (or
+        post-save) baseline — robust to the in-place mutation the
+        property-panel handlers do."""
+        try:
+            return tool_to_dict(self._tool) != self._baseline
+        except Exception:  # noqa: BLE001
+            # If serialisation ever throws, fail safe: assume dirty
+            # so the user is warned rather than silently losing work.
+            return True
+
+    def _confirm_leave(self) -> bool:
+        """Guard shared by Close / Cancel.  Returns True if it's OK
+        to leave the editor now (caller then emits ``cancelled`` /
+        navigates away), False to stay.
+
+        Clean (not dirty) → leave silently.  Dirty → Save / Discard /
+        Cancel.  Save runs the normal save path (which emits
+        ``saved`` and navigates back to the form itself), so on the
+        Save branch we return False and let that flow take over."""
+        if not self.is_dirty():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Unsaved changes")
+        box.setText(
+            "This tool has unsaved changes.\n\n"
+            "Save them before returning to the form?"
+        )
+        save_b = box.addButton(
+            "Save", QMessageBox.ButtonRole.AcceptRole
+        )
+        discard_b = box.addButton(
+            "Discard", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_b = box.addButton(
+            "Cancel", QMessageBox.ButtonRole.RejectRole
+        )
+        box.setDefaultButton(save_b)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is cancel_b:
+            return False  # stay in the editor
+        if clicked is discard_b:
+            return True  # leave, dropping edits
+        # Save: run the real save path.  If it actually persisted
+        # (file no longer dirty), it already emitted ``saved`` →
+        # the main window returns to the form.  We return False so
+        # this handler doesn't ALSO emit ``cancelled``.  If the save
+        # was blocked (validation error / read-only / cancelled save
+        # dialog), staying in the editor is the right outcome.
+        self._on_save()
+        return False
+
+    def _on_close(self) -> None:
+        """Return to the form (runner) window, warning first if
+        there are unsaved changes."""
+        if self._confirm_leave():
+            self.cancelled.emit()
+
     def _on_cancel(self) -> None:
-        self.cancelled.emit()
+        # Cancel = discard-and-leave, but still guard so a stray
+        # click can't silently destroy unsaved work.
+        if self._confirm_leave():
+            self.cancelled.emit()
 
 
 # --- environment summary ---------------------------------------------------
