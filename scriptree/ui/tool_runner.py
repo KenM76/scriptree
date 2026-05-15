@@ -1472,8 +1472,32 @@ class ToolRunnerView(QWidget):
         # window is narrow, instead of causing a horizontal scroll bar.
         action_row = FlowLayout(hspacing=4, vspacing=4)
 
+        # v0.6.1 — Run is green, Stop is red (universal go/stop
+        # affordance).  The :disabled rules keep the dimmed state
+        # legible instead of a flat saturated block when the button
+        # is inactive (Run while running, Stop while idle).
+        _RUN_QSS = (
+            "QPushButton { background:#2e7d32; color:#fff; "
+            "border:1px solid #1b5e20; border-radius:4px; "
+            "padding:4px 14px; font-weight:600; } "
+            "QPushButton:hover:!disabled { background:#388e3c; } "
+            "QPushButton:pressed { background:#1b5e20; } "
+            "QPushButton:disabled { background:#c8e6c9; color:#7d7d7d; "
+            "border-color:#a5d6a7; }"
+        )
+        _STOP_QSS = (
+            "QPushButton { background:#c62828; color:#fff; "
+            "border:1px solid #8e0000; border-radius:4px; "
+            "padding:4px 14px; font-weight:600; } "
+            "QPushButton:hover:!disabled { background:#d32f2f; } "
+            "QPushButton:pressed { background:#8e0000; } "
+            "QPushButton:disabled { background:#ffcdd2; color:#7d7d7d; "
+            "border-color:#ef9a9a; }"
+        )
+
         self._btn_run = QPushButton("Run")
         self._btn_run.setDefault(True)
+        self._btn_run.setStyleSheet(_RUN_QSS)
         self._btn_run.clicked.connect(self._start_run)
         # ``run_tools`` capability gate (V3 v0.3.3): when denied, the
         # Run button stays disabled.  ``_start_run`` ALSO checks at
@@ -1490,6 +1514,7 @@ class ToolRunnerView(QWidget):
         action_row.addWidget(self._btn_run)
 
         self._btn_stop = QPushButton("Stop")
+        self._btn_stop.setStyleSheet(_STOP_QSS)
         self._btn_stop.setToolTip(
             "Terminate the running child process. First press sends "
             "terminate; a second press sends kill."

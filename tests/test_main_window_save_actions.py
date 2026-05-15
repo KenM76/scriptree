@@ -263,3 +263,65 @@ def test_open_in_ring_explodes_and_launches(tmp_path: Path) -> None:
     assert len(doc["members"]) == 2  # folder + top-level leaf
     catalog_paths = [m["catalog_path"] for m in doc["members"]]
     assert all(cp for cp in catalog_paths)
+
+
+# --- v0.6.1 — Ctrl+S context-aware dispatch ---------------------------------
+
+def test_ctrl_s_owned_by_dispatch_not_save_tree() -> None:
+    """Regression: Ctrl+S must not be hard-bound to Save-tree.  It
+    used to silently save the (unchanged) tree while a tool editor
+    was open, dropping the tool edits."""
+    w = MainWindow()
+    assert w._act_save_dispatch.shortcut().toString() == "Ctrl+S"
+    assert w._act_save_tree.shortcut().toString() == ""
+
+
+def test_save_active_routes_to_tool_editor_when_open(
+    tmp_path: Path,
+) -> None:
+    """With a tool editor active, Ctrl+S saves the tool, not the
+    tree — even when a tree is also loaded."""
+    from unittest.mock import patch
+    w = MainWindow()
+    src = _seed_tree(tmp_path)
+    w._launcher.load(str(src))
+    # Open a tool from the tree in the editor.
+    leaf = w._launcher._tree_widget.topLevelItem(0)
+    # topLevelItem(0) may be a folder; find a leaf path.
+    from scriptree.ui.tree_view import _is_leaf
+    tw = w._launcher._tree_widget
+    leaf_item = None
+    for i in range(tw.topLevelItemCount()):
+        it = tw.topLevelItem(i)
+        if _is_leaf(it):
+            leaf_item = it
+            break
+        for j in range(it.childCount()):
+            if _is_leaf(it.child(j)):
+                leaf_item = it.child(j)
+                break
+        if leaf_item:
+            break
+    assert leaf_item is not None
+    w._launcher._emit_edit_for(leaf_item)
+    assert w._active_editor is not None
+    with patch.object(w, "_save_tool") as m_tool, \
+         patch.object(w, "_save_tree") as m_tree:
+        w._save_active()
+        m_tool.assert_called_once()
+        m_tree.assert_not_called()
+
+
+def test_save_active_routes_to_tree_when_no_editor(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import patch
+    w = MainWindow()
+    src = _seed_tree(tmp_path)
+    w._launcher.load(str(src))
+    assert w._active_editor is None
+    with patch.object(w, "_save_tool") as m_tool, \
+         patch.object(w, "_save_tree") as m_tree:
+        w._save_active()
+        m_tree.assert_called_once()
+        m_tool.assert_not_called()

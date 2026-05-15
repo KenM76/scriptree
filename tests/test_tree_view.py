@@ -301,3 +301,78 @@ class TestNewTree:
         assert view.is_dirty() is True
         assert view._tree is not None
         assert view._tree.name == "My tree"
+
+
+# --- v0.6.1 interaction changes --------------------------------------------
+
+class TestTreeInteractionV061:
+    """Single-click activation, right-click Edit on the hovered item,
+    double-right-click → standalone descriptor, debounced menu."""
+
+    def _view(self, tmp_tree_dir: Path) -> TreeLauncherView:
+        view = TreeLauncherView()
+        view.load(str(tmp_tree_dir / "group.scriptreetree"))
+        return view
+
+    def test_single_click_activates_leaf(self, tmp_tree_dir: Path) -> None:
+        view = self._view(tmp_tree_dir)
+        got: list = []
+        view.toolSelected.connect(lambda t, p: got.append(p))
+        alpha = view._tree_widget.topLevelItem(0)
+        # itemClicked is the wired signal now (not itemDoubleClicked).
+        view._tree_widget.itemClicked.emit(alpha, 0)
+        assert len(got) == 1
+        assert got[0].endswith("alpha.scriptree")
+
+    def test_right_click_edit_emits_editRequested(
+        self, tmp_tree_dir: Path
+    ) -> None:
+        view = self._view(tmp_tree_dir)
+        got: list = []
+        view.editRequested.connect(lambda t, p: got.append((t, p)))
+        alpha = view._tree_widget.topLevelItem(0)
+        view._emit_edit_for(alpha)
+        assert len(got) == 1
+        tool, path = got[0]
+        assert path.endswith("alpha.scriptree")
+        assert tool.name == "alpha"
+
+    def test_double_right_click_descriptor_for_leaf(
+        self, tmp_tree_dir: Path
+    ) -> None:
+        view = self._view(tmp_tree_dir)
+        alpha = view._tree_widget.topLevelItem(0)
+        desc = view._standalone_descriptor(alpha)
+        assert desc["kind"] == "tool"
+        assert desc["path"].endswith("alpha.scriptree")
+        assert desc["tool"].name == "alpha"
+
+    def test_double_right_click_descriptor_for_folder(
+        self, tmp_tree_dir: Path
+    ) -> None:
+        view = self._view(tmp_tree_dir)
+        folder = view._tree_widget.topLevelItem(1)
+        assert view._standalone_descriptor(folder) == {"kind": "folder"}
+        # Empty space (None) → whole-tree fallback descriptor.
+        assert view._standalone_descriptor(None) == {"kind": "folder"}
+
+    def test_standalone_requested_emitted_on_right_double(
+        self, tmp_tree_dir: Path
+    ) -> None:
+        view = self._view(tmp_tree_dir)
+        got: list = []
+        view.standaloneRequested.connect(lambda d: got.append(d))
+        alpha = view._tree_widget.topLevelItem(0)
+        view._emit_standalone_for(alpha)
+        assert len(got) == 1 and got[0]["kind"] == "tool"
+
+    def test_context_menu_is_debounced(
+        self, tmp_tree_dir: Path
+    ) -> None:
+        view = self._view(tmp_tree_dir)
+        from PySide6.QtCore import QPoint
+        view._schedule_context_menu(QPoint(1, 1))
+        assert view._ctx_timer.isActive()
+        # A right double-click cancels the pending menu.
+        view._on_right_double_click(QPoint(1, 1))
+        assert not view._ctx_timer.isActive()

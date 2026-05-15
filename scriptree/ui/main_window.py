@@ -171,6 +171,10 @@ class MainWindow(QMainWindow):
         # --- Tools launcher dock (left of Form) ---
         self._launcher = TreeLauncherView()
         self._launcher.toolSelected.connect(self._on_tool_selected)
+        self._launcher.editRequested.connect(self._on_tree_edit_requested)
+        self._launcher.standaloneRequested.connect(
+            self._on_tree_standalone_requested
+        )
         self._launcher.treeModified.connect(self._on_tree_modified)
 
         self._tools_dock = ads.CDockWidget(self._dock_manager, "Tools")
@@ -286,10 +290,26 @@ class MainWindow(QMainWindow):
         m_file.addAction(self._act_save_tool_as)
 
         self._act_save_tree = QAction("&Save tree", self)
-        self._act_save_tree.setShortcut("Ctrl+S")
+        # NOTE: Ctrl+S is owned by ``_act_save_dispatch`` below, NOT
+        # hard-bound to Save-tree.  Previously Ctrl+S always saved the
+        # tree — so editing a .scriptree opened from an open
+        # .scriptreetree and pressing Ctrl+S saved the (unchanged)
+        # tree and silently dropped the tool edits.  The dispatcher
+        # routes Ctrl+S to whatever is actually active.
         self._act_save_tree.triggered.connect(self._save_tree)
         self._act_save_tree.setEnabled(False)
         m_file.addAction(self._act_save_tree)
+
+        # Context-aware Ctrl+S.  Hidden action (not in any menu — the
+        # visible Save tool / Save tree items keep their own
+        # triggers); it just owns the shortcut and dispatches:
+        #   * tool editor active        → save the tool
+        #   * else a tree is loaded     → save the tree
+        #   * else nothing to do        → status hint
+        self._act_save_dispatch = QAction(self)
+        self._act_save_dispatch.setShortcut("Ctrl+S")
+        self._act_save_dispatch.triggered.connect(self._save_active)
+        self.addAction(self._act_save_dispatch)
 
         self._act_save_tree_as = QAction("Save tree as...", self)
         self._act_save_tree_as.setToolTip(
@@ -865,6 +885,27 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Tree saved to {path.name}")
                 self._add_recent_file(str(path))
 
+    def _save_active(self) -> None:
+        """Ctrl+S dispatcher — save whatever the user is actually
+        looking at.
+
+        Priority: an open tool editor wins (its edits are the most
+        likely thing the user means to save, and they're lost on
+        navigate-away if not persisted).  Otherwise fall back to
+        saving the loaded tree.  This fixes the long-standing trap
+        where Ctrl+S while editing a tool from an open tree saved
+        the tree instead and silently discarded the tool edits.
+        """
+        if self._active_editor is not None:
+            self._save_tool()
+            return
+        if self._launcher.tree_file() is not None:
+            self._save_tree()
+            return
+        self.statusBar().showMessage(
+            "Nothing to save — open a tool or tree first.", 4000
+        )
+
     def _save_tool(self) -> None:
         """Save the active editor's .scriptree.  Disabled when no editor."""
         from .permission_guards import perm_check
@@ -1266,6 +1307,47 @@ class MainWindow(QMainWindow):
         # Recent is built only from deliberate File -> Open and the
         # Recent menu itself (both go through _add_recent_file).
         self._show_runner(tool, path)
+
+    def _on_tree_edit_requested(self, tool: ToolDef, path: str) -> None:
+        """Right-click ▸ Edit on a tree leaf — open the tool editor
+        bound to that file so Save writes back to it."""
+        self._show_editor(tool, path)
+
+    def _on_tree_standalone_requested(self, desc: object) -> None:
+        """Double-right-click (or right-click ▸ Open standalone) on a
+        tree item.  ``desc`` is the descriptor dict built by
+        ``TreeLauncherView._standalone_descriptor``."""
+        from .standalone_window import StandaloneWindow
+        if not isinstance(desc, dict):
+            return
+        kind = desc.get("kind")
+        try:
+            if kind == "tool":
+                win = StandaloneWindow.from_tool(
+                    desc["tool"], desc.get("path"), parent=self
+                )
+            elif kind == "tree":
+                win = StandaloneWindow.from_tree(
+                    desc["path"], parent=self
+                )
+            else:
+                # Bare in-memory folder — fall back to the whole
+                # loaded tree standalone (closest existing capability).
+                tree_file = self._launcher.tree_file()
+                if tree_file is None:
+                    self.statusBar().showMessage(
+                        "Nothing to open standalone here.", 4000
+                    )
+                    return
+                win = StandaloneWindow.from_tree(
+                    str(tree_file), parent=self
+                )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Standalone failed", str(e)
+            )
+            return
+        win.show()
 
     # --- stack management ----------------------------------------------------
 
