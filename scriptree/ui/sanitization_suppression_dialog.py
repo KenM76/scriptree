@@ -1,28 +1,55 @@
 """Edit -> Sanitization warnings... dialog (V3 v0.3.4).
 
+## For humans
+
 Provides the inverse of the three "Don't warn again" checkboxes
 in the injection-warning popup: a simple read/edit view of the
-persisted suppression state, with one-click un-mute for any
-entry.
+persisted suppression state, with one-click un-mute for any entry.
 
-UX
---
+Layout:
 
-Top section: a single checkbox showing the global mute state.
-Toggling it writes through immediately.
+- Top: a single checkbox showing the global mute state. Toggling it
+  writes through immediately.
+- Middle: list of muted tools (tool path; "Re-enable selected tool").
+- Bottom: tree of muted fields per tool (tool path expands to show
+  field IDs; "Re-enable selected field").
+- Footer: a single "Re-enable everything" button + Close.
 
-Middle section: list of muted tools (tool path + Remove button
-per row).
+The dialog reflects the underlying ``QSettings`` data; the user's
+edits are written back as they happen via the ``sanitize_suppression``
+module's setter API. Changes take effect on the next Run.
 
-Bottom section: tree of muted fields per tool (tool path expands
-to show field IDs, each with a Remove button).
+## For maintainers / LLMs
 
-Footer: a single "Re-enable everything" button + Close.
-
-The dialog is read-only of the underlying ``QSettings`` data; the
-user's edits are written back as they happen via the
-``sanitize_suppression`` module's setter API.  Closing the dialog
-takes effect immediately on the next Run.
+- This dialog NEVER stores state of its own — every handler writes
+  through to ``core.sanitize_suppression`` (``_supp``) immediately
+  and then calls ``_refresh()`` to rebuild from ground truth. Do not
+  cache mute state in the dialog; ``QSettings`` is the single source
+  of truth.
+- ``_refresh`` wraps the global checkbox in
+  ``blockSignals(True/False)`` so re-seeding its checked state does
+  NOT re-fire ``_on_global_toggled`` (which would write back the
+  value it just read). Keep that guard around any programmatic
+  ``setChecked`` here.
+- Placeholder rows ("(no tools muted)" / "(no fields muted)") are
+  inserted with ``Qt.ItemFlag.NoItemFlags`` so they are not
+  selectable — the un-mute handlers also re-check the
+  ``UserRole`` payload, so a placeholder can't be acted on. Preserve
+  both guards.
+- ``UserRole`` payload encodes the row's identity: a bare path for
+  the tool list; a tuple ``("tool", path)`` or ``("field", path,
+  fid)`` for the tree. ``_on_unmute_field`` dispatches on
+  ``data[0]``; selecting a tool root un-mutes every field under it by
+  iterating a snapshot (``list(...)``) since the underlying set
+  mutates during the loop. Don't iterate the live set.
+- Imports ``_load_fields_map`` (a private ``_supp`` symbol) directly
+  to render the field tree — a deliberate coupling to the
+  suppression module's storage shape; if that internal changes, this
+  dialog must change with it.
+- Footer "Re-enable everything" is gated behind a Yes/No
+  confirmation; the Close button uses the dialog box's ``rejected``
+  signal (this is a non-destructive viewer — there is no Accept/save
+  step, edits are already persisted).
 """
 from __future__ import annotations
 

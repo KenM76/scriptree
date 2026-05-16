@@ -1,6 +1,8 @@
 """
 forest_discover.py — auto-discovery walker for ``.scriptreeforest``.
 
+## For humans
+
 Implements the priority-by-layer rule the user signed off on:
 
     For each subdirectory D, walking depth-first:
@@ -34,6 +36,49 @@ Public API
     discover(roots, include, excluded)        → list[DiscoveredItem]
     diff_against(current_items, discovered, excluded)
                                               → DiscoveryDiff
+
+## For maintainers / LLMs
+
+- ``_emit_for_dir`` takes ``excluded_norm`` but DOES NOT USE IT.
+  Exclusion is intentionally handled downstream in ``diff_against``,
+  not in the walker: the walker emits EVERY priority-tier match
+  (excluded or not) and stops descending; ``diff_against`` then routes
+  excluded paths into ``previously_excluded``.  This is the whole reason
+  an excluded ring still "blocks" its folder's tool sibling.  Do not
+  "optimise" by filtering excluded files inside the walker — it would
+  silently demote a ring-folder to its tools, the exact footgun the
+  design avoids.
+- ``SUFFIX_PRIORITY`` ordering (ring > tree > tool) is owned by
+  ``forest_io``.  Both this walker and ``kind_for_suffix`` depend on
+  ``.scriptreering`` / ``.scriptreetree`` being tested before the
+  shorter ``.scriptree`` (suffix-endswith matching).  Reordering that
+  tuple silently mis-classifies every tree as a tool.
+- Per-directory priority is "first non-empty tier wins, then STOP". A
+  folder with both a ring and tools yields ONLY the ring and is not
+  descended into.  ``stop=True`` is also returned when a tier matches
+  but its kind is filtered out of ``include`` — that is deliberate
+  (don't fall through to a lower kind).
+- ``_walk`` is iterative (explicit stack) with ``max_depth=16`` as a
+  symlink-loop guard. Note: an emitting directory still gets its
+  subdirs skipped via ``continue`` after ``stop`` — but a NON-emitting
+  dir pushes children with ``depth+1``; the depth check is ``> max_depth``
+  so depth 16 is still processed, 17 is dropped.
+- Hidden-dir skip is applied TWICE — once when popping (``d.name
+  .startswith(".")``, but only ``if d != root`` so a dotted root still
+  walks) and once when pushing children. Keep both; the pop-time check
+  is what lets an explicitly-configured dotted root be scanned.
+- ``_norm`` lower-cases AND ``resolve()``s; all set membership across
+  this module and ``forest_controller`` goes through an identical
+  ``_norm``.  These two copies must stay byte-for-byte equivalent or
+  add/remove/exclude comparisons desync across the controller boundary.
+  On Windows this case-folding is correct; on a case-sensitive FS it
+  would conflate ``Foo`` and ``foo`` (accepted trade-off, Win11 target).
+- ``diff_against`` "removed" rule: an item on the forest but absent
+  from discovery is removed ONLY if it no longer exists on disk —
+  user-added items outside the scan roots are kept. Changing this to
+  "remove anything not rediscovered" would delete hand-added items.
+- ``discover`` dedups across overlapping roots by normalised path,
+  FIRST hit wins (and thus the kind from the first root that saw it).
 """
 from __future__ import annotations
 

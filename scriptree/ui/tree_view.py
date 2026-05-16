@@ -1,8 +1,10 @@
 """Editable tree-view launcher for .scriptreetree files.
 
+## For humans
+
 Responsibilities:
 
-- **Launch**: double-clicking a leaf loads the referenced .scriptree
+- **Launch**: single-clicking a leaf loads the referenced .scriptree
   file and emits ``toolSelected``; the main window swaps to a
   ``ToolRunnerView`` for that tool.
 - **Edit**: the tree is a first-class editor. Drag-drop reorders
@@ -17,7 +19,7 @@ Dirty-state handling: any edit sets ``_dirty=True`` and appends ``*``
 to the title. ``treeModified`` is emitted so the main window can
 reflect the state in its own title / save action.
 
-## Qt drag-drop model
+### Qt drag-drop model
 
 Qt's ``InternalMove`` mode handles folder/leaf reparenting natively
 when items have the right flags set — folders get
@@ -27,6 +29,48 @@ Explorer) are accepted by overriding ``dragEnterEvent``,
 subclass below; the override only intercepts drops that carry URLs
 and passes everything else through to Qt's internal handling so
 reordering still works.
+
+## For maintainers / LLMs
+
+- Activation is ``itemClicked`` (single click on a leaf), NOT
+  ``itemDoubleClicked`` — the human summary line above is kept
+  authoritative. Double-click is intentionally NOT the launch
+  gesture; do not rewire ``_on_item_activated`` to double-click or
+  single-click leaf launching breaks.
+- Right-click context menu targets the item *under the cursor*, not
+  the prior selection: ``_show_context_menu`` calls
+  ``setCurrentItem(item)`` first so selection-based actions (Remove,
+  Edit) act on the hovered row. Preserve that select-then-build order.
+- The context menu is debounced ~220 ms via ``_ctx_timer`` so a
+  double-right-click (→ ``standaloneRequested``) does not first flash
+  the menu. ``_on_right_double_click`` must ``stop()`` the timer and
+  clear ``_pending_ctx_pos`` before emitting, or a stale menu fires
+  after the standalone window opens.
+- Double-right-click is delivered by ``_EditableTreeWidget``'s
+  ``mouseDoubleClickEvent`` filtering ``Qt.RightButton`` →
+  ``rightDoubleClicked`` signal; the left-button path still calls
+  ``super()`` so Qt expand/collapse is intact. Keep the
+  ``RightButton`` guard and the ``super()`` fall-through.
+- ``_standalone_descriptor`` returns ``None`` for a missing/unloadable
+  leaf path (file gone, or ``load_tool`` raised). Callers must treat
+  ``None`` as "nothing to open" — emitting ``standaloneRequested``
+  with it would crash the consumer.
+- ``InternalMove`` correctness depends on the drop-enabled flags:
+  folders get ``ItemIsDropEnabled``, leaves do NOT. Any new item
+  factory must set these or leaves become illegal drop containers.
+- ``dropEvent``/``dragMoveEvent`` overrides MUST pass non-URL events
+  through to ``super()`` — short-circuiting them silently kills
+  internal reorder. Only URL-bearing (external-file) drops are ours.
+- ``rowsMoved`` → ``_on_rows_moved`` is the only dirty hook for
+  drag-reorder; explicit add/remove/rename set ``_dirty`` directly.
+  Any new mutation path must mark dirty + emit ``treeModified`` or
+  the main window's save state goes stale (silent data loss).
+- Path serialization is relative-when-possible, absolute-fallback,
+  computed against the .scriptreetree's directory; do not switch to
+  CWD-relative or saved trees become non-portable.
+- Adding a subtree checks for cycles (``collect_scriptreetree_refs``)
+  and refuses self/ancestor references; keep that guard before any
+  new subtree-insert path.
 """
 from __future__ import annotations
 

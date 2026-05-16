@@ -1,5 +1,7 @@
 """Secure session-scoped credential storage.
 
+## For humans
+
 Credentials (username + password) are stored encrypted in memory using
 a one-time pad generated at store time. This keeps plaintext passwords
 out of Python's string intern pool and the immutable ``str`` heap.
@@ -25,6 +27,33 @@ Limitations:
 - ``os.urandom`` quality depends on the OS CSPRNG.
 
 This module is pure Python, no Qt.
+
+## For maintainers / LLMs
+
+* Invariant: ``_cipher`` and ``_pad`` are always the same length
+  (both derived from the same UTF-8 plaintext byte count). ``zip``
+  in ``decrypt`` silently stops at the shorter — never mutate one
+  without the other or you'll corrupt the password.
+* ``decrypt`` returns a fresh ``str`` (immutable, can't be wiped)
+  and zeroes only its own intermediate ``bytearray``. The contract
+  is "caller uses and discards" — every call is a fresh decryption,
+  so callers must NOT cache the returned string.
+* ``from_plaintext`` wipes the temporary ``data`` bytearray, but the
+  ``str`` argument passed in by the caller is still an immutable
+  interned object the caller is responsible for — this module can't
+  scrub it. Document that at call sites.
+* ``put`` and ``remove`` zero the OLD credential before replacing /
+  dropping it. Any new mutator that displaces a ``StoredCredential``
+  MUST call ``.clear()`` on the displaced one or it leaks key
+  material until GC.
+* ``clear_all`` zeros every value then clears the dict — call it on
+  session end / logout. The module singleton (``_session_store``)
+  lives for the whole process; it is never auto-cleared.
+* This is obfuscation/defence-in-depth, not cryptography: an
+  attacker with process memory access can recover ``cipher ^ pad``.
+  Don't oversell it; don't add it to disk.
+* Keep this module Qt-free (no lazy import either) — it sits behind
+  the headless path.
 """
 from __future__ import annotations
 

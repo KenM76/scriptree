@@ -1,6 +1,8 @@
 """A horizontal-first layout that wraps child widgets to the next row
 when horizontal space runs out.
 
+## For humans
+
 Used for button rows (Run / Stop / Copy argv / Undo / Redo / Reset /
 Clear) and the configuration toolbar — both of which previously sat
 inside a ``QHBoxLayout`` and caused a horizontal scroll bar on the
@@ -8,8 +10,37 @@ form whenever the window was narrower than the full row.
 
 This is a textbook Qt ``QLayout`` subclass; the shape is based on the
 ``FlowLayout`` example that ships with Qt (widgets/layouts/flowlayout
-in the C++ examples), ported to Python/PySide6. Drop in as a replacement
-for ``QHBoxLayout``.
+in the C++ examples), ported to Python/PySide6. Drop in as a
+replacement for ``QHBoxLayout``.
+
+## For maintainers / LLMs
+
+- The ``QLayout`` contract requires all of ``addItem``, ``count``,
+  ``itemAt``, ``takeAt``, ``sizeHint``, ``setGeometry`` — Qt calls
+  ``takeAt`` to dispose items; ``self._items`` is the single source of
+  truth and must stay consistent across add/take.
+- Height-for-width is the load-bearing mechanic:
+  ``hasHeightForWidth`` returns True and ``heightForWidth`` runs
+  ``_do_layout`` with ``test_only=True`` (measure, don't move). The
+  parent layout uses that to allocate vertical space; breaking it
+  reintroduces the horizontal scroll bar this class exists to remove.
+- ``_do_layout`` is the only place geometry is computed. The wrap test
+  is ``next_x - space_x > effective.right() and line_height > 0`` —
+  the ``line_height > 0`` guard forces at least one item per row so an
+  item wider than the viewport still places (no infinite reflow).
+- Spacing resolution has two layers: ``horizontal_spacing`` /
+  ``vertical_spacing`` honour explicit ``hspacing``/``vspacing`` ≥ 0,
+  else fall back to the parent's style metric; when that is still -1,
+  ``_do_layout`` substitutes the per-widget ``layoutSpacing`` for
+  PushButton/PushButton. Keep both fallback levels.
+- ``setContentsMargins`` is called differently for the
+  parent-vs-no-parent case (int 4-arg vs ``QMargins``) — a
+  PySide6 overload-resolution workaround; do not "simplify" to one
+  form.
+- ``minimumSize`` aggregates the max of every item's minimum plus
+  margins; ``sizeHint`` aliases it. Items are positioned at their
+  ``sizeHint()`` size, never stretched (``expandingDirections`` is
+  empty by design).
 """
 from __future__ import annotations
 

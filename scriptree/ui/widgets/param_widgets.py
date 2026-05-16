@@ -1,5 +1,7 @@
 """Param widgets used by the tool runner form.
 
+## For humans
+
 Each widget exposes a uniform interface::
 
     class ParamWidget(QWidget):
@@ -7,13 +9,77 @@ Each widget exposes a uniform interface::
         def get_value(self) -> Any: ...
         def set_value(self, v: Any) -> None: ...
 
-``build_widget_for(param)`` maps a ``ParamDef`` to a concrete widget.
+``build_widget_for(param)`` maps a ``ParamDef`` to a concrete widget
+and applies a universal hover tooltip drawn from
+``param.description``.
 
 The file-picker and folder-picker widgets use ``QFileDialog`` with
 native Windows dialogs — these are the same common dialogs File
 Explorer uses, satisfying the "native Windows dialog" requirement.
 All ``QFileDialog`` calls are confined to this module so a fork for
 another platform only has to change this one file.
+
+## For maintainers / LLMs
+
+- ``build_widget_for``'s ``mapping`` dict is the authoritative
+  ``WidgetKind`` → class registry. An unknown ``param.widget`` falls
+  back to ``TextWidget`` (``mapping.get(param.widget, TextWidget)``)
+  — keep that default; never raise here (a bad ParamDef must still
+  render something).
+- VALUE-MODEL CONTRACT (argv stability): ``DropdownWidget`` /
+  ``RadioWidget`` display ``param.label_for_choice(value)`` but
+  ``get_value()`` returns the RAW ``param.choices`` value (str),
+  never the label. ``CheckboxListWidget.get_value()`` returns a
+  ``list[str]`` of checked choice values IN CHOICE ORDER — identical
+  to the multi-select dropdown's model, because the runner
+  comma-joins a list into one argv token (see ``core/runner.py``).
+  Changing any of these return shapes silently changes emitted argv.
+- Multiselect renders as a dropdown OR (v0.6.0) ``CheckboxListWidget``
+  with ``param.select_all`` adding a TRI-STATE master: partial /
+  unchecked → click selects all; checked → click clears all
+  (``_on_master_clicked`` normalises Qt's tristate advance).
+  ``_sync_master`` recomputes the master state from the rows after
+  every item toggle — keep master state derived, never authoritative.
+- ``DropdownWidget.set_choices`` / ``CheckboxListWidget.set_choices``
+  are the v0.6.0 runtime-provider repopulation hook. Both PRESERVE a
+  still-valid prior selection, else fall back to ``default``, and
+  block signals during the rebuild so at most one ``valueChanged``
+  fires — and only if the effective value actually changed. Maintain
+  the block + single-emit invariant.
+- ``CheckboxListWidget`` rebuilds rows by ``deleteLater()`` on old
+  boxes and ``insertWidget`` BEFORE the trailing stretch
+  (``count()-1``); an empty choice list yields a disabled
+  ``(no items)`` row, not an empty box. Per-box ``toggled`` signals
+  are blocked during programmatic ``set_value`` / select-all to avoid
+  emit storms.
+- Drag-and-drop only works via the real subclasses
+  ``_DroppableLineEdit`` / ``_DroppablePlainTextEdit`` — Qt binds the
+  C++ vtable at construction, so monkey-patching ``dropEvent`` on a
+  stock ``QLineEdit`` is silently a no-op. Any new path-aware text
+  field MUST use these subclasses. ``_local_paths_from_mime`` accesses
+  the QMimeData URL API defensively (``getattr``) because PySide6
+  hands back a bare wrapper for Python-constructed events.
+- ``NumberWidget`` picks ``QDoubleSpinBox`` (NUMBER, 6 decimals,
+  ±1e12) vs ``QSpinBox`` (INTEGER, ±2³¹) by ``param.type``;
+  ``set_value`` coerces via ``float()`` and FALLS BACK TO 0 on
+  ``TypeError``/``ValueError`` (or empty string) — a non-numeric
+  config value becomes 0, it does not raise. ``QSpinBox`` will also
+  clamp/truncate a float silently.
+- ``RadioWidget.set_value(None)`` must flip ``setExclusive(False)``
+  before unchecking all, then restore True — an exclusive
+  ``QButtonGroup`` refuses a zero-checked state otherwise. An empty
+  ``""`` choice value is the intentional "none" option (drops the
+  template token).
+- ``_apply_tooltip_recursively`` propagates the description tooltip to
+  every interactive descendant but SKIPS ``QLabel`` (so
+  ``CheckboxWidget``'s word-wrapped description isn't shadowed) and
+  never clobbers a child that already set its own tooltip
+  (Browse/Open buttons). ``_build_tooltip`` HTML-escapes user text;
+  preserve the escape.
+- Picker "Open" buttons are strictly non-mutating: they read the line
+  edit and never write it; ``_resolve_open_target`` walks parents
+  (capped at 64) to the nearest existing ancestor and OS-launch
+  failures are swallowed (convenience must never abort form work).
 """
 from __future__ import annotations
 

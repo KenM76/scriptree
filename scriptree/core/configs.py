@@ -1,5 +1,7 @@
 """Saved configurations for tool runs (sidecar file).
 
+## For humans
+
 Every .scriptree file may have a sidecar ``<tool>.scriptree.configs.json``
 holding one or more **configurations** — named snapshots of form values
 plus any extra tokens the user typed into the command preview. The
@@ -23,8 +25,61 @@ the runner view then falls back to a single in-memory "default"
 configuration built from the ParamDef defaults. As soon as the user
 saves/renames/edits a configuration the sidecar is created.
 
+There is also a tree-level sidecar (``.treeconfigs.json``) mapping
+tool-relative paths to config names, and a "personal" sidecar scheme
+for per-user (vs shared) configs that lives in the user_configs/
+directory under a ``<stem>.NNN-scriptree.configs.json`` name.
+
 Pure-Python, no Qt imports — lives in ``core`` so it's unit-testable
 without a QApplication.
+
+## For maintainers / LLMs
+
+* Qt-purity: this module must stay Qt-free. The ONLY tie to
+  ``app_settings`` (which carries QSettings) is a function-local
+  ``from .app_settings import get_personal_configs_dir`` inside
+  ``personal_configs_path`` / ``find_personal_config_candidates``,
+  taken only when the caller passes ``personal_dir=None``. Callers
+  on the headless path should pass an explicit ``personal_dir`` to
+  avoid pulling that import.
+* Serialization is asymmetric on purpose: ``*_to_dict`` emits
+  optional keys (``default_name``, ``env``, ``path_prepend``,
+  ``ui_visibility``, ``hidden_params``, ``prompt_credentials``,
+  ``storage``, ``source_*``) ONLY when non-default/non-empty so
+  legacy sidecars stay byte-identical. If you add a field, follow
+  the same "emit only when set" rule or you will churn every
+  existing sidecar.
+* ``configs_from_dict`` raises ``ValueError`` when
+  ``schema_version`` exceeds ``CONFIGS_SCHEMA_VERSION`` (forward-
+  incompat guard). Bumping the schema means bumping that constant
+  AND keeping the reader tolerant of older files.
+* ``UIVisibility.config_bar`` is a tri-state STRING
+  ("hidden"/"read"/"readwrite") with legacy-bool migration in
+  ``_vis_from_dict`` (True→"readwrite", False→"hidden"); every
+  other ``_VIS_FIELDS`` member is a bool. Adding a visibility flag
+  means updating ``_VIS_FIELDS``, ``UIVisibility``, ``_vis_from_dict``
+  and ``_config_to_dict`` together.
+* ``safetree`` is a reserved config name (``SAFETREE_CONFIG_NAME``):
+  ``is_reserved_config_name`` blocks users from creating/renaming
+  to it; ``ensure_safetree_config`` always OVERWRITES any existing
+  safetree entry with the canonical hidden-chrome version. Don't
+  let user edits to it persist.
+* Personal-sidecar matching is two-stage: filename-stem regex match
+  (``_PERSONAL_TOOL_RE`` / ``_PERSONAL_TREE_RE``), THEN an internal
+  ``source_filename`` + ``source_locations`` check — two different
+  tools can share a stem, so the regex alone is never authoritative
+  (see ``load_personal_configs_for``'s tri-state return).
+* ``active`` / ``default_name`` are self-healing: ``configs_from_dict``
+  drops an ``active``/``default_name`` that names a missing config;
+  ``active_config`` repairs a stale pointer in place. ``default_config``
+  prefers ``default_name`` then falls back to ``active``.
+* Tree-stem stripping order matters: ``_tool_stem`` strips
+  ``.scriptreetree`` before ``.scriptree`` because the shorter
+  suffix is a prefix of the longer one.
+* All sidecar reads/writes are UTF-8 explicit; raw ``json.loads``
+  in ``load_configs`` / ``add_location_to_personal`` is NOT guarded
+  (a corrupt shared sidecar raises). Only the personal-candidate
+  scan in ``load_personal_configs_for`` tolerates bad JSON.
 """
 from __future__ import annotations
 

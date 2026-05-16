@@ -1,7 +1,8 @@
 """Cross-platform application branding helpers (icon + identity).
 
-Responsibilities
-----------------
+## For humans
+
+Responsibilities:
 
 * Locate the best available icon file for the current OS:
 
@@ -18,6 +19,32 @@ Responsibilities
 
 All functions are no-ops if PySide6 isn't importable or the icon files
 are absent — ScripTree still runs, just without custom branding.
+
+## For maintainers / LLMs
+
+* No module-level Qt import: ``QIcon`` is imported lazily inside
+  ``apply_branding`` (guarded by ``try/except ImportError``). Keep
+  it that way — a top-level PySide6 import here would break the
+  ``core`` purity test.
+* ``APP_USER_MODEL_ID`` ("ScripTree.App") is a stable external
+  identity. Changing it strands users' existing pinned taskbar
+  shortcuts / jump-list entries — treat it as an ABI, not a constant
+  to tidy.
+* Call ordering is load-bearing: ``set_windows_app_user_model_id()``
+  MUST run before any HWND/window is created (``apply_branding``
+  calls it first for this reason). Callers must invoke
+  ``apply_branding`` right after constructing the QApplication and
+  before any window.
+* ``_RESOURCES`` is computed as ``<this file>/../../resources`` —
+  it assumes this file stays at ``scriptree/core/branding.py``.
+  Moving the file silently breaks icon discovery (``icon_path``
+  just returns ``None``, no error).
+* Every Windows ctypes / icon failure is intentionally swallowed
+  (broad ``except``): branding is cosmetic and must never crash or
+  block startup. Don't "fix" these into raising.
+* ``icon_path`` returns the first existing candidate; the Linux
+  branch deliberately falls back to ``.ico`` last-ditch even though
+  Linux can't render it well — better than no icon.
 """
 from __future__ import annotations
 

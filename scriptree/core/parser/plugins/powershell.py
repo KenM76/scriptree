@@ -1,5 +1,7 @@
 """Tier-1 parser for PowerShell ``Get-Help -Full`` output.
 
+## For humans
+
 PowerShell cmdlets emit a distinctive structured help format::
 
     NAME
@@ -40,6 +42,33 @@ Common parameters (``-Verbose``, ``-Debug``, ``-ErrorAction``, ``-WhatIf``,
 Because ScripTree wraps ``powershell.exe -NoProfile -Command "CmdletName ..."``,
 the generated tool uses ``powershell.exe`` as the executable and emits the
 cmdlet name as a literal in the argument template.
+
+## For maintainers / LLMs
+
+- EDITOR-time plugin. ``PRIORITY=25`` (after click 20, before
+  winhelp 30) — winhelp's slash-flag heuristic would otherwise
+  also fire on some cmdlet help, so this must stay lower-numbered
+  than winhelp.
+- Detection requires ``NAME`` AND ``PARAMETERS`` headers (SYNTAX is
+  documented but not required by ``looks_like_powershell_help``).
+- Skip lists are layered: ``_SKIP_PARAMS`` (common/-WhatIf/-Confirm
+  by flag name), ``_SKIP_TYPES`` (securestring/pscredential — not
+  argv-passable), ``_PIPELINE_ONLY_TYPES`` (object refs).
+  ``_map_type`` returns None for the latter two => param dropped.
+  Unknown type tags fall back to ``(STRING, TEXT)``.
+- Type tags are matched lowercased; ``_TYPE_MAP`` keys must be
+  lowercase. Empty type tag = switch = boolean.
+- Multi-parameter-set handling: when >1 non-``(All)`` sets exist,
+  params outside ``(All)`` are forced ``required=False`` (user may
+  pick a different set). Booleans are ALWAYS ``required=False``.
+- Template construction is positional-aware: a param is emitted
+  bare ``{id}`` only if ``Position?`` is non-``Named`` AND digit;
+  otherwise it's a ``["-Flag", "{id}"]`` token group. Booleans emit
+  ``{id?-Flag}``. Final argv =
+  ``["-NoProfile","-Command", <cmdlet>, *tokens]``.
+- ``_flag_to_id`` does CamelCase→snake_case then uniquifies; an
+  empty/invalid id drops the param. Returns ``""`` (not None) on
+  failure — callers test falsiness.
 """
 from __future__ import annotations
 

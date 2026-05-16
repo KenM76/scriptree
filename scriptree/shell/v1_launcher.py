@@ -1,6 +1,8 @@
 """
 v1_launcher.py — subprocess shellouts from the cell shell into the V1 editor.
 
+## For humans
+
 The cell/ring shell does NOT import the V1 ``ToolRunnerView`` /
 ``MainWindow`` / ``StandaloneWindow`` directly.  Instead, it spawns
 ``run_scriptree.bat`` as a separate process whenever the user picks
@@ -24,6 +26,51 @@ used to call (`show_tree_for`, `show_main_window_for`,
 which we discarded; here they all redirect to the appropriate
 subprocess call (single-tool standalone, full editor, or full editor
 with the cell's loaded catalog).
+
+## For maintainers / LLMs
+
+* This module MUST NOT import the V1 editor (ToolRunnerView /
+  MainWindow / StandaloneWindow) — the whole point is process
+  isolation.  It only builds an argv list and ``subprocess.Popen``s
+  it.  Keep imports to stdlib + pathlib.
+* ``_spawn`` always uses ``shell=False`` with a **list** argv — never
+  ``shell=True``, never a joined string.  This is the injection-safe
+  contract: paths with spaces/quotes/``&`` are passed as discrete
+  argv elements, not re-parsed by a shell.  Do not "simplify" to a
+  string command.
+* Fire-and-forget: ``Popen`` is created and never ``wait()``ed/polled;
+  the child is decoupled (Windows: ``CREATE_NO_WINDOW |
+  CREATE_NEW_PROCESS_GROUP = 0x08000000 | 0x00000200``; POSIX:
+  ``start_new_session=True``).  The ``proc`` handle is intentionally
+  dropped — do not add reaping logic, the child outlives us.
+* ``_v1_launcher_cmd`` / ``_ring_launcher_cmd`` invoke
+  ``sys.executable`` + the ``.py`` script directly, NOT the
+  ``.bat``/``.sh`` shim.  Rationale: ``DETACHED_PROCESS`` + ``.bat``
+  is broken on Windows (cmd.exe with no console → silent failure) and
+  ``sys.executable`` is already the correct (windowed pythonw on
+  Windows) interpreter with the right vendored libs.  The
+  ``.bat``/``.sh`` path is only an extreme fallback when
+  ``sys.executable`` is empty.
+* ``_project_root`` walks up max 10 levels looking for the launcher
+  script; if not found it FALLS BACK to ``parent.parent.parent`` (an
+  assumption about layout) rather than raising — a moved package
+  could silently target the wrong root.  ``_v1_launcher_cmd`` then
+  raises ``FileNotFoundError`` if the script truly isn't there.
+* V1 CLI contract: ``launch_tool`` passes ``-standalone`` (critical —
+  without it V1 opens the full editor); ``-configuration`` implies
+  standalone but both are sent for unambiguous logs; ``run_on_open``
+  appends ``-run``.  Treat these flags as the frozen public API.
+* The three V2 polyfills (``show_tree_for`` /
+  ``show_main_window_for`` / ``show_composite_for``) preserve the old
+  ``apps.menu.main`` import names so call sites in cell_window need no
+  rewrite — keep the names and signatures stable.
+  ``show_composite_for`` on a master delegates to
+  ``merged_tree.build_merged_tree_for_master`` (lazy import to avoid a
+  circular dependency); a build failure degrades to a blank editor,
+  not an exception.
+* ``_spawn`` re-raises on ``Popen`` failure (after logging) — this is
+  the ONE place callers can see an exception; ``launch_tool`` etc. do
+  not catch it, the menu/closure layer does.
 """
 from __future__ import annotations
 

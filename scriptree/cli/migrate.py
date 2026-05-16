@@ -1,6 +1,8 @@
 """``scriptree migrate <path>`` — upgrade v2 ``.scriptree`` files
 to the v3 JSON-Schema-aligned vocabulary.
 
+## For humans
+
 Renames applied (v2 → v3):
 
   type  : ``bool``       → ``boolean``
@@ -14,6 +16,10 @@ Renames applied (v2 → v3):
           ``spinbox``    → ``number``     (past LLM-noise)
           ``radiobutton``→ ``radio``      (past LLM-noise)
           ``select``     → ``dropdown``   (past LLM-noise)
+
+The ``int``/``str``/``spinbox``/``radiobutton``/``select`` entries
+fold legacy LLM-noise aliases — Python primitives or non-canonical
+widget names a model reaches for instead of the canonical vocabulary.
 
 Also bumps ``schema_version`` from anything < 3 to 3.
 
@@ -30,6 +36,33 @@ Flags:
 
   --dry-run   Print what WOULD change without writing.
   --quiet     Suppress per-file output; only print the summary.
+
+## For maintainers / LLMs
+
+- Idempotency is a hard contract: a second run on migrated files
+  MUST change nothing. Any new rename rule must be a no-op on its
+  own target value (the rename maps are not closures over their
+  own values, which is what keeps re-runs inert).
+- ``_TARGET_SCHEMA_VERSION = 3``. ``schema_version`` change is
+  driven by ``cur_version != _TARGET`` (not ``<``), so a file at a
+  hypothetical higher version would be force-downgraded to 3 —
+  intentional today, revisit if v4 ships.
+- Walks BOTH ``.scriptree`` and ``.scriptreetree`` (v0.5.3).
+  ``.scriptreetree`` has no ``params`` so the type/widget maps are
+  inert there; only ``schema_version`` is bumped. ``.scriptreering``
+  / ``.scriptreeforest`` have independent ``"version"`` keys under
+  their own ``"format"`` discriminator and are deliberately NOT
+  migrated here — do not add their suffixes to
+  ``_MIGRATABLE_SUFFIXES``.
+- Directory recursion = two ``rglob`` passes (one per suffix) then
+  ``sorted``; suffixes are re-checked case-insensitively per file.
+  Changing the suffix tuple => keep ``migrate_tree``'s rglob calls
+  in sync with ``_MIGRATABLE_SUFFIXES``.
+- Unparseable JSON is skipped (warned to stderr), counted as
+  scanned but not changed; it never aborts the walk.
+- Output is rewritten as ``json.dumps(indent=2) + "\\n"`` (UTF-8):
+  formatting/key-order is normalized on any changed file, so a
+  "changed" verdict can also reflow whitespace, not just vocab.
 """
 from __future__ import annotations
 

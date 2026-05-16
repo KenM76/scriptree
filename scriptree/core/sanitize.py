@@ -1,5 +1,7 @@
 """Input sanitization for form values before they reach subprocess argv.
 
+## For humans
+
 ScripTree uses ``subprocess.Popen(argv, shell=False)`` so there is no
 shell interpretation of metacharacters.  However, some attack vectors
 remain:
@@ -15,7 +17,51 @@ remain:
 The command-line editor is exempt from sanitization — if a user has
 access to that, they're trusted to enter arbitrary text.
 
+This module also exposes ``validate_resolved_path`` (symlink /
+out-of-base-dir checks for tree leaf paths) and ``split_command``
+(shell-free argv splitting reused by the runner).
+
 This module is pure Python, no Qt imports.
+
+## For maintainers / LLMs
+
+* ``sanitize_value`` is DETECT-ONLY: it NEVER modifies the value
+  (``SanitizeResult.value`` is the original verbatim) — it only
+  returns human-readable warnings. The CALLER decides whether to
+  block submission. Don't turn this into a mutator; downstream code
+  relies on the value passing through untouched.
+* The actual injection defence is ``shell=False`` in the runner, not
+  this module. These warnings are advisory UX, gated by the
+  ``allow_path_traversal`` / ``access_sensitive_paths`` capabilities
+  (passed in as ``allow_traversal`` / ``allow_sensitive``). Keep the
+  capability wiring at call sites in sync with ``permissions.py``.
+* ``sanitize_all_values`` and ``sanitize_all_values_detailed`` must
+  stay behaviourally identical except the latter also returns the
+  field id per warning (powers the per-field "Don't warn again").
+  Change one ⇒ change the other.
+* ``_looks_sensitive`` is a pure STRING-PREFIX check on the
+  already-resolved path (case-insensitive only on Windows). It does
+  NOT resolve symlinks — a symlink under a sensitive dir is not
+  caught here by design (this is a warning, not a sandbox). The
+  ``_SENSITIVE_DIRS_*`` lists are deliberately short to avoid
+  false-positive fatigue; adding entries widens user-facing noise.
+* ``split_command`` short-circuits empty/whitespace input to ``[]``
+  BEFORE calling ``CommandLineToArgvW`` — the Win32 API returns the
+  host process exe name for an empty string (documented quirk).
+  Never remove that guard. It frees the Win32 array via
+  ``LocalFree`` in a ``finally``; preserve that to avoid a leak.
+* On Windows ``split_command`` uses ``CommandLineToArgvW`` (keeps
+  ``C:\\Users\\Ken`` backslashes intact); POSIX uses
+  ``shlex.split``. The runner's quote-balance validation depends on
+  this exact behaviour — keep them aligned.
+* ``validate_resolved_path``'s symlink walk stops at the filesystem
+  root (``check != check.parent``); ``relative_to`` is the
+  out-of-base test. Both default to permissive (``allow_*=True``);
+  callers must pass the capability-derived values to actually
+  restrict.
+* Regexes are module-level compiled constants; ``_SHELL_META`` is a
+  set for O(1) intersection. Keep these literal and auditable —
+  this file is a security-review focal point.
 """
 from __future__ import annotations
 

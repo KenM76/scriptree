@@ -84,11 +84,41 @@ def test_no_new_module_level_qt_import_in_core() -> None:
 
 
 def test_providers_module_is_totally_qt_free() -> None:
-    """The new providers module must have NO PySide6 reference at
-    all — not even a lazy one.  It runs on the headless path."""
+    """The providers module must have NO PySide6 *import* at all —
+    not even a lazy / function-local one.  It runs on the headless
+    path.
+
+    Implemented as an AST scan of every Import / ImportFrom node
+    (module scope AND nested) rather than a raw substring check:
+    the module's own docstring legitimately *documents* this
+    Qt-free invariant and therefore contains the literal word
+    "PySide6" in prose — a substring assert would false-positive on
+    the documentation of the very rule it enforces.  We test the
+    real invariant (no import statement), not the absence of the
+    word.  ``test_headless_path_does_not_import_qt`` below is the
+    behavioural backstop."""
     import scriptree.core.providers as prov
-    src = Path(prov.__file__).read_text(encoding="utf-8")
-    assert "PySide6" not in src
+    tree = ast.parse(
+        Path(prov.__file__).read_text(encoding="utf-8"),
+        filename=prov.__file__,
+    )
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            offenders += [
+                f"line {node.lineno}: import {a.name}"
+                for a in node.names
+                if a.name.split(".")[0] == "PySide6"
+            ]
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "PySide6":
+                offenders.append(
+                    f"line {node.lineno}: from {node.module} import ..."
+                )
+    assert not offenders, (
+        "scriptree.core.providers must not import PySide6 "
+        f"(any scope): {offenders}"
+    )
 
 
 def test_headless_path_does_not_import_qt() -> None:

@@ -1,6 +1,8 @@
 """
 forest_dialogs.py — Qt dialogs for the forest layer.
 
+## For humans
+
 Four dialogs:
 
   * **FirstRunDialog**  — appears when the forest starts empty (no
@@ -24,6 +26,48 @@ All four are modal QDialogs that take the controller as their first
 positional argument and call back into it directly.  Tests can
 construct them headlessly, exercise the buttons, and assert the
 controller's state changed correctly.
+
+## For maintainers / LLMs
+
+- Every dialog parents to ``controller.forest_window`` and calls
+  controller methods directly (no signals). Construct → ``.exec()``.
+  ``FirstRunDialog._apply`` and ``ForestSettingsDialog._save_and_run``
+  both ``accept()`` THEN fire the next step on a 0 ms
+  ``QTimer.singleShot`` — the deferral is REQUIRED so the follow-up
+  dialog doesn't parent to a window mid-close. Don't make these
+  synchronous.
+- Only TOP-LEVEL rows in the discovery tree are checkable
+  (``ItemIsUserCheckable``). Child rows from ``_populate_children`` /
+  ``_populate_tree_nodes`` are display-only structure and MUST NOT
+  influence the apply step — ``UpdateDiffDialog._apply`` only scans
+  ``_added_rows`` / ``_removed_rows`` / ``_reincl_rows`` (the top-level
+  pair lists), never descendants.
+- ``_populate_children`` recursion is best-effort with a broad
+  ``except Exception``: a malformed catalog drops a "(unable to peer
+  inside)" marker row and stops recursion at that node. This swallow is
+  intentional (dialog must stay interactive with half-broken catalogs)
+  — but it also hides genuine load bugs; check the ``[forest_dialogs]``
+  stderr log when a subtree mysteriously won't expand. ``max_depth=4``
+  caps recursion.
+- Ring children are read by parsing the ``.scriptreering`` JSON
+  ``members[].catalog_path`` directly (relative paths resolved against
+  the ring's dir); tree children go through ``core.io.load_tree``. Child
+  ``kind`` is inferred purely by ``.scriptreetree`` suffix → "tree"
+  else "tool" — a ``.scriptreering`` referenced as a member would be
+  mislabelled "tool" here (display-only, low impact).
+- ``ForestSettingsDialog._save`` swallows ``apply_label_change``
+  failures (``except Exception: pass``) and catches only ``OSError``
+  from ``update_preferences`` — a non-OSError prefs failure WILL
+  propagate out of the dialog. Forest ``save()`` is always called last
+  so in-memory state still persists even if prefs write failed.
+- ``ExcludedItemsDialog`` per-row lambdas bind ``p=path`` as a default
+  arg (correct late-binding fix — don't "simplify" to a closure over
+  the loop var). Both ``_reinclude`` and ``_forget`` call
+  ``self.accept()`` to close immediately — the dialog is single-action;
+  reopen for more. ``_forget`` filters ``excluded`` by exact-string
+  ``!= path`` (NOT normalised) — must match how the path was stored.
+- ``_RootsEditor`` returns raw widget text verbatim; relative/absolute
+  resolution is the discovery layer's job, not the dialog's.
 """
 from __future__ import annotations
 

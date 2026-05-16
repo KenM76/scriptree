@@ -1,5 +1,7 @@
 """PATH manipulation helpers for the missing-executable recovery flow.
 
+## For humans
+
 When a tool's executable can't be located on disk, the recovery
 dialog lets the user pick the file's actual location and choose
 **how** to remember it: replace the path stored in the tool's
@@ -33,6 +35,44 @@ required for system PATH").
 All scopes are idempotent: appending a directory that's already on
 the target list is a no-op (the function returns ``ok=True`` with a
 "already present" message).
+
+## For maintainers / LLMs
+
+* Permission gating lives at the CALL SITE (the dialog), NOT here.
+  These functions trust their caller — adding a new scope means
+  adding a matching capability key in ``permissions.py``'s
+  ``CAPABILITIES`` and wiring the gate in the dialog, not just a
+  function here.
+* Session vs registry idempotency differs subtly:
+  ``add_to_session_path`` uses MOVE-TO-FRONT (last choice wins even
+  if the dir was on PATH later); ``_modify_windows_path`` uses
+  LEAVE-ALONE-IF-PRESENT (no reorder). Don't unify them blindly —
+  reordering the system PATH is riskier than reordering the
+  process env.
+* Registry writes preserve the original value type but force
+  ``REG_EXPAND_SZ`` if it isn't already ``REG_SZ``/``REG_EXPAND_SZ``
+  — this keeps ``%VAR%`` in PATH expandable. Changing this to
+  ``REG_SZ`` would break every machine whose PATH contains
+  environment-variable references.
+* HKLM ``OpenKey``/``SetValueEx`` raises ``PermissionError`` for
+  non-elevated processes; both are caught and converted to a
+  friendly "Admin elevation required" ``ScopeResult`` rather than a
+  traceback. Keep that catch — surfacing a stack trace here is a
+  UX regression.
+* ``setx`` is deliberately NOT used (it truncates PATH at 1024
+  chars). Use ``winreg`` for any new persistent-PATH work.
+* ``_broadcast_environment_change`` (WM_SETTINGCHANGE) is
+  best-effort; its failure must not invalidate a successful
+  registry write — the broad ``except`` there is intentional.
+* The file-prepend path (``_add_to_file_path_prepend``) lazy-imports
+  ``.io`` to keep this module loosely coupled and unit-testable;
+  keep the import function-local. It returns ``ok=True`` with a
+  "Already in path_prepend" message (still setting
+  ``file_modified``) when the dir is already present — callers
+  branch on ``.ok``, so don't repurpose ``.ok`` to mean "changed".
+* On non-Windows, ``add_to_user_path`` / ``add_to_system_path``
+  return ``ok=False`` early; ``winreg`` is imported lazily and its
+  absence is also handled. Don't hoist ``winreg`` to module scope.
 """
 from __future__ import annotations
 

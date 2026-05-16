@@ -1,5 +1,7 @@
 """Dynamic choice / value providers (v0.6.0).
 
+## For humans
+
 A :class:`~scriptree.core.model.ProviderSpec` on a ``ParamDef`` says
 "don't bake the choices into the .scriptree — run this command at
 form-open / refresh time and use what it prints."
@@ -29,6 +31,50 @@ Hard rules honoured here (from ``architecture.md`` /
 * No provider ever runs during ``build_full_argv`` — by argv time
   the chosen value is an ordinary string.  This module is only
   called from the form-population phase.
+
+## For maintainers / LLMs
+
+* This module must be TOTALLY Qt-free — not even a lazy/function-
+  local PySide6 import. ``tests/test_core_purity.py`` greps the
+  source for the literal string ``PySide6`` and also runs a
+  fresh-interpreter import check. Don't add Qt here, and don't
+  import a sibling that would transitively pull Qt onto the
+  headless path.
+* Error contract: ``resolve_provider`` NEVER raises for
+  provider-side failures (non-zero exit, timeout, malformed JSON,
+  empty output) — all become ``ProviderResult(ok=False, ...)`` with
+  stderr tail in ``detail``. Only a genuine bug in this function
+  may propagate. Callers depend on never having to wrap this in
+  try/except.
+* ``subprocess.run`` is hard-wired ``shell=False`` (explicit kwarg
+  for the auditor). ``argv[0]`` is resolved via
+  ``runner.resolve_tool_path``; ``argv[1:]`` are passed VERBATIM —
+  they are author-written flags, never user input, so they are NOT
+  sanitized. Provider OUTPUT is sanitized via ``_scrub`` (NUL +
+  C0/C1 controls only). Keep the asymmetry — sanitizing argv[1:]
+  would break legitimate flags.
+* ``_scrub`` strips ``_CTRL_CHARS`` which already includes ``\\x00``;
+  ``_NULL_BYTE`` is defined but unused (mirrors probe's regex set).
+  Don't "tighten" scrub to strip shell metacharacters — that
+  contradicts the audited codebase stance documented above.
+* JSON shape is type-driven, not widget-driven: ENUM / MULTISELECT
+  expect ``{"choices": [...]}``; everything else expects
+  ``{"value": ...}``. ``_CHOICE_TYPES`` is the single source of
+  truth — if ``ParamType`` gains a list-like type, add it there.
+* Scalar coercion: JSON ``true``/``false`` → ``"true"``/``"false"``,
+  numbers → ``str``, ``null`` → ``""``. This matches the runner's
+  truthiness rules — keep them aligned with
+  ``runner._is_truthy`` / ``_value_to_str``.
+* cwd default mirrors ``runner.resolve``: when ``spec.working_directory``
+  is empty, cwd is the resolved command's parent dir (or ``None``
+  if that's empty/``.``). Changing one without the other causes
+  provider-vs-tool path drift.
+* ``provider_run_order`` fails LOUD (``DependencyCycleError`` /
+  ``ValueError``) on a cycle or unknown ``depends_on`` — a
+  structural authoring bug, distinct from soft runtime failures.
+  Kahn's algorithm with sorted queues gives a deterministic order;
+  preserve the sorting if you touch it (tests likely assert order).
+* ``__all__`` is explicit — update it if you add public API.
 """
 from __future__ import annotations
 

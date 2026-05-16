@@ -1,6 +1,8 @@
 """
 forest_controller.py — orchestrates the forest singleton.
 
+## For humans
+
 The forest is a one-per-session top-level container.  Per the v0.3.15
 redesign the visible forest cell is a **regular CellWindow** (same
 size, shape, drag/snap/repack behaviour as any other cell) constructed
@@ -38,6 +40,63 @@ Public API
     .refresh_from_sources() → None
     .add_item(path, kind, position=None) → None
     .remove_item(path, *, exclude=True) → None
+
+## For maintainers / LLMs
+
+- The forest cell is a REAL ``CellWindow(role="master",
+  is_forest_master=True)`` — it reuses ring master infra
+  (_repack_members, reflow, edge-fold, drag-translate). Only TWO
+  exemptions: ``_check_master_validity`` skips it (0-member persist),
+  and the right-click menu prepends forest items via the
+  ``_forest_menu_extension`` hook installed in ``_install_menu_hook``.
+  Don't add a third special-case without updating this list and the
+  mirror note in ``cell_window.CellWindow.__init__``.
+- Autosave is a 250 ms single-shot debounce: ``forestChanged`` →
+  ``_mark_dirty`` + ``_schedule_autosave`` (restarts timer) →
+  ``_autosave_flush`` → ``save()``. Bursts (discovery applying N items)
+  coalesce into one write. EVERY user-visible mutation MUST emit
+  ``forestChanged`` or it won't persist. ``flush_if_dirty()`` is the
+  synchronous exit-time flush — the launcher must call it on shutdown
+  or the last sub-250 ms change is lost.
+- ``save()`` target precedence: ``forest.loaded_from`` →
+  (only if ``_preferences.fallback_to_default``) resolved default path →
+  silent no-op (transient session). In the no-op branch ``_dirty`` is
+  deliberately LEFT True so a later ``save_as`` still flushes; do not
+  clear it there. ``save_as`` sets ``loaded_from`` so all subsequent
+  autosaves retarget the new file.
+- ``add_item`` is idempotent by ``_norm`` path and ALSO un-excludes the
+  path (re-include is implicit). ``remove_item(exclude=True)`` adds to
+  ``excluded`` (auto-discovery won't re-add); ``exclude=False`` is for
+  "file deleted from disk" — ``apply_diff`` uses ``exclude=False`` for
+  the ``removed`` bucket so a transiently-missing file isn't permanently
+  blacklisted.
+- ``_norm`` here MUST stay byte-identical to ``forest_discover._norm``
+  (resolve + lower + forward-slash). The diff/apply round-trip compares
+  keys across the controller↔discover boundary; any divergence desyncs
+  add/remove/exclude.
+- ``_spawn_item`` dispatch: ring → ``ring_io.load_ring`` then
+  ``_attach_existing_master_as_member`` (manual membership wiring +
+  surgical repack with existing members fixed); tree/tool →
+  ``forest_window._drop_spawn_member_and_link`` (same path as drag-drop)
+  then recover the new member via ``next(reversed(_members))``. That
+  ``reversed`` recovery assumes ``_drop_spawn_member_and_link`` appended
+  exactly one member and dict insertion order holds — fragile coupling
+  to CellWindow internals.
+- ``_attach_existing_master_as_member`` reaches deep into CellWindow
+  privates (``_members``, ``_positioned``, ``_dock_partners``,
+  ``_group_master_id``). It repacks with ``fixed=existing_ids`` to honour
+  the v0.3.17 "no reshift of existing members" contract.
+- ``start()``: with no explicit forest, consults
+  ``forest_preferences.json``. fallback_to_default=True loads/creates
+  the default file; False = transient in-memory (autosave gated off via
+  ``save()``'s no-op branch). First-run dialog fires whenever ``items``
+  is empty (NOT gated on ``loaded_from is None``) on a 50 ms singleShot.
+- Dialogs are constructed parented to ``self.forest_window`` and shown
+  with ``.exec()`` (modal). Dialog→controller calls are direct (no
+  signal hop). ``_show_diff_dialog`` is invoked from FirstRunDialog via
+  a 0 ms singleShot so the first dialog finishes closing first.
+- The launcher should call ``migrate_legacy_autoload_path`` BEFORE
+  ``start()`` — this controller assumes the canonical filename.
 """
 from __future__ import annotations
 

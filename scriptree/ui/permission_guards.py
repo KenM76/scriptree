@@ -1,6 +1,8 @@
 """Reusable helpers for gating widgets / actions / runtime decisions on
 ScripTree's capability system.
 
+## For humans
+
 Pre-v0.3.3 the codebase had ~14 capabilities consulted via direct
 ``perms.can("foo")`` calls scattered through the UI, plus 21
 capabilities declared in ``CAPABILITIES`` that nothing read at
@@ -8,8 +10,7 @@ runtime.  v0.3.3 closed the gap by wiring every declared capability
 to its natural gate point — and to keep those gates consistent and
 testable, the boilerplate moved into this module.
 
-Public helpers
---------------
+Public helpers:
 
 ``apply_widget_perm(widget, capability, *, ps=None, tooltip_when_denied=None)``
     Disable ``widget`` when ``capability`` is denied.  Optionally
@@ -27,28 +28,49 @@ Public helpers
     user can read what's there) but typing is blocked.
 
 ``perm_check(capability, *, ps=None) -> bool``
-    Thin wrapper around ``ps.can(capability)`` that:
+    Thin wrapper around ``ps.can(capability)`` that auto-loads the
+    app permissions when ``ps`` is omitted, and returns ``True``
+    (allowed) on any error so a misconfigured permission system never
+    produces a worse-than-baseline UX — the user sees the same
+    behaviour as a developer install with no permissions/ folder.
 
-    * Auto-loads the app permissions when ``ps`` is omitted.
-    * Returns ``True`` (allowed) on any error so a misconfigured
-      permission system never produces a worse-than-baseline UX —
-      the user sees the same behaviour as a developer install with
-      no permissions/ folder deployed.
+A denied capability surfaces as ``setEnabled(False)`` (or
+``setReadOnly(True)`` for text) rather than ``setVisible(False)``:
+hidden controls confuse users ("did this button used to exist?");
+disabled controls plus an explanatory tooltip make the IT-driven
+lockdown discoverable.
 
-Design notes
-------------
+## For maintainers / LLMs
 
-These helpers run **once at construction time**.  Permissions
-don't change mid-session in any of ScripTree's deployment models,
-so we don't bother with signal-driven re-evaluation.  If an admin
-flips a capability while ScripTree is running, the user has to
-restart to pick up the change — same contract as Settings has
-always documented.
-
-A denied capability surfaces as ``setEnabled(False)`` rather than
-``setVisible(False)``.  Hidden controls confuse users ("did this
-button used to exist?"); disabled controls + an explanatory
-tooltip make the IT-driven lockdown discoverable.
+- FAIL-OPEN CONTRACT: ``perm_check`` returns ``True`` (ALLOWED) on
+  ANY exception in lookup. This is intentional — a misconfigured /
+  half-upgraded install must not lock the user out. Do NOT invert
+  this to fail-closed. The genuine deny path comes from
+  ``ps.can(capability)`` returning False (a missing capability file
+  when a permissions/ dir exists = denied; no permissions/ dir at all
+  = everything allowed). That deny→False distinction lives in
+  ``core.permissions``, not here.
+- These helpers run ONCE at construction time. There is no
+  signal-driven re-evaluation by design: permissions don't change
+  mid-session in any deployment model; an admin flip needs an app
+  restart. Don't add live re-checking without revisiting that
+  contract.
+- ``apply_action_perm`` is deliberately a thin delegate to
+  ``apply_widget_perm`` (``QAction`` mirrors the ``setEnabled`` /
+  ``setToolTip`` API). It's kept separate purely as a self-
+  documenting call site and a future divergence point — keep it that
+  way rather than collapsing the two.
+- Every helper returns the resolved permission state (``True`` =
+  allowed) so callers can short-circuit (``if not
+  apply_widget_perm(...): return``). Preserve that return value
+  whenever you touch these.
+- The mutating calls (``setEnabled`` / ``setToolTip`` /
+  ``setReadOnly``) are wrapped in a broad ``except`` that silently
+  passes — a duck-typed object lacking the API must not crash the
+  form build. Allowed widgets are left completely untouched.
+- ``Any``-typed ``widget`` / ``action`` / ``text_edit`` params are
+  intentional: these are duck-typed across QWidget/QAction and test
+  doubles. Don't tighten to concrete Qt types.
 """
 from __future__ import annotations
 

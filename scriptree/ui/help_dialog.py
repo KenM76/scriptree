@@ -1,5 +1,7 @@
 """Help viewer dialog.
 
+## For humans
+
 Renders the markdown files under ``help/`` with a tree navigator on the
 left and a ``QTextBrowser`` rendering the selected page on the right.
 Internal links between markdown files are resolved and navigable —
@@ -8,7 +10,37 @@ clicking a link in one page loads the target page in the same view.
 The help content lives at the repository root in ``help/`` (alongside
 the ``scriptree`` package). :func:`help_root` resolves this path
 regardless of whether ScripTree is running from a source checkout or a
-frozen executable.
+frozen executable. This module also hosts :func:`show_about`, the
+"About ScripTree" dialog.
+
+## For maintainers / LLMs
+
+- The navigation tree is HAND-CURATED in ``build_help_tree`` — files
+  are not auto-discovered, so new help pages must be added to that
+  function explicitly (this is deliberate: keeps reading order and
+  hides WIP/orphan files).
+- ``help_root`` does NOT verify the directory exists; it returns
+  ``<pkg parent>/help`` if that ``is_dir()`` else ``<cwd>/help``.
+  Callers that care must check ``Path.is_dir()`` themselves;
+  ``load_markdown`` degrades gracefully (shows the OSError text).
+- Path-keyed reverse lookup (``_item_by_path``) stores
+  ``node.path.resolve()`` keys; ``_navigate_to`` also resolves before
+  lookup. Both sides must resolve or tree-selection sync silently
+  fails — keep them symmetric.
+- Anchor handling: ``MarkdownBrowser`` sets
+  ``setOpenLinks(False)``/``setOpenExternalLinks(False)`` and routes
+  clicks through ``_on_anchor``. Only relative / ``file`` / empty-
+  scheme links to existing files are followed (``.md`` re-enters the
+  viewer); external schemes are intentionally ignored — do NOT add a
+  system-browser launch here (deliberate no-open policy).
+- ``_navigate_to`` wraps ``setCurrentItem`` in
+  ``blockSignals(True/False)`` to avoid re-entrant
+  ``_on_tree_selection`` → ``_navigate_to`` recursion. Keep the guard
+  if you change selection plumbing.
+- ``show_about`` reads ``scriptree.__version__`` (kept in lockstep
+  with ``pyproject.toml``) inside a broad ``except`` that falls back
+  to ``"(unknown)"`` so the dialog always opens; the import is lazy
+  to avoid forcing Qt on importers of this symbol.
 """
 from __future__ import annotations
 

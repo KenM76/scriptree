@@ -1,7 +1,44 @@
 """Schema classes for .scriptree and .scriptreetree files.
 
-Pure dataclasses with no IO — serialization lives in core/io.py so that
-tests can build models in memory without touching the filesystem.
+## For humans
+
+The in-memory shape of a tool definition (``ToolDef``), a tree
+catalog (``TreeDef``), and their parts (``ParamDef``, ``Section``,
+``MenuItemDef``, ``ProviderSpec``).  These are plain dataclasses —
+no file IO, no Qt — so tests and headless tooling can build/inspect
+models without a disk or a display.  Reading/writing the JSON lives
+in ``core/io.py``; this module is just the data.
+
+## For maintainers / LLMs
+
+Invariants & edit-safety:
+
+* **No IO, no Qt here, ever.** Serialisation is ``core/io.py``'s
+  job; this split is what lets ``scriptree validate`` / ``migrate``
+  and CI run headless (enforced by ``tests/test_core_purity.py``).
+* ``ParamDef.__post_init__`` is the single source of truth for
+  structural validity (id is an identifier; widget legal for type;
+  the v0.6.0 provider invariants: not-both-static-choices-and-
+  provider, ``select_all`` only with ``checkbox_list``, no trivial
+  self-cycle in ``depends_on``).  It raises ``ValueError`` — that's
+  the "fail loud at load" contract the loader relies on.
+* ``VALID_WIDGETS`` is the type→widget matrix.  Adding a widget
+  means: new ``Widget`` enum member, registry entry in
+  ``ui/widgets/param_widgets.py``, an entry here, AND update the
+  pinned set in ``tests/test_canonical_names_v3.py`` (it asserts
+  the exact value set, so it WILL fail until you do — that's
+  intentional).
+* ``SCHEMA_VERSION`` (below) is a HARD gate: v3 refuses v1/v2 files
+  via ``io._check_schema``.  Bumping it is a breaking change that
+  needs a matching ``cli/migrate.py`` rename map + doc updates.
+  Adding optional fields does NOT need a bump (additive rule).
+* ``ProviderSpec.__post_init__`` likewise owns provider-spec
+  validity (non-empty argv list, legal ``refresh``/``cache``,
+  positive timeout).  ``io._provider_from_dict`` defers to it.
+* Dataclass field order / defaults are part of the public surface
+  — ``io._param_to_dict`` omits fields at their default for
+  byte-stable round-trips; don't reorder or change a default
+  without checking the writer's compactness rules.
 """
 from __future__ import annotations
 

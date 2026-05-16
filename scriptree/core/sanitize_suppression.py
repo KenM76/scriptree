@@ -1,6 +1,8 @@
 """Persisted state for the sanitization-warning suppression feature
 (V3 v0.3.4).
 
+## For humans
+
 The injection-warning dialog gives users three "Don't warn again"
 checkboxes when the ``suppress_sanitization_warnings`` capability
 is granted:
@@ -18,10 +20,8 @@ re-enable dialog uses:
 * Un-mute a specific entry.
 * Clear everything.
 
-State storage layout in QSettings
----------------------------------
-
-Three keys under the ``sanitize_suppress/`` namespace:
+State storage layout in QSettings — three keys under the
+``sanitize_suppress/`` namespace:
 
 * ``sanitize_suppress/global``   → ``bool``
 * ``sanitize_suppress/tools``    → JSON-encoded ``list[str]`` of
@@ -34,8 +34,7 @@ Three keys under the ``sanitize_suppress/`` namespace:
 JSON is used over Qt's native list / dict roundtrip to avoid
 QSettings's INI quoting quirks on Windows.
 
-Public API
-----------
+Public API:
 
 ``is_globally_muted() -> bool``
 ``set_globally_muted(muted: bool) -> None``
@@ -56,6 +55,41 @@ Public API
     The caller passes a parallel list of field IDs (one per
     warning) — ``""`` for warnings that came from a non-form source
     (extras / cmd-line editor).
+
+## For maintainers / LLMs
+
+* No module-level Qt import — QSettings is reached only through a
+  function-local ``from .app_settings import get_settings`` inside
+  ``_settings()``. Keep that indirection: tests monkey-patch
+  ``_settings`` to use a throwaway keyspace, and a top-level Qt
+  import would also break the ``core`` purity baseline.
+* Tool-path KEY normalisation is the central invariant: every
+  public function routes the path through ``_resolve`` (which
+  ``Path.resolve()``s, falling back to the raw string when the file
+  is gone). Two callers using forward vs back slashes MUST collapse
+  to the same key — if you add an entry-point, route it through
+  ``_resolve`` too or you'll silently fragment the store.
+* Persistence values are JSON STRINGS, not native Qt list/dict
+  (deliberate, to dodge INI quoting on Windows). All loaders
+  (``_load_tools_list`` / ``_load_fields_map``) tolerate bad/typed
+  JSON by returning the empty container — never let a corrupt
+  setting raise here. Every setter calls ``.sync()`` so state
+  survives a hard exit.
+* Three-tier model: global and per-tool mute decide whether to skip
+  the dialog ENTIRELY (``should_skip_dialog``); per-field mute only
+  trims the warning list (``filter_warnings``) and can still leave
+  it non-empty. That's why per-field is absent from
+  ``should_skip_dialog`` — keep these two responsibilities split.
+* ``filter_warnings`` is defensive: a length mismatch between
+  ``warnings`` and ``field_ids_per_warning`` shows EVERYTHING rather
+  than risk dropping a real warning. Preserve fail-open here —
+  silently hiding a security warning is worse than a redundant one.
+* ``clear_all`` writes the literal ``"[]"`` / ``"{}"`` strings (not
+  ``remove``) so the keys keep their JSON-string type for the
+  loaders. Keep that representation consistent if you add keys.
+* Gating: the "Don't warn again" checkboxes only appear when the
+  ``suppress_sanitization_warnings`` capability is granted (enforced
+  at the UI layer, not here) — this module trusts its caller.
 """
 from __future__ import annotations
 

@@ -1,5 +1,7 @@
 """Centralized application settings backed by an INI file.
 
+## For humans
+
 Settings are stored in ``scriptree.ini`` inside the project directory
 (next to ``run_scriptree.py``), not in the OS registry. This makes
 the application fully portable — copy the folder to another machine
@@ -11,6 +13,39 @@ The INI path can be overridden:
 2. ``SCRIPTREE_SETTINGS_PATH`` environment variable.
 
 This module is pure Python with a single PySide6 import (QSettings).
+
+## For maintainers / LLMs
+
+* This is the ONE grandfathered module allowed a module-level
+  ``from PySide6.QtCore import QSettings`` — see
+  ``tests/test_core_purity.py`` (``_MODULE_LEVEL_QT_ALLOWED``). Do
+  not add other module-level Qt imports here or anywhere else in
+  ``core``; do not remove this exception without updating that test.
+* Resolution-order divergence to know about: ``get_settings()``
+  checks ``SCRIPTREE_SETTINGS_PATH`` env FIRST, then the INI's own
+  ``settings_path`` redirect, then the default path. The
+  one-line summary above lists them env-first; the docstring on
+  ``get_settings`` also lists env-first — keep all three in sync if
+  you reorder the checks.
+* ``_find_scriptree_dir()`` returns the *application* dir (parent of
+  the ``scriptree`` package), NOT the project root. It depends on
+  this file living at ``scriptree/core/app_settings.py`` — moving
+  the file breaks every default path. ``permissions.py`` walks up
+  separately for ``permissions/``; the two are intentionally
+  different anchors.
+* ``_sanitize_path`` strips ``\\x00-\\x1f`` and the shell-meta set
+  ``; | & $ < > !`` plus backtick, then
+  strips whitespace. Env / INI path values flow through it before
+  becoming a ``Path``; any new path-from-untrusted-source code must
+  reuse it.
+* ``get_settings`` only accepts a redirect target whose suffix is
+  ``.ini`` and that differs from the default path (env path must
+  also be ``.ini``) — a non-``.ini`` redirect is silently ignored
+  and the default is used.
+* ``get_personal_configs_dir`` has the side effect of creating the
+  directory (``mkdir(parents=True, exist_ok=True)``) on every call;
+  callers that only want to *probe* the location must not rely on
+  this being read-only.
 """
 from __future__ import annotations
 

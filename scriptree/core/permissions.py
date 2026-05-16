@@ -1,5 +1,7 @@
 """File-permission checks and capability-based access control.
 
+## For humans
+
 Two permission layers:
 
 1. **File-access permissions** — ``check_write_access()`` checks whether
@@ -24,15 +26,57 @@ Two permission layers:
    lowest (most restrictive) wins and the conflict is recorded for a
    UI warning.
 
-Security note
--------------
-On Windows, ``os.access(path, os.W_OK)`` checks the **read-only file
-attribute** (``attrib +R``) but does **not** inspect NTFS ACLs.  For
-the initial deployment scenario — admins setting the read-only attribute
-on distributed tool files — this is sufficient.  A future enhancement
-could use ``win32security`` for ACL-level checking if needed.
+Security note: on Windows, ``os.access(path, os.W_OK)`` checks the
+**read-only file attribute** (``attrib +R``) but does **not** inspect
+NTFS ACLs.  For the initial deployment scenario — admins setting the
+read-only attribute on distributed tool files — this is sufficient.
+``_is_writable`` additionally does a non-destructive append-open on
+Windows to catch ACL denies that ``os.access`` misses.  A future
+enhancement could use ``win32security`` for full ACL-level checking.
 
 This module is pure Python, no Qt imports.
+
+## For maintainers / LLMs
+
+* The secure-default asymmetry is the crux: at APP level a MISSING
+  capability file means DENIED (so deleting files from a local copy
+  can't bypass policy); at PER-FILE level a missing file means
+  INHERIT from app level. When NO permissions dir exists at all,
+  EVERYTHING is allowed (developer mode). Do not "simplify" these
+  three cases into one — each is a deliberate security stance.
+* Per-file can only RESTRICT, never grant beyond app level. The
+  merge in ``load_permissions`` enforces this; any refactor must
+  keep "file tries to grant what app denies → denied".
+* ``_read_capability`` uses ``rglob`` (recursive): the same
+  capability filename in multiple subfolders resolves to the MOST
+  RESTRICTIVE (any read-only copy ⇒ denied). Capability identity is
+  the FILENAME, not the path — subfolders are purely organisational.
+* ``PermissionSet.can()`` defaults UNKNOWN capabilities to ``True``
+  (allowed). New capabilities must be registered in ``CAPABILITIES``
+  or they are silently ungated. ``path_env.py``'s scopes and the
+  features here must stay in lockstep with that dict.
+* ``deployed`` set tracks which capabilities had a real file
+  (app or per-file). The granular shared/personal helpers
+  (``can_read_shared`` etc.) use it to fall back to legacy
+  ``read_configurations`` / ``write_configurations`` when the new
+  granular file isn't deployed — removing a capability from
+  ``CAPABILITIES`` silently changes this fallback behaviour.
+* Caching: ``get_app_permissions`` memoises a process-wide
+  ``PermissionSet``; any code that changes the permissions path
+  (Settings dialog) MUST call ``reset_cached_permissions()`` or the
+  change won't take effect until restart. The cache ignores
+  ``custom_permissions_path`` on subsequent calls (first call wins).
+* ``_find_app_permissions_dir``: an explicit ``custom_path`` or
+  ``SCRIPTREE_PERMISSIONS_DIR`` is AUTHORITATIVE — if set but
+  invalid it returns ``None`` (does NOT fall through to the
+  walk-up). A writable env-specified dir is used but logs a
+  security warning (a writable permissions dir defeats the model).
+* ``_can_write_to_directory`` returns ``False`` for a non-existent
+  directory (used for not-yet-created files) — that's intentional;
+  don't flip it to ``True``.
+* Conflict reporting compares the two sources' raw (pre-resolution)
+  values; ``resolved_to`` is always the restrictive result. Keep
+  ``PermissionConflict`` fields in sync with ``conflict_summary``.
 """
 from __future__ import annotations
 

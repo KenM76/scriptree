@@ -1,10 +1,12 @@
 """Argv template substitution and subprocess spawn.
 
+## For humans
+
 Pure Python, no Qt. The UI layer wires the subprocess stdout/stderr
 streams into an output pane, but the business logic lives here so it
 can be unit-tested headlessly.
 
-## Template syntax
+### Template syntax
 
 Each entry in ``ToolDef.argument_template`` is either:
 
@@ -22,6 +24,73 @@ Bools in non-conditional substitution are emitted as "true" / "false".
 Empty substitutions (optional non-required params left blank) cause the
 whole token to be dropped — so you can write ``--name={name}`` and it'll
 either emit ``--name=foo`` or nothing at all.
+
+Beyond template substitution this module also owns: path resolution
+relative to the .scriptree (``resolve_tool_path``), the Python
+runtime-shim splice (``_inject_runtime_shim``), environment layering
+(``build_env`` / ``inject_tool_dir_env``), the two spawn paths
+(``spawn_streaming`` and the Windows run-as-user
+``spawn_streaming_as_user``), and the reverse direction —
+parsing an edited command line back into widget values
+(``reconcile_edit``).
+
+## For maintainers / LLMs
+
+* Keep Qt-free (it is headless-testable and on the no-Qt path). The
+  only lazy imports are stdlib (``sys``, ``time``, ``threading``,
+  ``msvcrt``, ``ctypes``) and the sibling ``.sanitize.split_command``.
+* Spawn safety: every spawn passes a LIST argv with ``shell=False``
+  (or, on the run-as-user path, builds the command line with explicit
+  quoting). ``reconcile_edit`` deliberately DROPS the edited argv[0]
+  and rebuilds the executable from ``tool.executable`` so a user
+  editing the preview can't change which program runs — do not
+  "restore" argv[0] from the edited text.
+* ``resolve_tool_path`` order is load-bearing: expandvars FIRST,
+  then absolute/UNC short-circuit, then anchor against
+  ``tool.loaded_from``'s dir, then the exists-check fallback that
+  lets bare names (``python``) defer to PATH. Reordering changes
+  which files resolve. ``providers.resolve_provider`` reuses this
+  exact function — they must stay behaviourally identical.
+* Shim splice (``_inject_runtime_shim``) only fires for
+  python/pythonw + a script-shaped argv[1]; it is a NO-OP (returns
+  argv unchanged) for native exes, ``py.exe``, ``-c``/``-m``/``-X``,
+  or a missing shim file. If you change the shape it produces, also
+  update ``scriptree/core/_runtime_shim.py`` (they are a contract:
+  ``[python, shim, tool.py, ...args]``).
+* ``build_env`` returns ``None`` when there is nothing to override
+  (so the child inherits the parent env verbatim — keeps tracebacks
+  readable). Callers MUST treat ``None`` as "pass env=None to Popen",
+  not "empty env". Layering order is documented inline and differs
+  under ``global_*_overrides`` flags — change both the code and the
+  docstring table together.
+* ``inject_tool_dir_env`` runs AFTER ``build_env`` in
+  ``build_full_argv`` so user PYTHONPATH wins at the head; it is
+  idempotent on ``SCRIPTREE_TOOL_DIR`` and de-dupes the PYTHONPATH
+  head. It pairs with the bundled ``sitecustomize.py`` and the
+  runtime shim — three layers solving the embeddable-Python
+  restricted-sys.path problem; don't remove one assuming the others
+  cover it.
+* ``_argv_split`` / ``reconcile_edit`` use a non-POSIX ``shlex``
+  validator to reject unclosed quotes on every platform WITHOUT
+  mangling Windows backslashes, then split via
+  ``sanitize.split_command`` (CommandLineToArgvW) on Windows or
+  ``shlex.split(posix=True)`` elsewhere. An unclosed quote returns
+  the value unchanged / ``ok=False`` (treated as "user mid-typing"),
+  never a partial parse.
+* String-passthrough auto-split (``_is_string_passthrough``) only
+  applies to a standalone ``{id}`` of a STRING param without
+  ``no_split``. Embedded/conditional/non-string keep single-token
+  semantics. This is observable tool behaviour — see
+  ``help/LLM/argument_template.md``; don't widen it silently.
+* ``resolve`` honours ``visible_when`` / ``required_when``: a field
+  hidden by ``visible_when`` is exempt from the required check
+  (lazy-imports ``visible_when.evaluate``). Preview callers pass
+  ``ignore_required=True`` to skip the whole block.
+* Run-as-user path is Windows-only ctypes; it zeroes the password
+  buffer immediately after ``CreateProcessWithLogonW`` and closes
+  pipe write-ends in the parent. Any change there must preserve the
+  password-wipe and handle-inheritance setup (read ends NOT
+  inherited) or it leaks credentials / hangs the child.
 """
 from __future__ import annotations
 

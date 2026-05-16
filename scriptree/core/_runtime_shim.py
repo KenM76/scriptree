@@ -1,5 +1,7 @@
 """ScripTree runtime shim — wraps spawned Python tools.
 
+## For humans
+
 This file is **executed as a script**, not imported.  When ScripTree's
 runner spawns a Python tool, it injects this shim between the
 interpreter and the tool::
@@ -20,7 +22,6 @@ of:
   * whatever Python the user happens to be running.
 
 Why a shim and not (just) a sitecustomize?
-------------------------------------------
 ``sitecustomize.py`` lives **inside** the swappable ``lib/python/``
 tree — a manual upgrade by the user blows it away.  This shim lives
 in ``scriptree/core/`` (next to the runner that invokes it), which
@@ -29,8 +30,8 @@ both: this shim is the durable architectural fix; the sitecustomize
 is belt-and-suspenders for callers who run the bundled
 ``python.exe`` directly without going through ScripTree's runner.
 
-What the shim does (in order)
------------------------------
+What the shim does (in order):
+
 1. Pop its own path off ``sys.argv[0]`` so the tool sees the same
    argv it would have if invoked directly: ``[tool.py, ...args]``.
 2. Read ``SCRIPTREE_TOOL_DIR`` from the environment.  This is the
@@ -48,8 +49,8 @@ fall through to a direct ``runpy`` call and let the user's tool
 handle ``ImportError`` itself.  A broken shim that crashes every
 tool is unacceptable; degraded sibling imports are acceptable.
 
-Robustness invariants
----------------------
+Robustness invariants:
+
 * The shim has no third-party dependencies — only stdlib.  This
   means it can run under ANY Python 3.x the user might point us at,
   including a stripped-down embeddable.
@@ -59,6 +60,40 @@ Robustness invariants
 * It must propagate the tool's exit code.  ``runpy.run_path`` lets
   ``SystemExit`` bubble up; we let Python's default exit-code
   handling do the rest.
+
+## For maintainers / LLMs
+
+* This runs in the SPAWNED CHILD process, not in ScripTree. It is a
+  contract with ``runner._inject_runtime_shim``: that function
+  produces exactly ``[python, <this file>, tool.py, ...args]``.
+  Change the argv shape on one side ⇒ change the other, or every
+  Python tool breaks.
+* STDLIB-ONLY, and specifically NO ``scriptree.*`` import — that
+  would drag PySide6 into a plain CLI tool's process. The ``core``
+  Qt-purity test does not cover this file directly, but the rule is
+  stricter here: not even sibling-core imports.
+* sys.path order is the whole point: SCRIPTREE_TOOL_DIR is prepended
+  FIRST (step 2), then the tool's own script dir (step 3) — so the
+  script dir ends at ``sys.path[0]`` and WINS, matching Python's
+  native ``python tool.py`` behaviour. Don't reorder; a sibling
+  module next to the entry script must shadow a same-named module
+  elsewhere.
+* ``_prepend_sys_path`` is idempotent via case-folded absolute-path
+  comparison (so ``C:\\Foo`` and ``c:/foo`` aren't double-added on
+  Windows) and is exception-safe per entry.
+* Failure policy is asymmetric: sys.path SETUP failure → print one
+  stderr line, CONTINUE (degraded imports beat an opaque crash);
+  ``FileNotFoundError`` for the tool itself → clean message, exit 1;
+  ``SystemExit`` from the tool → RE-RAISE so the tool's exit code
+  propagates (do NOT swallow it — exit-code fidelity is required).
+* ``sys.argv`` is rewritten to ``[tool_script, *argv[2:]]`` BEFORE
+  running so the tool's ``argparse``/``sys.argv`` sees what it would
+  if launched directly. ``runpy`` does not strip argv[0] for us.
+* ``run_name="__main__"`` is required so the tool's
+  ``if __name__ == "__main__":`` guard fires.
+* The bottom guard uses ``raise SystemExit(main())`` so a normal
+  ``return 0/1/2`` from ``main`` becomes the process exit code while
+  a tool's own ``SystemExit`` still passes through unmodified.
 """
 import os
 import runpy

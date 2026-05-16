@@ -1,14 +1,72 @@
 """
 cell_window.py — CellWindow, the branded floating hexagonal launcher.
 
+## For humans
+
 Architecture: see docs/architecture/ADR-001-overlay-and-docking.md
-Platform target: Win11 (Phase 0/1 demo). Mac/Linux behaviour: see ADR-001 Â§cross-platform.
+Platform target: Win11 (Phase 0/1 demo). Mac/Linux behaviour: see
+ADR-001 §cross-platform.
 
 Coordinate convention
 ---------------------
-All sizes and positions passed to setMask / resize / move are in *logical* pixels
-(device-independent units).  Qt scales them to physical pixels via devicePixelRatio
-internally.  We do NOT multiply by devicePixelRatio ourselves — that double-scales.
+All sizes and positions passed to setMask / resize / move are in
+*logical* pixels (device-independent units).  Qt scales them to
+physical pixels via devicePixelRatio internally.  We do NOT multiply by
+devicePixelRatio ourselves — that double-scales.
+
+## For maintainers / LLMs
+
+- ``WA_DeleteOnClose`` is FALSE — the ``CellRegistry`` owns window
+  lifetime. ``closeEvent`` calls ``CellRegistry.instance().unregister``
+  (emits ``hexagonClosed``). Never set DeleteOnClose True; the registry
+  would dereference freed C++ objects.
+- Membership model (Amendment 2) lives in private sets/dicts:
+  ``_members: dict[id, QPoint]`` (master's HOME slots — authoritative
+  preferred positions), ``_positioned`` (members rigidly translated on
+  master drag), ``_docked_to`` / ``_dock_partners`` (cluster adjacency
+  / SnapEngine shim), ``_group_master_id`` (member→master link, RETAINED
+  on break-free, CLEARED on shake/full-unassociate). ``cell_registry``
+  reads all of these by name — renaming any requires updating that file.
+- HOME vs widget position: ``_members[mid]`` is HOME. A surgical repack
+  (``_repack_members(fixed=...)``, ``fixed is not None``) moves the
+  widget to a temp slot but MUST NOT overwrite ``_members[mid]`` — that
+  is the v0.3.17 contract that lets a member return HOME when the master
+  moves back on-screen. Canonical repack (``fixed is None``) DOES update
+  ``_members``. Don't collapse the two modes.
+- ``moveEvent`` re-emits ``CellRegistry.hexagonMoved`` every move and,
+  during a master drag, rigidly translates ``_positioned`` members
+  guarded by the module-global ``_GROUP_MOVE_IN_PROGRESS`` set (reentry
+  guard — a member's own moveEvent must not re-trigger group move).
+  ``_reflow_members_after_master_move`` runs only on drag END (mouse
+  release), not per-move (per-move would be O(members) math every pixel).
+- Single ``_last_move_log_time`` field is shared by THREE throttled log
+  sites at different intervals (drag 1.0 s, moveEvent 0.1 s, group-move
+  1.0 s). They stomp each other's timestamp; the group-move 1.0 s branch
+  is effectively dead because moveEvent's 0.1 s site reset the field
+  microseconds earlier in the same call. This only affects log verbosity,
+  not behaviour — but don't trust these logs to be evenly spaced.
+- Right-click double-detection is manual (Qt only synthesises
+  doubleClick for the left button): ``_right_click_timer`` (single-shot,
+  ``QApplication.doubleClickInterval()``) fires ``_fire_single_right_click``
+  unless a 2nd right-press arrives first. Left single/double: a single
+  click ALWAYS fires before a double (manual-drag design choice — no
+  suppression timer). Slots must tolerate single-then-double.
+- The forest cell is a normal CellWindow with ``is_forest_master=True``;
+  ``_check_master_validity`` skips its <2-member quorum teardown and the
+  context menu calls ``_forest_menu_extension`` (set by
+  ForestController). Those are the ONLY two forest exemptions — mirror
+  of the note in ``forest_controller``.
+- Drag start has a 4 px manhattan threshold; below it a release is a
+  pure click. Screen clamping (``_clamp_to_screen``) runs every drag
+  move to dodge the "clock-area / off-display" crash — keep it.
+- This module shells out to the V1 editor via subprocess
+  (``ring_main`` / ``v1_launcher``); it does NOT import the editor.
+- ``_load_settings`` only runs for ``role == "standalone"`` — masters
+  take fresh branding defaults and never inherit a source's per-hex
+  QSettings. Catalog-derived label/icon settings (from the bound
+  ``.scriptree*`` JSON) take precedence over QSettings per v0.2.7.
+- ~6.7k lines. When editing, find the method via the ``def`` index and
+  read its neighbourhood; do not assume behaviour from the name alone.
 """
 
 from __future__ import annotations

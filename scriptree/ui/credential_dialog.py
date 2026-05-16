@@ -1,9 +1,30 @@
 """Dialog prompting for alternate credentials before a tool run.
 
-Shows username (with optional DOMAIN\\ prefix), password, and a
-"Remember for this session" checkbox. If remembered, the credential
-store keeps the encrypted password in memory until the application
-exits or the user clears it.
+## For humans
+
+Shows a domain field (optional DOMAIN or computer name; blank = local),
+a username, a password, and a "Remember for this session" checkbox. If
+remembered, the credential store keeps the encrypted password in memory
+until the application exits or the user clears it.
+
+## For maintainers / LLMs
+
+- Pure view: this dialog only collects input. It does NOT touch the
+  credential store, encrypt anything, or run the tool — the caller
+  reads :meth:`username` / :meth:`domain` / :meth:`password` /
+  :meth:`remember` only after ``exec() == Accepted`` and is
+  responsible for persistence and process launch.
+- ``_validate_and_accept`` blocks ``accept()`` when username is blank
+  (whitespace-stripped); it deliberately does NOT require a password
+  (empty/blank passwords are a legitimate input to pass through).
+- Accessors strip whitespace for username/domain but
+  :meth:`password` is returned verbatim (leading/trailing spaces can
+  be significant in a password) — preserve this asymmetry.
+- Initial focus is placed on the first empty field
+  (domain→username→password); keep this when adding fields.
+- ``tool_name`` is interpolated into a rich-text ``QLabel`` without
+  escaping — callers pass internal tool names, not untrusted input;
+  do not relax that assumption.
 """
 from __future__ import annotations
 

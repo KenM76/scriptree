@@ -1,6 +1,8 @@
 """
 group_layout.py — pure-logic ring re-packing for master + members.
 
+## For humans
+
 When two cells dock, they form a *group* whose authoritative size,
 shape, and orientation live on the master.  Every member of the group
 adopts those values — there is no such thing as a 32-px hexagon
@@ -62,6 +64,40 @@ Repack algorithm
       whether to auto-hide or shift the master).
 
 5. Return ``dict[member_id, (x, y) | None]``.
+
+## For maintainers / LLMs
+
+* Slot offset tables MUST stay in lock-step with
+  ``snap_engine._FLAT_TOP_OFFSETS`` et al. — the first-ring tables here
+  are the same six honeycomb offsets the snap engine uses to detect a
+  dock.  If you change the tiling math in one module, change both or
+  members will land off the slots they snapped to.
+* All offsets are *factors* of ``size_px`` (centre-to-centre), applied
+  to the master *centre*, not its top-left.  ``repack`` derives the
+  centre as ``top_left + size_px/2`` for both master and members; keep
+  that convention or every slot shifts by half a cell.
+* ``_nearest_slot_index`` breaks ties by lowest index and ``repack``
+  sorts members by ``(dist_sq, member_id)`` — both are deliberate so
+  the function is deterministic for tests.  Do not switch to an
+  unstable sort key.
+* ``screen_rect`` is ``(left, top, right, bottom)`` with right/bottom
+  treated as *exclusive* (a slot fits iff ``tl + size <= right``).
+  ``screen_rect_at`` builds it from Qt as ``(left, top, right+1,
+  bottom+1)`` to match that exclusivity — do not double-correct.
+* ``screen_rect=None`` means "skip the fit filter, every slot is
+  valid" (headless tests).  ``screen_rect_at`` also returns ``None``
+  when no ``QApplication`` exists — callers must treat None as
+  "unconstrained", never as "nothing fits".
+* ``fixed`` members (V3 v0.3.16+) keep their current top-left verbatim
+  and only *reserve* their nearest slot (inner or outer, whichever is
+  closer).  They are excluded from the assignment loop; do not also
+  add them to ``rows`` or they get double-placed.
+* The outer ring is searched with ``pref`` mapped proportionally
+  (``round(pref * n_outer / n_inner) % n_outer``); inner has 6 hex / 4
+  square slots, outer has 12 hex / 8 square, so this mapping assumes
+  those counts — revisit it if a ring's slot count changes.
+* ``repack`` returns ``None`` for any unplaceable member; the caller
+  owns hiding/edge-folding them — this module never touches Qt.
 """
 from __future__ import annotations
 

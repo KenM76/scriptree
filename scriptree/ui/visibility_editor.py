@@ -1,16 +1,52 @@
 """Dialog for editing a configuration's UI visibility and hidden parameters.
 
+## For humans
+
 The dialog presents two panels:
 
 1. **UI elements** — checkboxes for each field of :class:`UIVisibility`
-   (output pane, extras box, command line, etc.).
+   (output pane, extras box, command line, etc.), plus a checkbox +
+   access-level dropdown for the configuration bar.
 2. **Hidden parameters** — a list of the tool's parameters with
    checkboxes. Checking a parameter marks it as hidden; the current
    form value is locked as the hidden default. Users can edit the
    locked value inline.
 
-The caller reads ``result_visibility()`` and ``result_hidden_params()``
-after the dialog is accepted.
+These settings only take effect in standalone mode; docked in the
+main IDE all controls stay visible. The caller reads
+``result_visibility()``, ``result_hidden_params()`` and
+``result_locked_values()`` after the dialog is accepted.
+
+## For maintainers / LLMs
+
+- ``_VIS_LABELS`` is the authoritative ``UIVisibility`` field →
+  checkbox map and ``result_visibility`` reconstructs the dataclass
+  by ``UIVisibility(**kwargs)`` from EXACTLY these field names. Adding
+  a ``UIVisibility`` bool field requires a matching ``_VIS_LABELS``
+  entry or it silently won't round-trip. ``config_bar`` is handled
+  out-of-band (it's not a bool) — keep it out of ``_VIS_LABELS``.
+- ``config_bar`` tri-value model: ``"hidden"`` / ``"read"`` /
+  ``"readwrite"``. The checkbox controls hidden-vs-shown; the combo
+  (``currentData()`` carries ``"read"`` / ``"readwrite"``) controls
+  the level and is enabled only when the checkbox is on. Unchecked →
+  ``"hidden"`` regardless of combo. Preserve this mapping in both the
+  constructor seeding and ``result_visibility``.
+- The incoming ``visibility`` is NOT mutated — checkbox state is read
+  from it at construction and a fresh ``UIVisibility`` is built on
+  result. ``current_values`` is defensively copied
+  (``dict(current_values)``).
+- Hidden-param rows: each checkbox is wired
+  ``cb.toggled.connect(val_edit.setEnabled)`` so the locked-value
+  editor is editable only while the param is checked.
+  ``result_locked_values`` returns values ONLY for checked params and
+  always as the line edit's raw ``str`` text (no type coercion back
+  to the param's type — caller merges into ``Configuration.values``).
+- Locked-value edits are pre-filled with ``str(current_values[id])``;
+  numeric/bool params therefore round-trip as strings through this
+  dialog. If a param value must keep its type, the merge site (not
+  this dialog) is responsible for re-coercion.
+- OK/Cancel use plain ``accept``/``reject``; there is no validation
+  step — any param can be hidden with any string value.
 """
 from __future__ import annotations
 

@@ -2,6 +2,8 @@
 loads cleanly via the real ``io.load_tool`` path, and that every
 param's widget is valid for its type per ``VALID_WIDGETS``.
 
+## For humans
+
 This is the command automated test harnesses (and LLM hooks)
 should run before declaring a ``.scriptree`` file done.  It
 catches the failure modes that JSON-shape validation misses —
@@ -25,6 +27,32 @@ Output (success)::
 Output (failure) shows the offending field, the value, the
 nearest valid alternative (via difflib), and the full list of
 valid values — same format ``io.py``'s loader produces.
+
+## For maintainers / LLMs
+
+- Validation goes through the REAL loader (``io.load_tool`` /
+  ``io.load_tree``), so it inherits the loader's fail-loud
+  structural checks for free. Do NOT reimplement schema parsing
+  here; if the loader's checks change, this command's behaviour
+  changes with it (by design).
+- The widget-vs-type cross-check is the ONLY thing this command
+  adds on top of the loader: ``io.load_tool`` is deliberately
+  permissive about widget/type mismatch (so legacy/hand-edited
+  files still open in the editor); ``validate`` is where that
+  mismatch becomes a hard failure before run time.
+- ``.scriptreetree`` dispatches to ``load_tree`` (reports node
+  count, no widget check — trees have no params);
+  ``.scriptree`` dispatches to ``load_tool``. Suffix match is
+  case-insensitive.
+- Only ``OSError``/``ValueError`` from the loader are turned into
+  a clean FAIL line; other exception types propagate (treated as
+  bugs, not invalid files) — keep this contract if you touch the
+  try/except.
+- Output uses ASCII ``[OK  ]``/``[FAIL]`` markers on purpose:
+  Windows cp1252 consoles can't encode ✓/✗. Don't reintroduce
+  Unicode markers in the per-file lines.
+- Exit-code contract mirrors ``migrate``: 0 all-valid, 1 any
+  failure, 2 missing path OR zero files found.
 """
 from __future__ import annotations
 

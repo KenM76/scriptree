@@ -23,6 +23,30 @@ is the single source of truth for legal ``refresh`` / ``cache`` /
 error and keeps the dialog open.  The caller reads
 :pyattr:`result_provider`, :pyattr:`result_depends_on`,
 :pyattr:`result_select_all` after ``exec()`` returns ``Accepted``.
+
+## For maintainers / LLMs
+
+- ``ProviderSpec.__post_init__`` is the ONLY validation authority.
+  Do not duplicate refresh/cache/timeout rules here — construct the
+  spec, catch the exception, surface it inline, and keep the dialog
+  open. Re-implementing validation locally will drift from the model.
+- ``command`` is one argv token per line, never a shell string.
+  Splitting/joining must stay token-based; do not introduce
+  ``shlex``/shell parsing or quoting here.
+- ``depends_on`` checkboxes list the *other* param ids only — the
+  current param must be excluded to avoid a self-dependency cycle
+  (the topo sort in :mod:`tool_runner` assumes acyclic ``depends_on``).
+- ``select_all`` is meaningful only when the param's widget is
+  ``checkbox_list``; keep it disabled otherwise so an invalid combo
+  can't be returned.
+- Unchecking "use a provider" must clear the provider entirely so
+  static ``choices`` behaviour is restored — return ``None``, not an
+  empty/partial spec, or the runner will still treat the param as
+  dynamic.
+- Pure dialog: it mutates nothing; the caller applies
+  :pyattr:`result_provider` / :pyattr:`result_depends_on` /
+  :pyattr:`result_select_all` to the :class:`ParamDef` only after
+  ``Accepted``.
 """
 from __future__ import annotations
 

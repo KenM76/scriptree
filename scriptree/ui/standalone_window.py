@@ -1,5 +1,7 @@
 """Lightweight standalone window for running tools outside the IDE.
 
+## For humans
+
 Two modes:
 
 - **Single tool** — one :class:`ToolRunnerView` with optional output
@@ -11,6 +13,32 @@ Two modes:
 The window reads :class:`UIVisibility` from the specified configuration
 and applies it at construction time. The output pane is shown/hidden
 by reparenting into or out of the splitter (there are no dock widgets).
+
+## For maintainers / LLMs
+
+- Construct via the :meth:`from_tool` / :meth:`from_tree` classmethods
+  only — they own loading + tab creation. Calling ``__init__``
+  directly bypasses that and yields a half-built window.
+- This window passes ``standalone_mode`` semantics to
+  :class:`ToolRunnerView`: in standalone mode ``hidden_params`` are
+  actually removed from the form (in docked mode they stay visible).
+  A config change that alters hidden params triggers a full
+  ``_populate_form_rows`` rebuild in the runner — expect provider
+  re-init on tab/config switches here.
+- No dock widgets exist. Output visibility is reparent-into/out-of
+  the ``QSplitter``; never assume QtAds docks are present (that is
+  :mod:`main_window`'s concern only).
+- :class:`UIVisibility` is read and applied once at construction from
+  the *specified* configuration; per-tab configs in tree mode come
+  from ``TreeNode.configuration``. Re-applying visibility later is not
+  wired — rebuild the tab if a config must change.
+- Each tab owns an independent ToolRunnerView with its own run
+  worker/thread; closing the window must let in-flight runs tear down
+  via the runner's own ``_on_finished`` path — don't kill threads
+  from here.
+- Keep this window dockless and dependency-light: the lightweight
+  launch path (double-right-click in the tree) relies on it not
+  pulling in the full IDE shell.
 """
 from __future__ import annotations
 

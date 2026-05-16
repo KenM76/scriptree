@@ -2,6 +2,8 @@
 visible_when.py — tiny expression evaluator for ``ParamDef``'s
 ``visible_when`` and ``required_when`` fields (V0.4.0+).
 
+## For humans
+
 Design constraint: this is a **declarative** language for tool
 authors writing JSON, not an embedded scripting language.  It only
 expresses the few logical patterns that actually arise in real
@@ -59,6 +61,39 @@ Public API::
 The evaluator is allocation-light and pure; safe to call on every
 form-value change.  No regex, no eval, no AST module — a 60-line
 recursive-descent parser walks the token stream once.
+
+## For maintainers / LLMs
+
+* FAIL-OPEN is a hard invariant: ``evaluate`` catches BOTH
+  ``ValueError`` (parse errors) and any other ``Exception`` and
+  returns ``True``. A broken expression must never make a field
+  invisible AND unfixable from the UI. ``runner.resolve`` relies on
+  this: it uses ``visible_when`` to EXEMPT hidden fields from the
+  required check — a fail-CLOSED change here would make hidden
+  required fields un-runnable.
+* String-equality only. The LHS is ``str(values.get(ident, ""))`` —
+  bool/number params compare via their Python ``str()`` form
+  (``True``→``"True"``, ``5``→``"5"``). Authors commonly write
+  ``== 'true'`` (lowercase); that compares against ``str(True)`` ==
+  ``"True"`` and is FALSE. This quirk is documented above as
+  "sensible" but is a real footgun — don't add type coercion to
+  paper over it without revisiting all existing tool defs.
+* Unknown identifiers resolve to ``""`` (not an error) by design —
+  preserves fail-soft when a referenced param was renamed/removed.
+* Tokenizer accepts ``_ - .`` inside bare tokens/identifiers so
+  values like ``v1.2`` / ``off-line`` work; quoted strings have NO
+  escape sequences (intentional — paths/values don't carry quotes
+  in practice). Widening either is a grammar change that ripples to
+  the editor's expression UI.
+* Parser is a single-pass combined parse+evaluate (no AST node
+  objects) with standard precedence NOT < AND < OR and parenthesised
+  override. ``parse_expr`` rejects trailing tokens. Keep the
+  recursive-descent shape — ``eval``/``ast`` are explicitly banned
+  here for safety (this string comes from tool-def JSON).
+* ``_log`` writes to stderr only; this module never raises to the
+  caller and never touches Qt. Keep it dependency-free (stdlib
+  ``sys`` only) so it stays callable on every keystroke and on the
+  headless path.
 """
 from __future__ import annotations
 

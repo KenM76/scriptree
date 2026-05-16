@@ -2,6 +2,8 @@
 cell_metadata.py — read / write cell visual settings inside a
 ``.scriptree`` or ``.scriptreetree`` JSON file.
 
+## For humans
+
 Per V3 v0.2.7 user direction (2026-05-07): "The icon settings should
 be stored in the json of the scriptree, scriptreetree or scriptreering
 file the cell/ring is associated with."
@@ -20,6 +22,41 @@ All paths are resolved RELATIVE to the catalog file by default — when
 saving a setting that points to an external icon, we store the path
 relative to the catalog's directory whenever the icon lives at or
 under that directory.  Otherwise we fall back to an absolute path.
+
+## For maintainers / LLMs
+
+* No module-level Qt import. ``QPixmap`` is imported lazily inside
+  ``make_pixmap_from_metadata`` only — keep it function-local so the
+  ``core`` purity test stays green.
+* ``write_for`` semantics: ``None`` for a kwarg means LEAVE
+  UNCHANGED; empty-string / ``1.0`` means CLEAR / reset. Callers
+  that want a true no-op must pass nothing, not ``""``. If you add
+  a new cell field, mirror it in ALL of: ``CellMetadata``,
+  ``read_for`` (the ``getattr`` block), ``write_for`` (signature +
+  apply block), and the ``ToolDef``/``TreeDef`` model.
+* ``read_for`` and the embed/unembed helpers swallow load errors and
+  return an all-default ``CellMetadata`` (or raise only for the
+  documented missing-file cases). ``write_for`` instead RAISES
+  ``FileNotFoundError`` / ``ValueError`` — the asymmetry is
+  intentional (reads must be safe on a GUI hot path; writes must
+  fail loud).
+* Security: ``cell_click_action`` / ``cell_click_run_mode`` are
+  coerced to a known safe value on write ("menu" / "sequential" by
+  default) so hand-edited JSON can't silently unlock single-click
+  auto-run; ``_normalise_hex_rgb`` silently clears on any parse
+  failure so a typo can't poison the catalog. Don't relax these
+  into pass-through.
+* ``_to_relative_if_possible`` calls ``.resolve()`` on both icon and
+  catalog dir, then ``relative_to``; a path outside the catalog tree
+  stays absolute. Stored relative paths always use forward slashes
+  for clean cross-platform diffs — preserve that on any change.
+* ``write_for`` round-trips through ``read_for(p)`` at the end so
+  the returned ``CellMetadata`` reflects on-disk state (including
+  re-resolved icon path), not the in-memory mutation. Callers rely
+  on this to resync.
+* ``embed_icon`` clears the external ``cell_icon`` path on success;
+  ``unembed_icon_to_file`` clears ``cell_icon_data`` and rewrites
+  ``cell_icon`` (relativised). The two are inverses — keep them so.
 """
 from __future__ import annotations
 

@@ -1,8 +1,45 @@
 """JSON serialization for .scriptree and .scriptreetree files.
 
-Kept separate from model.py so tests can build dataclasses without
-touching the filesystem, and so a future schema migration layer has a
-natural home.
+## For humans
+
+Turns the dataclasses in ``model.py`` into JSON on disk and back.
+``load_tool`` / ``save_tool`` for ``.scriptree`` tools,
+``load_tree`` / ``save_tree`` for ``.scriptreetree`` catalogs.
+Kept separate from ``model.py`` so models stay IO-free and a schema
+migration layer has a home.
+
+## For maintainers / LLMs
+
+Invariants & edit-safety:
+
+* **Loader fails loud on structural errors.** ``_check_schema``
+  hard-rejects files whose ``schema_version`` is below
+  ``model.SCHEMA_VERSION`` (points the user at ``scriptree
+  migrate``).  ``_param_from_dict`` → ``ParamDef(...)`` lets
+  ``__post_init__`` raise on a bad widget/type or provider config.
+  ``tool_from_dict`` additionally runs ``provider_run_order`` to
+  reject ``depends_on`` cycles / unknown ids at load.  This
+  "broken file => exception, not silent best-effort" stance is
+  what ``scriptree validate`` depends on.
+* **Writer compactness is a contract.** ``_param_to_dict`` /
+  ``_provider_to_dict`` OMIT any field that's at its default so a
+  file authored before a feature existed round-trips byte-
+  identical.  When you add a ``ParamDef`` field, add a matching
+  "emit only if non-default" guard here or you'll churn every
+  existing file on first save.
+* ``_enum_from_str`` is the difflib-hint path (``'int'`` → "did
+  you mean 'integer'?").  Keep its message format stable —
+  ``validate``/tests assert substrings of it.
+* ``_normalize_choices`` accepts the legacy ``[[value,label],…]``
+  pair form for back-compat but the canonical on-disk form is two
+  parallel flat lists; don't "simplify" it away.
+* ``save_tool`` sets ``tool.loaded_from`` so later relative-path
+  resolution (executable / provider command / working_directory)
+  anchors to the file's dir, not the process CWD.  Tools that
+  break when "moved" are usually a ``loaded_from`` regression.
+* ``.scriptreering`` / ``.scriptreeforest`` are NOT handled here —
+  they have their own ``shell/ring_io.py`` / ``shell/forest_io.py``
+  with independent ``version`` keys under a ``format`` field.
 """
 from __future__ import annotations
 

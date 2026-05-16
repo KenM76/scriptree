@@ -1,4 +1,1 @@
-"""Hexagonal launcher (PySide6 overlay) — populated by shell-engineer.
-
-See `.claude/agents/shell-engineer.md` for scope and hard rules.
-"""
+"""Hexagonal launcher (PySide6 overlay) — see `.claude/agents/shell-engineer.md` for scope and hard rules."""

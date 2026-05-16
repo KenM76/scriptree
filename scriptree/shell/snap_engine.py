@@ -1,6 +1,8 @@
 """
 snap_engine.py — SnapEngine: continuous 60 Hz honeycomb-strict snap detection.
 
+## For humans
+
 Architecture: ADR-001 Â§sub-decision-3 (superseding Amendment 1).
 Platform: Win11 primary (uses QTimer in the Qt event loop — no threads).
 
@@ -33,6 +35,52 @@ D._orientation != T._orientation, no snap.  Honeycomb tiling requires identical
 tiles.
 
 Debug logging is rate-limited to at most once per second.
+
+## For maintainers / LLMs
+
+* This file is PURE GEOMETRY + a QTimer, ported verbatim from an older
+  project.  Keep it dependency-light: stdlib + ``PySide6.QtCore`` only.
+  Do NOT import cell_window / ring_io / group_layout here — the
+  registry is injected and accessed structurally (``hex_win._id``,
+  ``._size_px``, ``._shape``, ``._orientation``, ``.role``).
+* The offset tables here are the canonical honeycomb neighbour offsets
+  and MUST stay numerically identical to
+  ``group_layout._FLAT_TOP_FIRST_RING`` et al. — a member snaps using
+  these and is later repacked using those.  Divergence = members
+  jumping off their docked slot.
+* The 60 Hz ``QTimer`` runs on the Qt event-loop thread (no threads by
+  design); ``_tick`` must stay cheap and never block.  Timer starts in
+  ``attach_drag`` and stops only when ``_dragging`` is empty — every
+  early-out path that removes a drag must re-check and stop it.
+* ``_cache`` (id → centre/size/shape/orient) is invalidated by
+  ``hexagonReshaped`` (any) and ``hexagonMoved`` (source only —
+  targets are stationary during a drag).  ``_tick`` force-pops the
+  dragging id every frame because it moves continuously.  If you cache
+  more, wire its invalidation through the same registry signals.
+* ``_committed_ids`` is a single-fire belt guard: it is set BEFORE
+  ``snapCommit.emit`` so a re-entrant ``detach_drag`` during the
+  snap-nudge ``move_to`` cannot double-commit.  Cleared in
+  ``attach_drag``.  Never emit ``snapCommit`` without first adding to
+  this set.
+* Two deliberate guards in the candidate loop: masters are skipped
+  (``tgt.role == "master"`` — anchors have no edges to dock), and the
+  dragging hex's OWN group members are NOT excluded (Bug 1 fix — a
+  separated member must be able to snap back to its own cluster).  Do
+  not "optimise" either back out.
+* ``mode`` is ALWAYS the literal string ``"edge"`` — downstream
+  ``_on_snap_commit`` gates master spawn on ``mode == "edge"``.
+  Vertex snap does not exist; there is no other mode value.
+* Coarse reject uses ``tgt_size * _SQRT3_HALF + snap_px + tgt_size``
+  as the max plausible reach; it is intentionally generous (skips work,
+  never rejects a real candidate).  Tighten only with care — a too-
+  tight bound silently breaks docking at large size deltas.
+* ``_get_pos`` reads ``geometry()`` (frame-inclusive) for the centre
+  but commits via ``round(slot - size_px/2)`` top-left; mixing
+  ``geometry()`` and ``pos()`` here would offset every snap by the
+  window frame.
+* Debug ``_log`` goes to stderr, rate-limited to ≤1/sec via
+  ``_last_log_time`` / ``_last_tick_log_time``; keep logging off the
+  hot path.
 """
 
 from __future__ import annotations

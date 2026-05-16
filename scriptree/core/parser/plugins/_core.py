@@ -1,5 +1,7 @@
 """Shared parser implementation — the generic heuristic engine.
 
+## For humans
+
 This file is excluded from plugin discovery (leading underscore) but
 is the workhorse that the argparse, click, and heuristic plugins all
 reuse. Keeping it inside the plugins folder means plugins import from
@@ -16,6 +18,35 @@ the rest.
 The parser returns a ``ToolDef`` with params, an argument template, and
 ``source.mode = "heuristic"``. Caller is expected to set ``executable``
 and ``name``.
+
+## For maintainers / LLMs
+
+- EDITOR-time only; not on the tool-run path.
+- Underscore prefix is load-bearing: it keeps this module OUT of
+  plugin discovery. Never rename it without an internal-helper
+  prefix or the loader will try (and fail) to treat it as a plugin.
+- ``argparse``/``click``/``heuristic`` plugins all delegate to
+  ``parse_heuristic`` then retag ``source.mode``. The argparse/click
+  plugins also strip the synthetic ``help`` param/template entries —
+  so ``parse_heuristic`` MUST keep emitting a param whose ``id`` is
+  exactly ``"help"`` for ``--help``/``-h`` for that filter to work.
+- ``_KEYWORD_RULES`` is first-match-wins and order-sensitive
+  (directory before file, output before input). Reordering changes
+  widget promotion. Promotion only fires for ``ParamType.STRING``
+  params (see the ``ptype in (ParamType.STRING,)`` guard).
+- ``_sanitize_id`` guarantees unique, valid Python identifiers
+  (``used`` set, ``_2``/``_3`` suffixing); every id-producing path
+  funnels through it. ``_primary_flag_for`` reconstructs flags from
+  ids (``_`` → ``-``, single-char → ``-x``), so an id that doesn't
+  round-trip to the original flag yields a wrong template token.
+- Boolean params get ``{id?--flag}`` conditional tokens; valued
+  params get ``--flag={id}``; positionals get ``{id}``. The
+  template-build loop keys "is positional" off the
+  ``description.startswith("(Positional")`` sentinel string — keep
+  that exact prefix if you touch positional ParamDefs.
+- Continuation-line joining in ``_iter_flag_lines`` /
+  ``_find_usage_line`` is indent-based; tab-vs-space indentation in
+  help text affects the cut.
 """
 from __future__ import annotations
 

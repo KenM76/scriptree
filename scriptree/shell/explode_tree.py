@@ -1,6 +1,8 @@
 """
 explode_tree.py — turn a single ``.scriptreetree`` into a multi-cell ring.
 
+## For humans
+
 The "Open in ring" action in the V1 editor takes the loaded
 ``.scriptreetree`` and spawns one cell per *top-level* node, all docked
 together as a master/ring.  This module produces the artifact that
@@ -37,6 +39,43 @@ Strategy
 The hash is derived from the source tree path + its top-level structure
 so re-exploding the same tree produces the same temp ring path, which
 keeps any QFileSystemWatcher attached on the cell-shell side.
+
+## For maintainers / LLMs
+
+- ``_FLAT_TOP_RING_OFFSETS`` is a verbatim copy of
+  ``snap_engine._FLAT_TOP_OFFSETS`` (which itself was ported verbatim
+  from an older project).  It is duplicated here ON PURPOSE so this
+  module stays import-clean outside a Qt context (CLI use).  If the
+  snap engine's honeycomb geometry ever changes, this constant must be
+  re-synced by hand — there is no shared source of truth.
+- The output ``.scriptreering`` carries its OWN ``"format"`` /
+  ``"version"`` (``scriptreering`` / ``1``) — independent of the forest
+  schema_version and of any main editor schema. Do not unify them.
+- Determinism contract: the temp filename is
+  ``scriptreering_explode_<sig>.scriptreering`` where ``sig`` =
+  sha1 of ``src | len(items) | [catalog_paths]``.  Re-exploding the
+  same tree with the same top-level structure overwrites the same file
+  (keeps a cell-side QFileSystemWatcher attached).  Changing the
+  ``sig`` seed inputs breaks that watcher continuity.
+- Folder nodes are materialised as their OWN temp ``.scriptreetree``
+  (``scriptreering_explode_part_<sig>``) with every leaf path resolved
+  to ABSOLUTE — required because the temp file lives in ``%TEMP%`` and
+  cannot resolve paths relative to the original tree's directory.
+  Leaves are emitted with absolute paths, no temp file written.
+- The folder-part ``sig`` uses ``idx`` (top-level position) in its
+  seed, so reordering top-level folders changes their part filenames —
+  harmless (they're overwritten) but means stale part files accumulate
+  in ``%TEMP%`` across reorderings; nothing cleans them up.
+- ``_ring_positions``: indices 0-5 use the fixed honeycomb ring at
+  radius 1.0; index >= 6 falls through to a rougher 2× concentric ring
+  whose ``outer_count`` is ``max(n-6, 6)`` — the SnapEngine compresses
+  these on first user interaction, so exact placement here is
+  intentionally approximate.
+- ``master`` cell has ``catalog_path: None`` by design — the cell shell
+  materialises the forest/ring master on demand. Do not give it a
+  catalog.
+- ``timezone``-aware UTC ``saved_at`` is normalised to a ``Z`` suffix;
+  keep the explicit ``encoding="utf-8"`` on ``write_text``.
 """
 from __future__ import annotations
 

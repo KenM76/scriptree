@@ -1,6 +1,8 @@
 """
 ring_io.py — Save / load master-hexagon groups as .scriptreering files.
 
+## For humans
+
 Public API
 ----------
     save_ring(master, path)                          â†’ None
@@ -18,6 +20,52 @@ warning and a no-op for the registry functions.  save_ring / load_ring work on
 all platforms.
 
 Format reference: docs/specs/scriptreering-format.md
+
+## For maintainers / LLMs
+
+* This module owns the ``.scriptreering`` on-disk format and its OWN
+  independent ``_FORMAT = "scriptreering"`` / ``_VERSION = 1``.  This
+  version is NOT ``model.SCHEMA_VERSION`` and a ``.scriptreering`` is
+  NOT a tool/tree document — it must never be migrated by
+  ``cli/migrate`` or any catalog migrator.  ``load_ring`` only *warns*
+  on a version mismatch and attempts the load anyway; keep that
+  forward-lenient behaviour.
+* ``load_ring`` raises ``FileNotFoundError`` if the file is missing
+  and ``ValueError`` only on a wrong ``format`` key — wrong
+  ``version`` is a warning, not an error.  Callers depend on this
+  exception contract.
+* All JSON I/O is UTF-8 with ``ensure_ascii=False`` so non-ASCII
+  labels/paths round-trip byte-faithfully.  Do not drop the explicit
+  ``encoding="utf-8"`` on read or write — the OS default codepage
+  would corrupt rings saved on a non-UTF-8 console.
+* ``_hex_to_dict`` is byte-stability sensitive: ``icon_path``,
+  ``text_label``, ``icon_scale``, ``label_opacity`` are emitted ONLY
+  when non-default so legacy rings stay byte-identical.  Preserve the
+  "omit at default" conditionals when adding new per-cell fields.
+* ``_load_hex_fields`` clamps everything: shape∈{hexagon,square},
+  orientation∈{flat-top,pointy-top}, size 32–96, transparency
+  0.30–1.00, position via ``_clamp_position`` to the screen the centre
+  lands on.  Unknown/garbage values are coerced + logged, never
+  raised — a hand-edited or cross-DPI ring must still open.
+* ``standalone`` rings round-trip through the SAME ``master`` block
+  with ``role="standalone"`` and an empty ``members`` list; ``save_ring``
+  only accepts roles ``master``/``standalone`` (else ``ValueError``).
+  ``load_ring`` branches on ``master_raw["role"]`` — keep save/load
+  symmetric.
+* After a load, ``_repack_members`` runs (off-screen/overlap fix) then
+  ``_ring_dirty`` is reset to ``False`` so the in-memory mutations
+  from repack don't trigger a spurious save-on-close prompt.  Any new
+  post-load mutation must also be inside that dirty-reset window.
+* Registry/autostart helpers are Windows-only: they early-return with
+  a log line on non-win32, and HKLM (``system`` scope) writes raise
+  ``PermissionError`` unless ``_is_admin()``.  ``elevate_for_system_autostart``
+  shells ``ShellExecuteW`` with verb ``runas`` and references the
+  legacy ``apps.shell.main`` module path — note the divergence from
+  ``_build_autostart_cmd`` which uses ``scriptree.shell.ring_main``.
+* Catalog-path resolution order in ``_resolve_catalog_path`` is fixed:
+  absolute-and-exists → project-root-relative → ``<APPDATA>/<BRAND>/
+  catalogs/`` → None (logged).  A path that resolves to None is not an
+  error; the cell just opens unbound.
 """
 
 from __future__ import annotations

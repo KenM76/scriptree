@@ -1,5 +1,7 @@
 """Application-wide Settings dialog.
 
+## For humans
+
 Accessible via Edit → Settings. Provides:
 
 1. **Layout** — checkbox to remember/restore the window layout on restart.
@@ -7,6 +9,26 @@ Accessible via Edit → Settings. Provides:
    override checkbox.
 3. **Global PATH prepend** — directories to prepend to PATH, with their
    own override checkbox.
+
+## For maintainers / LLMs
+
+- This dialog is a pure value container: after ``exec() ==
+  Accepted`` the caller reads the result accessors and is solely
+  responsible for persisting to ``QSettings`` (key ``"ScripTree"``).
+  The dialog itself does NOT write ``QSettings`` — don't add silent
+  persistence here or two code paths will fight over the same keys.
+- The env / PATH text boxes use the same one-entry-per-line text
+  convention as :mod:`env_editor`; parsing/validation semantics must
+  stay consistent with that module so global vs tool-level env behave
+  identically.
+- Each override group is gated by its own checkbox: an unchecked
+  group means "do not apply", which is distinct from "apply empty".
+  Callers must honour the checkbox state, not just the text content.
+- ``_SETTINGS_KEY`` is duplicated in :mod:`main_window`; keep the two
+  literals in sync — they index the same ``QSettings`` namespace.
+- Settings dialogs are constructed with a real parent so they centre
+  on the main window; preserve the ``parent`` argument when editing
+  construction.
 """
 from __future__ import annotations
 

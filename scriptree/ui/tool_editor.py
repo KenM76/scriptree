@@ -20,6 +20,41 @@ All edits go through ``_push_param`` which rewrites the ``ParamDef``
 and rebuilds the affected views. Edits are local until Save is
 clicked — Cancel discards them. The editor returns the final
 ``ToolDef`` via the ``saved`` signal.
+
+## For maintainers / LLMs
+
+- Unsaved-changes guard (v0.6.2): :meth:`is_dirty` compares
+  ``tool_to_dict(self._tool)`` against ``self._baseline`` (a
+  ``tool_to_dict`` snapshot taken at construction AND re-taken after
+  every successful save). It deliberately serialises rather than
+  tracking a flag, because the property-panel handlers mutate
+  ``self._tool`` in place — a boolean dirty flag would miss those.
+  Keep ``_baseline`` resynced on every save path or false-positive
+  prompts return.
+- :meth:`is_dirty` fails *safe*: if ``tool_to_dict`` ever raises it
+  returns ``True`` (warn rather than silently lose work). Do not
+  "fix" this to return ``False`` on exception.
+- :meth:`_confirm_leave` is the single guard shared by Close and
+  Cancel. Save branch returns ``False`` on purpose: the real save
+  path (``_on_save``) emits ``saved`` and the main window navigates
+  back itself, so this handler must NOT also emit ``cancelled``
+  (double-navigation / double-emit). Save-blocked (validation,
+  read-only, dialog-cancelled) correctly stays in the editor.
+- ``_on_close`` and ``_on_cancel`` both gate on ``_confirm_leave``
+  before emitting ``cancelled`` — a stray click must never silently
+  discard unsaved work. Any new exit path must route through
+  ``_confirm_leave`` too.
+- Edits are in-place mutations of ``self._tool`` via ``_push_param``;
+  there is no working copy. "Cancel discards" relies entirely on the
+  caller throwing away this editor instance and reloading from disk —
+  do not assume ``self._tool`` is pristine after a cancelled edit.
+- Save is permission-gated upstream (``save_scriptree`` /
+  ``save_as_scriptree`` checked in :mod:`main_window`); this view's
+  Save button does not re-check capability, so do not invoke
+  ``_on_save`` from a path that bypasses that gate.
+- ``saved`` carries the final ``ToolDef``; the main window owns
+  swapping back to the runner. The editor does not manage its own
+  lifetime.
 """
 from __future__ import annotations
 

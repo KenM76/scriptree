@@ -1,6 +1,8 @@
 """
 tree_popup.py — lightweight in-process tree popup for cell single-clicks.
 
+## For humans
+
 The cell shell exposes two distinct gestures with different UX:
 
 * **Single left click** → THIS MODULE shows a quick popup ``QMenu`` of
@@ -16,6 +18,41 @@ each one a top-level submenu named after its source.
 The tree is parsed via V1's ``load_tree`` / ``load_tool`` so the
 ``.scriptreetree`` and ``.scriptree`` formats Just Work — no V2-format
 duplication, no schema drift between launchers.
+
+## For maintainers / LLMs
+
+* Leaf-action closures MUST bind ``leaf=str(p)`` and ``config=cfg`` as
+  default args (``_on_trigger(_checked=False, leaf=..., config=...)``).
+  This defeats Python's late-binding-in-loop trap — without it every
+  action would launch the LAST leaf.  Same pattern in the
+  ``.scriptree`` single-action branch.
+* Label resolution order is fixed and mirrors V1's tree view:
+  ``display_name`` → ``name`` → (leaves only) file stem → ``"(unnamed)"``.
+  Keep this in sync with V1 or the popup and the editor disagree on
+  names.
+* Leaf paths are resolved relative to the *catalog's directory*
+  (``source_dir / p``), NOT the CWD.  ``_build_menu_for_catalog``
+  passes ``p.parent`` as ``source_dir``; preserve that or relative
+  leaves break when launched from elsewhere.
+* Every failure is degraded into a *disabled* placeholder action
+  (``(missing: …)``, ``(error: …)``, ``(empty tree)``,
+  ``(unsupported: …)``) rather than raised — a broken member must not
+  prevent the rest of a master's union from showing.  ``launch_tool``
+  exceptions are caught and logged in the trigger handler.
+* ``master._members`` is ``dict[member_id, QPoint]``; ids are resolved
+  through ``CellRegistry``.  The list/tuple fallback is for synthetic
+  test masters only.
+* The menu is stashed on ``hex_win._tree_popup_menu`` and
+  ``aboutToHide`` records ``hex_win._tree_popup_closed_at`` (monotonic)
+  — this is the second-click-toggle mechanism: the click handler uses
+  the "just closed" timestamp to suppress an immediate Qt
+  outside-click → re-open. Do not remove the stash or toggling breaks.
+* ``menu.exec(global_pt)`` is modal/blocking by design (popup, not
+  modeless).  Positioned below-centre of the hex; falls back to the
+  primary screen centre if ``mapToGlobal`` raises.
+* Lazy imports (``v1_launcher``, ``scriptree.core.io``,
+  ``CellRegistry``) are intentional to keep import cost off the
+  non-popup path; do not hoist.
 """
 from __future__ import annotations
 

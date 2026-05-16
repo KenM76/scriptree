@@ -1,5 +1,7 @@
 """Shared dialog for "file not found" recovery.
 
+## For humans
+
 Shown whenever ScripTree references a file that no longer exists on
 disk — a tool file that a tree leaf points to, a tool's executable
 path, a recently-opened file that has moved, etc.
@@ -35,6 +37,32 @@ Permission enforcement for the original Browse button is the caller's
 responsibility — pass ``allow_replace=False`` to hide the Browse
 button entirely (e.g. when the user lacks ``edit_tree_structure`` /
 ``edit_tool_definition``).
+
+## For maintainers / LLMs
+
+- Two modes share one class. Simple mode = Browse-or-Close; path-scope
+  mode additionally grows a scope picker. Keep the simple-mode path
+  free of scope-picker assumptions so the lightweight callers (tree
+  view, recent-files) don't pull in path_env machinery.
+- ``allow_replace=False`` must HIDE the Browse button, not merely
+  disable it — it is the caller's only permission lever for the
+  replace path; a visible-but-disabled button would mislead the user.
+- Denied scopes render as a greyed row with a "denied by IT" note,
+  never silently omitted — users must always see why an option is
+  unavailable. Each scope is independently gated by a permission
+  capability; do not collapse them to a single gate.
+- The "apply to all in sidebar" checkbox is per-file-scope only;
+  global scopes (System/User PATH, session) act once. Don't offer
+  fan-out where it is meaningless.
+- The dialog only reports the user's choice
+  (:meth:`selected_replacement` / chosen scope); it performs no
+  registry/PATH/.scriptree mutation itself — the caller
+  (``tool_runner._offer_missing_executable_recovery`` /
+  ``_apply_path_scope_choice``) does, and owns the save-failure
+  surfacing.
+- Construct with a real parent so the dialog centres on the owning
+  window rather than off-screen; recovery is often triggered deep in
+  a runner where ``self`` is the correct parent.
 """
 from __future__ import annotations
 

@@ -1,5 +1,7 @@
 """Main application window: menus, left-hand launcher, right-hand pane.
 
+## For humans
+
 Uses **PySide6-QtAds** (``PySide6QtAds``) for IDE-grade docking with
 drag-overlay indicators, tabbed docking, and smooth undock/redock.
 
@@ -35,6 +37,46 @@ Menu layout::
       Tools
       Form
       Output
+
+## For maintainers / LLMs
+
+- Ctrl+S is owned by a hidden ``_act_save_dispatch`` QAction (added
+  to the window, in NO menu) wired to ``_save_active`` — it is
+  deliberately NOT hard-bound to save-tree. ``_save_active`` routes:
+  an open tool editor wins (``_save_tool``), else the loaded tree
+  (``_save_tree``), else a status hint. This fixes the regression
+  where Ctrl+S while editing a tool from an open tree silently saved
+  the unchanged tree and discarded tool edits. This routing is
+  regression-tested — do not collapse it back to a tree-only binding.
+- Every Save path re-checks its capability at call time
+  (``save_scriptree`` / ``save_as_scriptree`` / ``save_scriptreetree``
+  / ``save_as_scriptreetree``) via ``perm_check`` so the Ctrl+S
+  shortcut cannot bypass a greyed-out menu. Keep these runtime gates.
+- The three docks (Tools/Form/Output, plus a Run-controls dock) are
+  movable/floatable/pinnable but **never closable** — keep
+  ``_DOCK_FEATURES`` without the closable bit or the user can lose a
+  panel with no way back.
+- Panel ownership is by reparenting, not duplication: when a runner
+  is active its form/output/bottom panels are ``setWidget``-moved
+  into the docks; switching away or opening an editor returns them to
+  the runner's internal splitter. The central ``QStackedWidget``
+  holds editors + a placeholder. Never hold a second reference to a
+  reparented panel — Qt ownership transfers on ``setWidget``.
+- ``_active_editor`` is the live ``ToolEditorView`` (or ``None``). It
+  drives Ctrl+S routing and ``Edit current tool`` enablement. Set it
+  to ``None`` whenever the editor is torn down (``_close_active_editor``)
+  or the dispatcher will save into a dead widget.
+- ``closeEvent`` guards the dirty *tree* (``_confirm_discard_tree``)
+  and warns about running child processes, but does NOT currently
+  invoke the editor's unsaved-changes guard — see the bug audit.
+- Recent-files is built ONLY from deliberate File→Open / the Recent
+  menu (both via ``_add_recent_file``); selecting a tree leaf is not
+  an "open" and must not touch the recent list. ``_MAX_RECENT`` caps
+  it; ``_SETTINGS_KEY`` (= the value in :mod:`settings_dialog`)
+  namespaces ``QSettings``.
+- Layout persistence (``geometry``/``windowState``) is written on
+  close only when ``remember_layout`` is set; restore happens at
+  construction. Keep the opt-in symmetric.
 """
 from __future__ import annotations
 

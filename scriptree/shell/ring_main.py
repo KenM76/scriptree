@@ -1,6 +1,8 @@
 """
 ring_main.py — ScripTreeRing entry point.
 
+## For humans
+
 Launch:
     py -3.11 -m scriptree.shell.ring_main
 
@@ -13,6 +15,49 @@ Subsystems wired here
 - SnapEngine: 60 Hz timer, snap detection, preview and commit signals.
 - MasterHexagon spawn: triggered by SnapEngine.snapCommit(mode='edge').
 - Undock detection: triggered by SnapEngine.snapPreview / hexagonMoved.
+
+## For maintainers / LLMs
+
+* When launched via ``py -m scriptree.shell.ring_main`` this module is
+  registered as ``__main__``, NOT ``scriptree.shell.ring_main``.  A
+  second import of the dotted name gets a DIFFERENT module object whose
+  ``_SNAP_ENGINE`` is still None.  ``_get_snap_engine`` works around
+  this by checking ``sys.modules["__main__"]`` first — preserve that
+  lookup order; never assume ``_SNAP_ENGINE`` is the same object across
+  importers.
+* ``app.setQuitOnLastWindowClosed(False)`` is load-bearing: cells are
+  ``Qt.Tool`` windows excluded from Qt's last-window count, so a
+  dismissed tool dialog would otherwise call ``QApplication.quit()``
+  and nuke the whole shell.  Do not remove or re-enable this.
+* CLI flag order matters: ``_handle_early_flags`` runs BEFORE the
+  QApplication and may ``return 0`` (autostart register/unregister).
+  Single-instance handoff runs next and may also exit (handed off to a
+  running primary).  Only past both gates does this process become the
+  primary.
+* ``--load-ring``, positional ``*.scriptreering``, ``--autoload-rings``
+  and ``SCRIPTREE2_INITIAL_HEXAGONS`` are ADDITIVE, not mutually
+  exclusive.  ``_ring_loaded_any`` only suppresses the *default*
+  single-hex spawn; forest mode also sets it.  Don't make these
+  exclusive without revisiting the default-spawn guard.
+* ``_maybe_start_harness`` is a SECURITY-sensitive two-gate check: env
+  var (``SCRIPTREE2_TEST_HARNESS == "1"``) is tested before the
+  package import, and ALL failure modes are silent — no log line may
+  reveal harness presence.  Do not add diagnostics to the failure
+  paths.
+* Every spawned cell must be wired to the SnapEngine via
+  ``_wire_hex_to_snap`` / a ``snapPreview.connect`` lambda binding
+  ``h=hexagon`` as a default arg (late-binding trap otherwise).
+  ``load_ring`` does its own member wiring; ``_handle_primary_message``
+  must call ``_wire_hex_to_snap`` for cells it spawns.
+* ``_on_hexagon_moved`` suppresses the undock check while
+  ``_GROUP_MOVE_IN_PROGRESS`` is truthy (coordinated group drag → no
+  relative motion → undock impossible).  Its rate-limited log uses a
+  function attribute ``_last_log``; that mutable-default-on-function
+  pattern is intentional, not a bug.
+* The primary single-instance server is only set up when
+  ``--new-process`` is absent; its ``messageReceived`` handler
+  (``_handle_primary_message``) runs in THIS process's event loop so
+  spawned cells share one CellRegistry/SnapEngine and can dock.
 """
 
 from __future__ import annotations

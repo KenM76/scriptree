@@ -16,12 +16,11 @@ menu.  Three dispatch shapes:
   ``QTimer``.  When it exits, spawn the next.  Continue until
   the leaf list is exhausted (or the user closes the cell shell).
 
-Sequential mode tracks state in module-level dicts keyed by
-``master_key`` so two cells running their own sequences don't
-clobber each other.
+Sequential mode tracks state in a module-level dict keyed by a
+fresh per-invocation UUID so two cells running their own
+sequences don't clobber each other.
 
-Tree-walk semantics
--------------------
+### Tree-walk semantics
 
 The leaf-walker recurses through every folder, accepting any
 leaf whose path resolves to a ``.scriptree``.  Sub-trees
@@ -30,6 +29,42 @@ a tree-of-trees deeply could trigger surprising fan-out and the
 cell-shell UX hasn't reasoned about it yet.  A nested tree leaf
 is treated as a single tool (``-run`` opens its standalone with
 all leaves in tabs; the user has to click Run on each tab).
+
+## For maintainers / LLMs
+
+- This module shells out to the V1 editor via subprocess
+  (``v1_launcher._spawn`` / ``_v1_launcher_cmd`` / ``launch_tool``).
+  It NEVER imports the editor.  Keep it that way — the shell and the
+  V1 editor are separate processes by design.
+- ``_inflight_runs`` is keyed by a fresh ``uuid4()`` per
+  ``_run_sequential`` call, NOT by a "master_key".  The old docstring
+  said "master_key" — that was wrong; the UUID scheme is what prevents
+  two concurrent sequences from sharing state.
+- ``_spawn_v1_standalone`` duplicates ``v1_launcher._spawn``'s Windows
+  ``creationflags`` (``CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`` =
+  ``0x08000000 | 0x00000200``).  If ``v1_launcher._spawn`` changes its
+  flags, change them here too — they are intentionally identical and
+  hand-copied, so they will silently drift otherwise.
+- Sequential "exit" means the *V1 standalone window* closed, not the
+  underlying tool process (which V1 owns).  ``_poll_sequential`` reads
+  ``Popen.poll()`` and re-arms a 500 ms ``QTimer.singleShot``.  There is
+  no cap on total polls and no way for a caller to cancel an in-flight
+  sequence — closing the cell shell does not stop the chain (it keeps
+  spawning the rest of the queue).
+- ``_schedule_poll`` has a no-Qt fallback that calls ``proc.wait()``
+  synchronously — TEST ONLY.  It will block the calling thread; never
+  rely on it in production (production always has PySide6 importable).
+- ``_advance_sequential`` recurses synchronously when a spawn fails or
+  ``current_proc`` is ``None`` (skip-to-next).  A long run of
+  back-to-back spawn failures recurses once per leaf — bounded by queue
+  length, but it is real recursion, not a loop.
+- ``collect_leaf_tool_paths`` resolves relative leaf paths against the
+  *tree file's directory*, not CWD.  Absolute leaf paths are
+  ``.resolve()``-d.  ``.scriptreetree`` leaves are returned verbatim
+  (opaque) — the caller decides fan-out.
+- ``run_catalog_on_click`` swallows a failed tree walk (logs and
+  returns) so a broken catalog can't crash the cell on click; a single
+  bad leaf in parallel mode is logged and skipped, the rest still spawn.
 """
 from __future__ import annotations
 

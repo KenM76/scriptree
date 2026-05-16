@@ -1,12 +1,47 @@
 """
 cell_registry.py — CellRegistry singleton.
 
+## For humans
+
 Owns all live CellWindow instances in this process. Acts as the
 publish/subscribe bus for dock and lifecycle events.
 
-Architecture: ADR-001 Â§sub-decision-1 and Â§sub-decision-4.
-             Updated per Amendment 2 (group-association model).
-Platform: Win11 primary. Single process, multi-window model.
+Architecture: ADR-001 §sub-decision-1 and §sub-decision-4, updated per
+Amendment 2 (group-association model).  Platform: Win11 primary; single
+process, multi-window model.
+
+## For maintainers / LLMs
+
+- The singleton is stored in the class attribute ``_INSTANCE`` (NOT on
+  the QApplication, despite the inline comment claiming otherwise).
+  ``instance()`` lazily constructs on first call.  Tests that need a
+  fresh registry must reset ``CellRegistry._INSTANCE = None`` themselves.
+- ``register`` is keyed on ``hex_win._id`` and is idempotent — a
+  duplicate id is a logged no-op and does NOT re-emit ``hexagonSpawned``.
+  This is load-bearing: ``_check_master_validity`` relies on
+  ``close()``→``unregister`` freeing a deterministic master id so a
+  re-dock of the same pair can re-register.  If you make ``register``
+  overwrite instead of no-op, that teardown/respawn cycle breaks.
+- ``unregister`` takes a ``hex_id`` (string), but ``register`` takes a
+  ``CellWindow``.  Asymmetric on purpose — ``closeEvent`` only has the
+  id at that point.
+- This class reaches into ``CellWindow`` private attributes
+  (``_group_master_id``, ``_members``, ``role``).  ``master_of`` /
+  ``group_members_of`` / ``dock_group_of`` are tightly coupled to
+  CellWindow's Amendment-2 membership model — changing the membership
+  field names there requires updating every ``getattr``/attribute access
+  here.
+- ``dock_group_of`` is a deliberately conservative SnapEngine shim: it
+  always returns a set that includes the master and all members so a
+  cell can never snap to its own group siblings.  ``group_members_of``
+  returns ``set()`` (not an error) for unknown / non-master ids — callers
+  rely on the empty-set contract.
+- ``master_id(a, b)`` is order-independent (sorts the pair) and stable
+  across dock/undock cycles.  Anything that constructs or matches master
+  ids must go through this static method, never string-format its own.
+- The signal arity is fixed: ``masterSpawned(str, str, str)`` and the
+  rest single-``str``.  Connected slots in CellWindow / SnapEngine
+  depend on these exact signatures.
 """
 
 from __future__ import annotations

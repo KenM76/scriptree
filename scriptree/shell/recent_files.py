@@ -1,6 +1,8 @@
 """
 recent_files.py — QSettings-backed recent-files list for CellWindow.
 
+## For humans
+
 Tracks the last N files opened via the hex right-click menu, separated into
 two typed lists:
   - recent_scriptree:     *.scriptree  (single-tool definitions)
@@ -17,6 +19,34 @@ Public API
   clear() -> None
   SCRIPTREE_EXT   = ".scriptree"
   SCRIPTREETREE_EXT = ".scriptreetree"
+
+## For maintainers / LLMs
+
+* Two physical keys are used — ``hex_shell/recent_scriptree`` and
+  ``hex_shell/recent_scriptreetree`` — despite the docstring header
+  mentioning ``hex_shell/recent_files``; the per-type keys are the
+  source of truth.  ``clear()`` removes exactly those two.
+* ``QSettings()`` is constructed with NO org/app args on purpose: it
+  inherits whatever the running ``QApplication`` set. Calling these
+  functions before ``QApplication.setOrganizationName/Name`` writes
+  into a different store than later reads — only call after the app
+  is branded.
+* Routing rule: only the exact suffix ``.scriptreetree`` lands in the
+  tree list; ``.scriptree`` *and any other extension* fall through to
+  the tool list.  This is intentional (`add` has no validation) — do
+  not "fix" it into raising on unknown extensions.
+* ``add`` resolves the path (``Path.resolve()``) before storing AND
+  de-dupes on the resolved string, so two spellings of the same file
+  collapse to one entry; dedup happens before the ``insert(0, ...)``
+  so re-adding promotes to most-recent.
+* Cap is enforced twice: ``_load`` slices ``[:_MAX_RECENT]`` on read
+  and ``add`` does ``del items[_MAX_RECENT:]`` on write — keep both so
+  a hand-edited oversized store still self-heals.
+* ``_load`` tolerates a stored value that is already a list (older
+  format) or a JSON string, and swallows ``JSONDecodeError``/``TypeError``
+  to ``[]``.  Falsy entries are filtered (``if p``).  Preserve this
+  leniency — corrupt settings must degrade to an empty list, never
+  raise into the menu code.
 """
 
 from __future__ import annotations

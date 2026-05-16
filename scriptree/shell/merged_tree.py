@@ -2,6 +2,8 @@
 merged_tree.py — build a synthetic ``.scriptreetree`` that merges the
 catalogs of every member of a master cell.
 
+## For humans
+
 When the user double-left-clicks a master/ring cell, V3 spawns the V1
 editor with a *merged* tree: each member cell's loaded catalog becomes
 a top-level folder in the merged tree, named after the member's source
@@ -33,6 +35,43 @@ open via ``QFileSystemWatcher`` for live-reload semantics.  ScripTree
 cleans up its own ``%TEMP%\\scriptreering_merged_*.scriptreetree``
 files at startup of either launcher; for now we rely on the OS to
 sweep ``%TEMP%`` periodically.
+
+## For maintainers / LLMs
+
+* The temp file is deliberately NEVER deleted by this module — V1 may
+  hold it open via ``QFileSystemWatcher`` for live-reload.  Do not add
+  a finally-block unlink here; cleanup is the launcher's job at
+  startup.  The hash-stable filename is the only thing keeping
+  ``%TEMP%`` from growing per double-click.
+* ``_resolve_node_paths`` MUTATES the loaded ``TreeNode`` tree in
+  place.  ``load_tree`` returns fresh objects per call so this is
+  currently safe, but never pass a cached/shared tree through it or
+  you will rewrite leaf paths on the original.
+* Filename signature is ``sha1(<newline-joined resolved source
+  paths>)[:12]`` — order-sensitive *after* the de-dup that preserves
+  first-seen order.  Same member set in a different order → different
+  temp file.  Keep the de-dup and the signing input consistent.
+* ``build_merged_tree`` raises ``ValueError`` when no source resolves
+  to a valid catalog; ``build_merged_tree_for_master`` never does — it
+  falls back to a placeholder tree (user contract: "either way it must
+  open").  Callers of the master variant should not expect the
+  ValueError path.
+* ``master._members`` is ``dict[member_id, QPoint]`` (id → home pos),
+  NOT a list of windows — ids are looked up in ``CellRegistry``.  The
+  ``isinstance(dict)`` fallback to a list/tuple exists only for
+  synthetic test masters; production always hits the dict path.
+* Cache key is ``"|".join(sorted(paths)) + f"|unbound={n}"`` stored on
+  ``master._merged_tree_cache`` as ``(sig_key, path_str)``; it is
+  re-validated with ``Path(...).is_file()`` so a swept temp dir
+  forces a rebuild.  The placeholder branch keys on ``master._id``
+  (repr fallback for test objects) so each master gets a distinct
+  empty file.
+* Lazy imports of ``scriptree.core.io`` / ``.model`` are intentional —
+  keep ``merged_tree`` importable in tests without the V1 core stack.
+  Do not hoist them to module scope.
+* ``_log`` writes to stderr only; load failures of individual sources
+  are logged and skipped, not raised — a partially-broken member set
+  still yields a usable merged tree.
 """
 from __future__ import annotations
 

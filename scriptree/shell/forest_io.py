@@ -1,6 +1,8 @@
 """
 forest_io.py — read / write ``.scriptreeforest`` files.
 
+## For humans
+
 A **forest** is the new top-level container introduced in ScripTree
 v0.3.14.  It sits one layer above ``.scriptreering`` (which contains
 cells) and ``.scriptreetree`` / ``.scriptree`` (single-cell catalogs).
@@ -58,6 +60,54 @@ Public API
     load_forest(path)                     → ForestDef
     default_autoload_path(branding)       → Path  (per-user state file)
     list_autoload_forest(branding)        → ForestDef | None
+
+## For maintainers / LLMs
+
+- The ``.scriptreeforest`` file carries its OWN ``"format"`` /
+  ``"version"`` (``scriptreeforest`` / ``1``).  This is INDEPENDENT of
+  the main editor's schema_version and of ``.scriptreering``'s version.
+  ``ForestDef.schema_version`` is set from the file's ``version`` field
+  at load; ``load_forest`` only LOGS on a version mismatch and proceeds
+  (forward-compat slot) — it does not migrate or reject. Bump ``_VERSION``
+  *and* add real migration logic if the on-disk shape ever changes.
+- v0.5.2 renamed the per-user default file from
+  ``last_forest.scriptreeforest`` to ``default.scriptreeforest``.
+  ``migrate_legacy_autoload_path`` is the ONE-SHOT migration the
+  launcher calls at startup. It is idempotent: no-op if the new path
+  exists OR the legacy one doesn't. ``os.rename`` is used (not copy) so
+  it must be same-volume — APPDATA always is. A failed rename is logged
+  and returns ``None`` (treated as "no migration"); the launcher then
+  proceeds and may create a fresh empty default, silently orphaning the
+  legacy file's contents. Keep the existence guard order (new first).
+- ``_project_root`` here is a THIRD copy of the walk-up heuristic
+  (alongside ``branding_loader`` and ``ring_io``). The docstring says
+  "keep in sync with ring_io._project_root". Unlike ``branding_loader``
+  it FALLS BACK to ``Path.cwd()`` instead of raising — relied on by
+  ``save_forest``/``_resolve_for_load`` to never blow up at the path
+  layer.
+- Path storage: ``_to_relative_if_possible`` stores paths relative to
+  the project root with forward slashes when the target is under it,
+  absolute otherwise. ``_resolve_for_load`` reverses it in order:
+  absolute as-is → relative-to-forest-file → relative-to-project-root →
+  as-given. Resolution happens at LOAD time so callers get absolute
+  ``ForestItem.path``. The save-time ``path`` expression has a redundant
+  ``X if cond else X`` ternary — both branches identical; harmless,
+  effectively always ``_to_relative_if_possible(..., root)``.
+- ``default_autoload_path`` is platform-branched (Roaming on win32,
+  Application Support on darwin, ``~/.config`` elsewhere) and keyed on
+  ``branding["appName"]`` (default "ScripTree"). Changing appName
+  re-homes every per-user file — by design, but it orphans old state.
+- ``forest_preferences.json`` is a SEPARATE concern from any forest
+  file: it only tells the launcher where to look next time
+  (``fallback_to_default`` + ``default_forest_path``). Editing it moves
+  no data. ``ForestPreferences.resolved_default_path`` folds the
+  "empty string = canonical path" rule — callers must not re-implement.
+- ``save_forest`` mutates its argument: it sets
+  ``forest.loaded_from = str(path.resolve())`` after writing. Callers
+  relying on the pre-save ``loaded_from`` must capture it first.
+- All reads/writes pin ``encoding="utf-8"``; keep it (brand/app names
+  and user paths are non-ASCII-capable). ``save_*`` ``mkdir(parents=
+  True, exist_ok=True)`` so first write to a fresh APPDATA works.
 """
 from __future__ import annotations
 

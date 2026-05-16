@@ -1,6 +1,8 @@
 """
 single_instance.py — single-instance ScripTreeRing via QLocalServer.
 
+## For humans
+
 The default user experience when launching ``run_scriptreering.bat`` a
 second time is **not** to start a new isolated process — that would
 produce two cells that can't dock with each other (different
@@ -39,6 +41,52 @@ Sanitisation strips characters Windows named pipes don't allow.  The
 underlying QLocalServer namespace is the same on both POSIX (abstract
 domain socket on Linux, ``/tmp`` socket on macOS) and Windows (named
 pipe ``\\\\.\\pipe\\<name>``) — pick a name short enough for both.
+
+## For maintainers / LLMs
+
+* This is the single-instance guard.  ``try_handoff`` returning
+  ``True`` means "every message acked by a live primary — caller MUST
+  exit"; ``False`` means "no/stale primary — caller becomes the
+  primary".  Any new failure path must return ``False`` (fail-open to
+  starting a primary), never raise into ``main()``.
+* The wire protocol is strictly line-delimited JSON: one object per
+  ``\n``-terminated line, one ack per message, ack read before the
+  next message is written.  A connection may deliver multiple lines in
+  one chunk — ``_on_ready_read`` splits on ``splitlines()`` and acks
+  each; ``try_handoff`` accumulates bytes until it sees ``\n``.  Keep
+  both sides line-framed; do not switch to length-prefixing one side
+  only.
+* Timeouts are deliberately short (connect 1500 ms, write 1000 ms,
+  read 1500 ms): a primary that doesn't answer in-window is treated as
+  stale so the user isn't blocked behind a hung process.  The read
+  loop polls in ≤200 ms slices and decrements ``deadline_left`` even
+  on a spurious ``waitForReadyRead`` wakeup — preserve the decrement
+  or a chatty-but-incomplete primary loops forever.
+* ``listen()`` calls ``QLocalServer.removeServer(name)`` first: on
+  POSIX this clears a stale socket file left by a crashed primary
+  (idempotent, harmless on Windows).  On Windows a live primary still
+  owns the named pipe so ``listen()`` then fails with
+  ``AddressInUseError`` — that is the correct "another primary exists"
+  signal, not an error to retry.
+* RACE: ``removeServer`` then ``listen`` is not atomic.  Two processes
+  racing to become primary on POSIX can both ``removeServer`` and one
+  can unlink the other's just-bound socket.  The handoff path mitigates
+  this (a started primary wins the pipe), but do not assume mutual
+  exclusion is bulletproof under a simultaneous double-launch.
+* ``messages_from_argv`` parses the extension via
+  ``rsplit(".",1)[-1]`` (so ``foo.SCRIPTREERING`` works,
+  case-insensitively) and ``os.path.abspath`` resolves paths against
+  the *secondary's* CWD before sending — the primary may have a
+  different CWD, so relative paths MUST be absolutised here, not on
+  the primary side.
+* Server name sanitisation (``[^A-Za-z0-9._-] → _``) is applied to the
+  username AND the ``SCRIPTREERING_PIPE_NAME`` test override; the
+  override exists so test drivers get an isolated pipe — keep it
+  honoured before the username branch.
+* ``PrimaryServer`` keeps ``self._connections`` to hold socket refs
+  alive (GC would drop them mid-transfer); the ``disconnected`` lambda
+  removes-if-present. Don't drop the list or in-flight acks can be
+  lost to garbage collection.
 """
 from __future__ import annotations
 

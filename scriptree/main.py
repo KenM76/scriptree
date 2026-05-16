@@ -1,5 +1,7 @@
 """Application entry point.
 
+## For humans
+
 Usage::
 
     # Normal IDE window
@@ -22,6 +24,41 @@ Usage::
 
     # Tree standalone with a specific tree-level configuration
     python -m scriptree path/to/tree.scriptreetree -standalone -configuration production
+
+``-configuration`` and ``-run`` both imply ``-standalone``. ``-run``
+(V3 v0.3.5+) auto-clicks Run on the active tool once the standalone
+window is up; the V3 cell shell uses it for click-to-run cells.
+
+## For maintainers / LLMs
+
+- HEADLESS PATH HAZARD: ``main()`` inspects ``raw_argv[0]`` for
+  ``validate`` / ``migrate`` and dispatches to ``.cli.validate`` /
+  ``.cli.migrate`` BEFORE constructing ``QApplication``. Those CLI
+  subcommands are pure stdlib and must run with no display. Do NOT
+  move Qt work above that branch — but note this module already
+  imports ``QApplication`` / ``QStyleFactory`` at top level, so the
+  headless path still pays a Qt import; keep heavier Qt imports lazy
+  and inside the GUI branch as they are now.
+- ``main(argv=None)`` reads ``sys.argv[1:]`` for subcommand detection
+  but passes ``argv`` (possibly ``None``) to ``_parse_args``; keep
+  both in sync when changing argument plumbing. Returns an int exit
+  code (CLI subcommand return or ``app.exec()``).
+- Argparse uses single-dash long options (``-standalone``,
+  ``-configuration``, ``-run``) intentionally — not GNU ``--`` — to
+  match the documented CLI surface; ``args.standalone`` is the
+  attribute name argparse derives from ``-standalone``.
+- ``standalone`` is derived as ``args.standalone or
+  args.configuration is not None or args.run`` — preserve that OR so
+  ``-configuration`` / ``-run`` keep implying ``-standalone``.
+- ``_autorun_active_tool`` is deferred via ``QTimer.singleShot(0,…)``
+  so construction-time signals settle before the synthetic click; it
+  introspects ``win._runner`` (from-tool) or ``win._tabs`` (from-tree)
+  by duck-typing and only clicks ``_btn_run`` when it ``isEnabled()``,
+  so capability gates / sanitisation prompts still apply. Its broad
+  ``except Exception`` is intentional (a failed convenience click must
+  not crash startup) but it swallows the error to stderr only.
+- GUI-only imports (branding, io, windows, QTimer) are lazy by design
+  to keep the headless path Qt-light; do not hoist them.
 """
 from __future__ import annotations
 

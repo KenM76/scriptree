@@ -1,12 +1,14 @@
 """Runtime view of a tool: form on top, extras + output below, Run button.
 
+## For humans
+
 This is what the user interacts with day-to-day. Given a ``ToolDef``
 (loaded from a ``.scriptree`` file), it renders a form using the
 widgets module, and when the user clicks Run it dispatches to
 ``core.runner.spawn_streaming`` in a worker thread and streams the
 child process output to a text pane.
 
-## Editable command preview
+### Editable command preview
 
 The button row carries a "Show full path" checkbox, a "Word wrap"
 checkbox, and an editable ``QPlainTextEdit`` that always shows the
@@ -17,7 +19,7 @@ tokens that don't fit any template entry. Extras are also displayed
 in a small box above the output pane, where they can be edited
 directly.
 
-## Loop guard
+### Loop guard
 
 Two code paths update the same widgets and the same preview field:
 the user typing into a form widget (``valueChanged`` -> preview
@@ -25,6 +27,61 @@ rebuild) and the user typing into the preview (``textEdited`` ->
 widget rebuild). A ``_updating`` flag guards against re-entry so
 setting widget values programmatically doesn't fire another
 reconcile pass.
+
+## For maintainers / LLMs
+
+- ``build_full_argv`` is pure and deterministic and is called on
+  every value change inside ``_update_live_cmd``. Providers must
+  NEVER run during it — dynamic providers only run during
+  form-population/refresh (``_init_providers`` / ``_run_provider`` /
+  Refresh-all). Do not move any provider call into the argv path or
+  the preview becomes non-deterministic and can block on subprocesses.
+- ``_update_live_cmd`` no-ops twice on purpose: (1) when
+  ``self._updating`` (loop guard re-entry) and (2) ``if not
+  hasattr(self, "_live_cmd")`` — provider on_open population fires
+  ``valueChanged`` *before* the preview widget is constructed.
+  ``__init__`` does one definitive ``_update_live_cmd()`` after the
+  view is built. Removing the ``hasattr`` guard crashes on load.
+- The loop guard is the bare ``self._updating`` flag set/cleared in
+  try/finally around every programmatic ``set_value``/``set_choices``
+  and preview ``setPlainText``. New widget-mutating code must wrap
+  itself in the same flag or it self-triggers a reconcile storm.
+- Preview text is replaced via ``_set_live_cmd_preserving_cursor``,
+  which captures + clamps cursor/selection across ``setPlainText``
+  (Qt resets the cursor to 0). Identical-text writes are skipped
+  entirely. Keep the no-op-skip and clamp when editing preview I/O.
+- Provider orchestration: ``_init_providers`` topo-sorts via
+  ``provider_run_order`` (``depends_on`` must be acyclic) and runs
+  ``on_open``/``on_change`` immediately; ``on_change`` cascades are
+  debounced ~250 ms through per-param ``QTimer``s; Refresh-all and
+  per-field ⟳ buttons bypass cache. Providers fail SOFT: error
+  tooltip + "(no items)" for choice widgets, form stays usable, Run
+  blocked only if the param is required.
+- ``_populate_form_rows`` (hence ``_init_providers``) can re-run on a
+  config change that alters ``hidden_params`` in standalone mode. It
+  rebuilds widgets (old ones ``deleteLater``) and reassigns
+  ``_provider_debounce`` fresh; old QTimers parented to ``self``
+  outlive their dead dep widgets (benign, never re-fire). Per-param
+  ``_provider_debounce[p.id]`` keeps only the last dep's timer though
+  every dep is wired to its own timer — see the bug audit.
+- Run lifecycle: ``_start_run`` early-returns if ``self._thread is
+  not None`` (single concurrent run). Worker lives in ``QThread`` via
+  ``moveToThread``; ``finished`` is a queued signal so
+  ``_on_finished`` runs on the GUI thread and may safely
+  ``thread.quit(); thread.wait(2000)``. ``_stop_run`` escalates
+  terminate→kill across two presses (level 1/2). Always clear
+  ``_thread``/``_worker`` to ``None`` in ``_on_finished`` or the next
+  Run is blocked forever.
+- ``_start_run`` re-checks the ``run_tools`` capability at call time
+  (keyboard/programmatic invocations bypass the greyed button).
+  Sanitization always runs on form values; extras + command-editor
+  text are only sanitized when ``injection_protection_on_editor`` is
+  granted. Keep capability checks call-time, not construction-time.
+- Missing-executable recovery (``_offer_missing_executable_recovery``
+  / ``_apply_path_scope_choice``) may rewrite the .scriptree and
+  PATH/registry; save failures are collected and surfaced in a
+  warning box — never swallow them. ``_recovery_argv0_override`` pins
+  argv[0] for the current run only to dodge propagation races.
 """
 from __future__ import annotations
 

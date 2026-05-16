@@ -1,5 +1,7 @@
 """Editor dialog for a tool's custom menus (``ToolDef.menus``).
 
+## For humans
+
 The tool runner exposes a ``QMenuBar`` built from
 ``list[MenuItemDef]``. Each top-level item declares which menu bar
 entry (``MenuItemDef.menu``) it belongs to, and items with non-empty
@@ -12,6 +14,29 @@ tooltip — without hand-editing the JSON.
 
 On OK it returns a fresh flat ``list[MenuItemDef]`` ready to drop
 into ``tool.menus``.
+
+## For maintainers / LLMs
+
+- The serialized model is a *flat* ``list[MenuItemDef]``; the
+  ``QTreeWidget`` here is only a presentation tree. ``MenuItemDef.menu``
+  (top-level bar entry) plus non-empty ``children`` reconstructs the
+  hierarchy on save — the flat<->tree mapping is the central
+  invariant; keep round-trip identity for an untouched menu list.
+- ``label == "-"`` is the separator sentinel and carries no command/
+  shortcut/tooltip — preserve that special-case on both read and
+  write, and don't let the property panel attach fields to it.
+- The dialog deep-copies its input (``copy.deepcopy``) so Cancel
+  truly discards; never mutate the caller's list in place. OK returns
+  a freshly built list, not the working tree's backing objects.
+- Reordering is constrained to *within a parent*; moving an item
+  across parents is not a plain list swap — it changes ``menu`` /
+  parentage. Keep reorder ops parent-scoped or the flatten step will
+  mis-nest.
+- A child item's ``menu`` field is derived from its top-level
+  ancestor at flatten time; do not trust a stale ``menu`` value on a
+  nested item.
+- Pure dialog: no disk I/O, no live ``QMenuBar`` mutation — the
+  runner rebuilds its menu bar from the returned list.
 """
 from __future__ import annotations
 

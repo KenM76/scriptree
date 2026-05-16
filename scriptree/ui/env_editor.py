@@ -1,5 +1,7 @@
 """A shared popup for editing environment variables and PATH prepends.
 
+## For humans
+
 Used by both the tool editor (editing ``ToolDef.env`` /
 ``ToolDef.path_prepend``) and the tool runner (editing the active
 configuration's env overrides). The dialog is deliberately text-based:
@@ -9,10 +11,31 @@ Accept — malformed lines are reported via ``QMessageBox.warning`` and
 the dialog stays open so the user can fix them.
 
 Why text boxes and not a KEY/VALUE table:
-    - Copy/paste from other sources (``.env`` files, shell exports)
-      round-trips cleanly.
-    - No per-row widget boilerplate, so the widget is easy to test.
-    - Comment lines (``# ...``) are preserved as a "notes" channel.
+
+- Copy/paste from other sources (``.env`` files, shell exports)
+  round-trips cleanly.
+- No per-row widget boilerplate, so the widget is easy to test.
+- Comment lines (``# ...``) are preserved as a "notes" channel.
+
+## For maintainers / LLMs
+
+- Parse-on-Accept contract: ``_parse_env`` is invoked from the accept
+  path, NOT live. A malformed line must keep the dialog open (reject
+  the accept), never silently drop the bad entry — callers assume a
+  returned env dict is fully valid.
+- Comment (``# ...``) and blank lines are preserved in the visible
+  text buffer for round-tripping but are stripped from the parsed
+  result of :meth:`result_env`. Do not let them leak into the dict.
+- The caller owns persistence: this dialog only returns parsed values
+  via :meth:`result_env` / :meth:`result_paths` after ``exec()`` ==
+  ``Accepted``; it never writes to disk or mutates the source
+  ``ToolDef``/configuration itself.
+- Two consumers with different semantics (tool ``env`` vs config env
+  overrides) share this widget — keep the parse output a plain
+  ``dict[str, str]`` / ``list[str]`` so neither caller needs special
+  casing.
+- ``KEY=value`` split is on the first ``=`` only; values may legally
+  contain ``=``. Keep that when touching the parser.
 """
 from __future__ import annotations
 
