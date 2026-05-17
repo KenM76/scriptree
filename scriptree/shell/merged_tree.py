@@ -78,8 +78,37 @@ from __future__ import annotations
 import hashlib
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Iterable
+
+# L14 fix: merged temp files were never reclaimed by this module —
+# %TEMP% growth depended entirely on the launcher's startup sweep.
+# Best-effort sweep stale merged files (older than this many
+# seconds) on every build so the directory self-bounds even if the
+# launcher sweep never runs.
+_MERGED_STALE_SECONDS = 24 * 3600
+_MERGED_GLOB = "scriptreering_merged_*.scriptreetree"
+
+
+def _sweep_stale_merged_files() -> None:
+    """Delete merged temp files older than ``_MERGED_STALE_SECONDS``.
+
+    Self-contained, exception-safe: a locked/in-use file (another
+    live master still reading it) just gets skipped — it's younger
+    than the threshold anyway in the normal case, and even a
+    spurious skip only defers cleanup to the next build."""
+    try:
+        tmp = Path(tempfile.gettempdir())
+        cutoff = time.time() - _MERGED_STALE_SECONDS
+        for f in tmp.glob(_MERGED_GLOB):
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                continue  # in use / permission — leave it
+    except OSError:
+        pass  # %TEMP% itself unreadable — nothing we can do
 
 
 def _log(msg: str) -> None:
@@ -207,6 +236,9 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
         "\n".join(str(p) for p in sources).encode("utf-8")
     ).hexdigest()[:12]
     out = Path(tempfile.gettempdir()) / f"scriptreering_merged_{sig}.scriptreetree"
+    # L14 fix: reclaim old merged temp files before writing a new
+    # one so %TEMP% self-bounds regardless of the launcher sweep.
+    _sweep_stale_merged_files()
     save_tree(merged, str(out))
     _log(f"wrote {out}  ({len(merged_nodes)} members)")
     return out

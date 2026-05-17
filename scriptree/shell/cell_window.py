@@ -2425,7 +2425,16 @@ class CellWindow(QMainWindow):
         self._drag_started: bool = False
 
         # Rate-limit timestamps for per-frame event logs (move, tick).
-        self._last_move_log_time: float = 0.0
+        # L6 fix: three independent throttled log sites used to
+        # share ONE timestamp, so they clobbered each other —
+        # making all three logs fire at irregular intervals, and
+        # the group-move log permanently dead (moveEvent's own log
+        # set the shared field to ``now`` ~30 lines earlier in the
+        # same call, so ``now - field`` was always 0).  Each site
+        # now owns its own timestamp.
+        self._last_move_log_time: float = 0.0       # moveEvent (0.1s)
+        self._last_drag_log_time: float = 0.0       # drag (1.0s)
+        self._last_groupmove_log_time: float = 0.0  # group-move (1.0s)
 
         # Bug 2 — group-move: remember position at start of each moveEvent
         # so we can compute the per-frame delta.
@@ -3829,9 +3838,17 @@ class CellWindow(QMainWindow):
         # ring → close-self + load; bound + ring → load alongside).
         self._open_catalog_path(str(p.resolve()))
 
-    def _drop_spawn_member_and_link(self, path) -> None:  # noqa: ANN001
+    def _drop_spawn_member_and_link(self, path):  # noqa: ANN001, ANN201
         """Master case (v0.3.6+): spawn a fresh cell bound to the
         dropped catalog AND auto-join it to this master's group.
+
+        M4 fix: returns the new member's ``_id`` (str) so callers can
+        record exactly the cell that was created instead of guessing
+        via ``next(reversed(self._members))`` — that guess broke if
+        this method ever added ≠1 member or reused an id. Returns
+        ``None`` only if construction failed before a cell existed.
+        The lone other caller ignores the return; the legacy alias
+        below inherits it harmlessly.
 
         Replaces the older ``_drop_spawn_docked_member`` which only
         positioned the new cell adjacent and required the user to
@@ -3920,6 +3937,8 @@ class CellWindow(QMainWindow):
                 f"  _repack_members after drop-join failed: "
                 f"{exc!r} — leaving new cell at its initial position"
             )
+
+        return new_cell._id
 
     # Legacy alias — kept so any out-of-tree caller (V2 polyfills,
     # third-party patches) that called the old name still works.
@@ -4078,12 +4097,12 @@ class CellWindow(QMainWindow):
                 self._on_shake_detected()
 
         _now = _time.monotonic()
-        if _now - self._last_move_log_time >= 1.0:
+        if _now - self._last_drag_log_time >= 1.0:
             _log(
                 f"drag {self._id[:8]} role={self.role} "
                 f"pos=({self.x()},{self.y()}) drag_started={self._drag_started}"
             )
-            self._last_move_log_time = _now
+            self._last_drag_log_time = _now
 
         super().mouseMoveEvent(event)
 
@@ -4178,12 +4197,13 @@ class CellWindow(QMainWindow):
                 # so that collapse/expand targets track the group's new location.
                 self._shift_positioned_members(delta_x, delta_y)
 
-                if _now - self._last_move_log_time >= 1.0:
+                if _now - self._last_groupmove_log_time >= 1.0:
                     _log(
                         f"group-move from {self._id[:8]} (master); "
                         f"translating {len(self._positioned)} positioned member(s) "
                         f"by ({delta_x},{delta_y})"
                     )
+                    self._last_groupmove_log_time = _now
 
                 _GROUP_MOVE_IN_PROGRESS.add(self._id)
                 try:

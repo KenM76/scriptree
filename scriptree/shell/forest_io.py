@@ -332,10 +332,13 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
 
     items_d: list[dict] = []
     for it in forest.items:
+        # L8 fix: was a ternary whose two branches were identical
+        # (``X if not is_absolute() else X``) — the is_absolute()
+        # test had no effect.  ``_to_relative_if_possible`` already
+        # handles both absolute and relative inputs correctly, so
+        # call it unconditionally.
         d = {
-            "path": _to_relative_if_possible(Path(it.path), root)
-                    if not Path(it.path).is_absolute()
-                    else _to_relative_if_possible(Path(it.path), root),
+            "path": _to_relative_if_possible(Path(it.path), root),
             "kind": it.kind,
         }
         if it.position is not None:
@@ -520,11 +523,32 @@ def migrate_legacy_autoload_path(branding: dict) -> Path | None:
         _log(f"migrate_legacy_autoload_path: {legacy_path} -> {new_path}")
         return legacy_path
     except OSError as exc:
+        # L9 fix: a bare `rename` failure (e.g. the legacy file is
+        # transiently locked by an AV scanner / sync client) used to
+        # return None — the launcher then treated it as "nothing to
+        # migrate" and `start()` created a FRESH EMPTY
+        # default.scriptreeforest, silently orphaning the user's
+        # previous forest.  Fall back to a copy so the user's data
+        # still arrives at the new path; only the legacy file lingers
+        # (harmless, ignored from now on).
         _log(
             f"migrate_legacy_autoload_path: rename failed "
-            f"({legacy_path} -> {new_path}): {exc!r}"
+            f"({legacy_path} -> {new_path}): {exc!r}; trying copy"
         )
-        return None
+        try:
+            import shutil
+            shutil.copy2(legacy_path, new_path)
+            _log(
+                f"migrate_legacy_autoload_path: copied {legacy_path} "
+                f"-> {new_path} (legacy left in place)"
+            )
+            return legacy_path
+        except OSError as exc2:
+            _log(
+                f"migrate_legacy_autoload_path: copy fallback also "
+                f"failed: {exc2!r}; legacy forest NOT migrated"
+            )
+            return None
 
 
 def list_autoload_forest(branding: dict) -> ForestDef | None:

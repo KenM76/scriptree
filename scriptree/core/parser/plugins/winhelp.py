@@ -211,14 +211,25 @@ def _extract_flag_block(lines: list[str]) -> list[_ParsedFlag]:
 
     # Find the end: next all-caps header like "Filters:", "Examples:",
     # "NOTE:", or a line at col 0 starting with a letter.
+    #
+    # M3 fix: the old guard ``if i > start`` was meant to skip the
+    # just-consumed Parameter-List header — but when a header IS
+    # found we set ``start = i + 1``, so the header sits at
+    # ``start - 1`` and is already outside ``range(start, …)``; the
+    # guard never needed to protect it.  Worse, ``i > start``
+    # (strictly greater) made a colon-header sitting on the FIRST
+    # line of the block (``i == start``) fail to end the section, so
+    # it got mis-parsed as flag content — and in the no-header case
+    # (``start == 0``) a leading ``Description:`` line never
+    # terminated the (empty) param block.  The header line is always
+    # excluded by the range start, so the first colon-header at
+    # ``i >= start`` is unconditionally the section end.
     end = len(lines)
     for i in range(start, len(lines)):
         line = lines[i]
         if re.match(r"^[A-Z][A-Za-z ]*:\s*$", line):
-            # But skip if we just consumed the Parameter List header.
-            if i > start:
-                end = i
-                break
+            end = i
+            break
 
     block = lines[start:end]
     return _parse_flag_block(block)

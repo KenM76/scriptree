@@ -400,6 +400,27 @@ def _read_capability(perm_dir: Path, capability: str) -> bool | None:
     return True
 
 
+def _resolved_capability_path(perm_dir: Path, capability: str) -> str:
+    """L3 fix: return the path of the file that actually DECIDED a
+    capability, for accurate conflict reporting.
+
+    ``_read_capability`` searches recursively (``rglob``) so the
+    deciding file may live in an organisational subfolder — but the
+    conflict UI used to show ``perm_dir / capability`` (the
+    top-level path), which often doesn't exist and misleads the
+    admin.  Mirror ``_read_capability``'s "most restrictive wins"
+    rule: prefer the first read-only copy (the one that denied),
+    else the first match, else the nominal top-level path as a
+    last-resort label."""
+    matches = list(perm_dir.rglob(capability))
+    for m in matches:
+        if m.is_file() and not _is_writable(m):
+            return str(m)
+    if matches:
+        return str(matches[0])
+    return str(perm_dir / capability)
+
+
 def _find_app_permissions_dir(
     custom_path: str | None = None,
 ) -> Path | None:
@@ -559,8 +580,14 @@ def load_permissions(
                 app_level_allowed=app_allowed,
                 file_level_allowed=file_val,
                 resolved_to=resolved,
-                app_source=str(app_dir / cap) if app_dir else "",
-                file_source=str(file_dir / cap) if file_dir else "",
+                app_source=(
+                    _resolved_capability_path(app_dir, cap)
+                    if app_dir else ""
+                ),
+                file_source=(
+                    _resolved_capability_path(file_dir, cap)
+                    if file_dir else ""
+                ),
             ))
 
     return result

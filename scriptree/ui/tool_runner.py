@@ -1865,6 +1865,18 @@ class ToolRunnerView(QWidget):
 
     def _init_providers(self) -> None:
         prov_params = self._provider_params()
+        # L16 fix: a config change that alters hidden params re-runs
+        # this method, which reassigned ``_provider_debounce`` to a
+        # fresh dict and leaked the prior QTimers (parented to
+        # ``self``, never stopped/deleted — they accumulate across
+        # every config switch in a long-lived runner).  Tear the old
+        # ones down before rebuilding.
+        for _t in getattr(self, "_provider_debounce", {}).values():
+            try:
+                _t.stop()
+                _t.deleteLater()
+            except Exception:  # noqa: BLE001
+                pass
         # Per-rebuild state.
         self._provider_cache: dict[str, Any] = {}
         self._provider_errors: dict[str, str] = {}
@@ -1913,23 +1925,36 @@ class ToolRunnerView(QWidget):
 
         # Wire on_change cascades: when any upstream value changes,
         # debounce ~250 ms then re-run this provider.
+        #
+        # L15 fix: debounce is conceptually PER-PROVIDER, not
+        # per-dependency.  The old code created one QTimer per
+        # ``depends_on`` entry inside the inner loop and overwrote
+        # ``_provider_debounce[p.id]`` each iteration — so a
+        # multi-dep provider's earlier timers were orphaned
+        # (untracked, un-stoppable, leaked on rebuild).  Create ONE
+        # timer per provider and start() it from every dependency's
+        # ``valueChanged``; ``_provider_debounce[p.id]`` is then the
+        # single correct timer (and the only one to clean up).
         from PySide6.QtCore import QTimer
         for p in prov_params:
             if p.choices_provider.refresh != "on_change":
                 continue
-            for dep in p.depends_on:
-                dep_w = self._widgets.get(dep)
-                if dep_w is None:
-                    continue
-                timer = QTimer(self)
-                timer.setSingleShot(True)
-                timer.setInterval(250)
-                timer.timeout.connect(
-                    lambda pid=p.id: self._refresh_provider(
-                        pid, bypass_cache=False,
-                    )
+            dep_widgets = [
+                self._widgets.get(dep) for dep in p.depends_on
+            ]
+            dep_widgets = [w for w in dep_widgets if w is not None]
+            if not dep_widgets:
+                continue
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(
+                lambda pid=p.id: self._refresh_provider(
+                    pid, bypass_cache=False,
                 )
-                self._provider_debounce[p.id] = timer
+            )
+            self._provider_debounce[p.id] = timer
+            for dep_w in dep_widgets:
                 dep_w.valueChanged.connect(
                     lambda _v=None, t=timer: t.start()
                 )

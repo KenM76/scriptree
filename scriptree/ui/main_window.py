@@ -1301,7 +1301,51 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def _confirm_discard_editor(self) -> bool:
+        """H2 fix: closing the app must honour the open tool
+        editor's unsaved-changes guard, not just the tree's.
+
+        The v0.6.2 dirty guard only covered navigate-away (the
+        editor's Close/Cancel buttons); ``closeEvent`` bypassed it,
+        so quitting via the window ✕ / File→Exit silently discarded
+        tool edits.  Mirror ``_confirm_discard_tree``: Save / Discard
+        / Cancel.  On Save, if the save was blocked (validation
+        error / read-only / cancelled Save-As dialog) the editor is
+        still dirty — treat that as "stay" so edits aren't lost."""
+        editor = self._active_editor
+        if editor is None:
+            return True
+        try:
+            if not editor.is_dirty():
+                return True
+        except Exception:  # noqa: BLE001 — never block exit on a guard bug
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unsaved tool changes",
+            "The tool open in the editor has unsaved changes. "
+            "Save before exiting?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Save:
+            editor.save()
+            # Save blocked (still dirty) ⇒ keep the window open so
+            # the user can fix the validation error / pick a path.
+            try:
+                return not editor.is_dirty()
+            except Exception:  # noqa: BLE001
+                return True
+        if reply == QMessageBox.StandardButton.Discard:
+            return True
+        return False
+
     def closeEvent(self, event) -> None:
+        if not self._confirm_discard_editor():
+            event.ignore()
+            return
         if not self._confirm_discard_tree():
             event.ignore()
             return

@@ -272,7 +272,9 @@ def load_plugins_from_dir(registry: PluginRegistry, dir_path: Path) -> int:
     if dir_str not in sys.path:
         sys.path.insert(0, dir_str)
         path_added = True
-    loaded = 0
+    # (L5 fix: removed a dead ``loaded = 0`` here — the real counter
+    # lives in ``_load_plugins_from_dir_inner``; this function only
+    # manages the sys.path lifetime and returns the inner result.)
     try:
         return _load_plugins_from_dir_inner(registry, dir_path)
     finally:

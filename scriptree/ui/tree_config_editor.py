@@ -352,5 +352,13 @@ class TreeConfigEditorDialog(QDialog):
     # --- accept ---
 
     def _on_accept(self) -> None:
+        # M7 fix: the constructor only disables the Save/Save-As/
+        # Delete *buttons* for a read-only tree — but OK still ran
+        # ``_save_current`` and clobbered the tree-config sidecar of
+        # a locked/vendored tree, defeating the read-only contract.
+        # Honour read-only here: just close without writing.
+        if self._read_only:
+            self.accept()
+            return
         self._save_current()
         self.accept()

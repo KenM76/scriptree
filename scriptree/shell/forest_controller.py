@@ -410,11 +410,23 @@ class ForestController(QObject):
                 # Tree / tool → use the existing path that drops a
                 # catalog onto a master ring.  Same code path the
                 # drag-drop UX uses, so behaviour stays consistent.
-                self.forest_window._drop_spawn_member_and_link(Path(item.path))
-                # Find the most-recently-added member to record it.
-                if self.forest_window._members:
-                    last_id = next(reversed(self.forest_window._members))
-                    cell = self._registry.get(last_id)
+                # M4 fix: use the id the spawn method now returns
+                # instead of guessing the just-added member via
+                # ``next(reversed(self._members))`` (fragile coupling
+                # to dict insertion order — wrong cell recorded if
+                # the method ever added ≠1 member or reused an id).
+                new_id = self.forest_window._drop_spawn_member_and_link(
+                    Path(item.path)
+                )
+                if new_id is None:
+                    # Defensive: fall back to the old heuristic only
+                    # if the spawn returned nothing.
+                    new_id = (
+                        next(reversed(self.forest_window._members))
+                        if self.forest_window._members else None
+                    )
+                if new_id is not None:
+                    cell = self._registry.get(new_id)
                     if cell is not None:
                         if item.position is not None:
                             cell.move(*item.position)
@@ -671,12 +683,50 @@ class ForestController(QObject):
     def flush_if_dirty(self) -> None:
         """Synchronous flush — used at process exit to make sure
         no pending change is lost when the debounce timer never
-        gets to fire."""
-        if self._dirty:
-            try:
-                self.save()
-            except Exception as exc:  # noqa: BLE001
-                _log(f"flush_if_dirty: save failed: {exc!r}")
+        gets to fire.
+
+        L7 fix: when the session is transient (no ``loaded_from`` and
+        ``fallback_to_default`` off) ``save()`` is a deliberate
+        no-op — but at process exit that silently discarded the
+        user's whole forest with only a stderr line.  Here, at the
+        last possible moment, surface it: offer Save As… / Discard
+        instead of vanishing the work."""
+        if not self._dirty:
+            return
+        try:
+            self.save()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"flush_if_dirty: save failed: {exc!r}")
+        # Still dirty after save() ⇒ the transient no-op branch ran
+        # (or the write failed).  Only prompt when there's actually
+        # something to lose and no file target exists.
+        if not self._dirty or not self.forest.items:
+            return
+        if self.forest.loaded_from:
+            return  # had a target; a real write failure already logged
+        try:
+            reply = QMessageBox.question(
+                self.forest_window,
+                "Unsaved forest",
+                f"This forest has {len(self.forest.items)} item(s) "
+                "and is running as a transient (in-memory) session — "
+                "it will NOT be saved automatically.\n\n"
+                "Save it to a file before exiting?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard,
+                QMessageBox.StandardButton.Save,
+            )
+            if reply == QMessageBox.StandardButton.Save:
+                path, _ = QFileDialog.getSaveFileName(
+                    self.forest_window, "Save forest as",
+                    "forest.scriptreeforest",
+                    "ScripTree forest (*.scriptreeforest)",
+                )
+                if path:
+                    self.save_as(path)
+        except Exception as exc:  # noqa: BLE001
+            # Never let the exit-time guard itself block shutdown.
+            _log(f"flush_if_dirty: transient-save prompt failed: {exc!r}")
 
     def get_preferences(self) -> ForestPreferences:
         """Return a snapshot of the user's launch preferences."""

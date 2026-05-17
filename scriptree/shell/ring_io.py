@@ -562,10 +562,24 @@ def load_ring(
         )
 
     # Notify registry that a master was spawned.
-    if master_win._members:
-        first_id = next(iter(master_win._members))
-        second_id = list(master_win._members.keys())[1] if len(master_win._members) >= 2 else first_id
-        registry.masterSpawned.emit(master_win._id, first_id, second_id)
+    # L12 fix: ``masterSpawned(mid, a, b)`` means "two source cells
+    # merged into a master".  The old code, when restoring a master
+    # that has only ONE member, emitted ``(mid, first_id, first_id)``
+    # — the same id as both partners, a degenerate pair for any
+    # consumer that treats a/b as distinct docked cells.  The signal
+    # arity is fixed (Signal(str,str,str)); rather than fabricate a
+    # bogus second id, only emit when there are genuinely ≥2 members.
+    member_ids = list(master_win._members.keys())
+    if len(member_ids) >= 2:
+        registry.masterSpawned.emit(
+            master_win._id, member_ids[0], member_ids[1]
+        )
+    elif member_ids:
+        _log(
+            f"load_ring: master {master_win._id[:8]} restored with a "
+            f"single member {member_ids[0][:8]} — not emitting "
+            f"masterSpawned (not a docked pair)"
+        )
 
     # Repack: hand-edited or cross-DPI ring files may have member
     # positions that overlap, sit off-slot, or fall off-screen at the
@@ -864,10 +878,16 @@ def elevate_for_system_autostart(ring_path: Path) -> None:
 
     Called from the context menu when scope='system' and not admin.
     The elevated process runs:
-        <exe> -m apps.shell.main --register-autostart-system <ring-path>
+        <exe> -m scriptree.shell.ring_main --register-autostart-system <ring-path>
     and exits immediately.
 
     On non-Windows or if ShellExecuteW fails, logs an error.
+
+    L13 fix: previously launched the legacy V2 module
+    ``apps.shell.main`` (which does not exist in V3), so the
+    UAC-elevated child died on import and system-scope autostart
+    registration silently no-op'd.  Now uses the V3 entry point
+    ``scriptree.shell.ring_main`` — matching ``_build_autostart_cmd``.
     """
     if sys.platform != "win32":
         _log("elevate_for_system_autostart: non-Windows — cannot elevate")
@@ -876,7 +896,10 @@ def elevate_for_system_autostart(ring_path: Path) -> None:
     import ctypes
 
     exe = sys.executable
-    args = f'-m apps.shell.main --register-autostart-system "{ring_path}"'
+    args = (
+        f'-m scriptree.shell.ring_main '
+        f'--register-autostart-system "{ring_path}"'
+    )
     _log(f"elevate_for_system_autostart: launching elevated: {exe} {args}")
 
     ret = ctypes.windll.shell32.ShellExecuteW(

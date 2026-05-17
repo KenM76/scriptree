@@ -794,10 +794,14 @@ class ForestSettingsDialog(QDialog):
         )
         try:
             self._controller.update_preferences(new_prefs)
-        except OSError as exc:
-            # Disk write of prefs failed (read-only home dir?).
-            # Don't crash the dialog — the forest save below still
-            # works for the in-memory state.
+        except Exception as exc:  # noqa: BLE001
+            # L10 fix: was ``except OSError`` only — a non-OSError
+            # (e.g. a JSON-serialisation / TypeError in prefs
+            # encoding) escaped this modal dialog and crashed it,
+            # inconsistent with the deliberately-swallowed
+            # label-change path. The intent is "never crash the
+            # dialog over a prefs write; the in-memory forest save
+            # below still works", so catch broadly and log.
             from scriptree.shell.forest_controller import _log
             _log(f"_save: update_preferences failed: {exc!r}")
         self._controller.save()

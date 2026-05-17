@@ -1,10 +1,29 @@
 # ScripTree — bug audit (2026-05-16)
 
+> ## ✅ ALL RESOLVED in v0.6.3 (2026-05-16)
+>
+> Every finding below — **2 HIGH, 7 MEDIUM, 18 LOW/latent** — was
+> fixed. Each fix carries an inline ``# H1/M3/L9 fix:`` comment at
+> the site explaining the change. Regression tests for the
+> behaviourally-checkable ones live in
+> ``tests/test_bugfixes_v063.py``; the full suite (1400+ tests)
+> is green with zero regressions. A pre-fix snapshot is archived at
+> ``ScripTree4-v0.6.2-pre-bugfix-20260516_203818.zip``.
+>
+> Notes on a few: **L7** became an exit-time Save/Discard prompt for
+> transient forests (was silent loss). **L9** added a copy-fallback
+> so a locked legacy forest is never orphaned. **L13** corrected the
+> legacy ``apps.shell.main`` module path to ``scriptree.shell.ring_main``
+> so system-scope autostart elevation actually works. **M6** reordered
+> to listen-then-recover so a live primary's socket is never blindly
+> unlinked. The original report text is preserved below for context.
+
+---
+
 Produced during the codebase-wide dual-section docstring pass. Each
 source file was read for **real defects** (logic errors, resource
 leaks, races, swallowed failures, security/encoding issues) — not
-style. Nothing here was fixed except the two items in
-"Fixed during this audit"; the rest are recorded for later triage.
+style.
 
 > Line numbers shifted because every module's top docstring grew.
 > Findings are anchored to **function / symbol names**; treat any

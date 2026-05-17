@@ -31,14 +31,15 @@ window is up; the V3 cell shell uses it for click-to-run cells.
 
 ## For maintainers / LLMs
 
-- HEADLESS PATH HAZARD: ``main()`` inspects ``raw_argv[0]`` for
+- HEADLESS PATH (L17 fixed): ``main()`` inspects ``raw_argv[0]`` for
   ``validate`` / ``migrate`` and dispatches to ``.cli.validate`` /
-  ``.cli.migrate`` BEFORE constructing ``QApplication``. Those CLI
-  subcommands are pure stdlib and must run with no display. Do NOT
-  move Qt work above that branch — but note this module already
-  imports ``QApplication`` / ``QStyleFactory`` at top level, so the
-  headless path still pays a Qt import; keep heavier Qt imports lazy
-  and inside the GUI branch as they are now.
+  ``.cli.migrate`` BEFORE any Qt is touched. Those CLI subcommands
+  are pure stdlib and must run with no display. PySide6 is imported
+  **inside the GUI branch of** ``main()`` only — never at module
+  scope — so the headless dispatch is genuinely Qt-free (verified by
+  ``tests/test_core_purity.py``'s subprocess check). Do NOT hoist
+  the ``from PySide6...`` import back up to module level or above the
+  CLI-dispatch branch.
 - ``main(argv=None)`` reads ``sys.argv[1:]`` for subcommand detection
   but passes ``argv`` (possibly ``None``) to ``_parse_args``; keep
   both in sync when changing argument plumbing. Returns an int exit
@@ -66,7 +67,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QStyleFactory
+# L17 fix: PySide6 is NOT imported at module scope.  ``main()``
+# dispatches the headless ``validate`` / ``migrate`` subcommands
+# BEFORE any QApplication is built; a top-level Qt import made even
+# ``python -m scriptree validate …`` force-load Qt (and fail on a
+# headless box with no Qt platform plugin).  The Qt import now lives
+# inside the GUI branch of ``main()``.
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -168,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
             return _validate_main(rest)
         from .cli.migrate import main as _migrate_main
         return _migrate_main(rest)
+
+    # GUI path only — import Qt here (NOT at module scope) so the
+    # headless CLI dispatch above never forces a Qt load (L17 fix).
+    from PySide6.QtWidgets import QApplication, QStyleFactory
 
     args = _parse_args(argv)
 

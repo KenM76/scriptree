@@ -94,6 +94,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Callable
 
 from PySide6.QtCore import QByteArray, QIODevice, QObject, Signal
@@ -174,11 +175,22 @@ def try_handoff(messages: list[dict]) -> bool:
                 _log(f"  write failed: {sock.errorString()!r}")
                 return False
             # Read one line of ack.
+            # M5 fix: the old loop only decremented the budget in the
+            # waitForReadyRead-timed-out branch.  If the primary sent
+            # a partial line then stalled, waitForReadyRead kept
+            # returning True with no newline and the budget never
+            # decremented → the secondary spun forever instead of
+            # failing open.  Use a monotonic absolute deadline so
+            # time is honoured regardless of which branch runs.
             ack = b""
-            deadline_left = _READ_TIMEOUT_MS
-            while b"\n" not in ack and deadline_left > 0:
-                if not sock.waitForReadyRead(min(deadline_left, 200)):
-                    deadline_left -= 200
+            deadline = time.monotonic() + (_READ_TIMEOUT_MS / 1000.0)
+            while b"\n" not in ack:
+                remaining_ms = int(
+                    (deadline - time.monotonic()) * 1000
+                )
+                if remaining_ms <= 0:
+                    break
+                if not sock.waitForReadyRead(min(remaining_ms, 200)):
                     continue
                 ack += bytes(sock.readAll())  # type: ignore[arg-type]
             if b"\n" not in ack:
@@ -226,17 +238,31 @@ class PrimaryServer(QObject):
         removed first; ``QLocalServer.removeServer`` is idempotent.
         """
         name = _server_name()
-        # Idempotent on POSIX: removes the socket file if it exists
-        # but no process is listening.  Harmless on Windows.
+        # M6 fix: the old order was unconditional ``removeServer``
+        # THEN ``listen`` — on POSIX two processes racing to become
+        # primary could BOTH ``removeServer`` and the second would
+        # unlink the first's just-bound socket, so neither ends up a
+        # usable primary.  Instead: try ``listen`` FIRST.  Only if it
+        # fails (stale socket from a crashed prior primary, or a live
+        # one) do we ``removeServer`` + retry once.  This never
+        # blindly unlinks a *live* primary's socket; it narrows the
+        # race window to the rare stale-socket recovery path.  (A
+        # fully atomic bind isn't exposed by QLocalServer; this is
+        # the standard Qt single-instance recovery pattern.)
+        if self._server.listen(name):
+            _log(f"primary listening on {name!r}")
+            return True
+        # listen() failed — could be a live primary (correct: we are
+        # the secondary) or a stale socket file (recover it).
         QLocalServer.removeServer(name)
-        if not self._server.listen(name):
-            _log(
-                f"listen({name!r}) failed: "
-                f"{self._server.errorString()!r}"
-            )
-            return False
-        _log(f"primary listening on {name!r}")
-        return True
+        if self._server.listen(name):
+            _log(f"primary listening on {name!r} (after stale-socket recover)")
+            return True
+        _log(
+            f"listen({name!r}) failed: "
+            f"{self._server.errorString()!r}"
+        )
+        return False
 
     def stop(self) -> None:
         for sock in self._connections:
@@ -308,7 +334,12 @@ def messages_from_argv(argv: list[str]) -> list[dict]:
     for arg in argv[1:]:
         if arg.startswith("-"):
             continue
-        ext = arg.lower().rsplit(".", 1)[-1] if "." in arg else ""
+        # L11 fix: was ``arg.lower().rsplit(".", 1)[-1]`` over the
+        # WHOLE path — a path with a dot in a *directory* and no file
+        # extension (``C:\my.dir\ring``) split to ``"dir\ring"`` → no
+        # match → silently misclassified as a generic spawn.  Take
+        # the extension of the basename only.
+        ext = os.path.splitext(os.path.basename(arg))[1].lower().lstrip(".")
         if ext == "scriptreering":
             msgs.append({"command": "load_ring", "path": os.path.abspath(arg)})
         elif ext in ("scriptreetree", "scriptree"):

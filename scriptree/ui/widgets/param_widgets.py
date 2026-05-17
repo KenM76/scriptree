@@ -465,24 +465,41 @@ class DropdownWidget(ParamWidget):
         self._combo.blockSignals(True)
         try:
             self._combo.clear()
-            for i, value in enumerate(choices):
-                label = (
-                    labels[i] if i < len(labels) and labels[i]
-                    else value
-                )
-                self._combo.addItem(label, value)
-            target = None
-            if prev in choices:
-                target = prev
-            elif isinstance(default, str) and default in choices:
-                target = default
-            if target is not None:
-                idx = self._combo.findData(target)
-                if idx >= 0:
-                    self._combo.setCurrentIndex(idx)
+            if not choices:
+                # L18 fix: an empty provider result used to leave a
+                # blank combo that looked like a normal "nothing
+                # selected" state — the form/argv silently kept
+                # referencing the old value with no visible cue and
+                # (when prev was also empty) no signal.  Mirror
+                # CheckboxListWidget: show a disabled "(no items)"
+                # placeholder whose data is "" so get_value() is a
+                # consistent empty string, and disable the control.
+                self._combo.addItem("(no items)", "")
+                self._combo.setEnabled(False)
+            else:
+                self._combo.setEnabled(True)
+                for i, value in enumerate(choices):
+                    label = (
+                        labels[i] if i < len(labels) and labels[i]
+                        else value
+                    )
+                    self._combo.addItem(label, value)
+                target = None
+                if prev in choices:
+                    target = prev
+                elif isinstance(default, str) and default in choices:
+                    target = default
+                if target is not None:
+                    idx = self._combo.findData(target)
+                    if idx >= 0:
+                        self._combo.setCurrentIndex(idx)
         finally:
             self._combo.blockSignals(False)
-        if self.get_value() != prev:
+        # Emit when the effective value changed OR the choice set
+        # emptied — in the empty case downstream (live argv preview,
+        # required-field check) MUST re-evaluate even if both old and
+        # new values stringify to "".
+        if self.get_value() != prev or not choices:
             self.valueChanged.emit(self.get_value())
 
 

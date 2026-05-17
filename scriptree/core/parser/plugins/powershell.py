@@ -167,9 +167,24 @@ def _extract_parameters(text: str) -> list[_ParsedParam]:
 
     # Find where the section ends (next top-level header like INPUTS,
     # OUTPUTS, ALIASES, REMARKS, NOTES, EXAMPLES, etc.).
+    #
+    # L4 fix: the old regex ``^[A-Z][A-Z]+\s*$`` only matched a
+    # single all-caps WORD — so the standard ``Get-Help -Full``
+    # multi-word terminator ``RELATED LINKS`` (and any spaced
+    # header) slipped through and its text got swallowed into the
+    # PARAMETERS block.  Match the known top-level section headers
+    # explicitly (allowing internal spaces, optional trailing
+    # whitespace).  This is precise (won't false-positive on an
+    # all-caps parameter value line) and covers the real header set.
+    # The ``i > 0`` guard stays: line 0 is the line immediately
+    # after the PARAMETERS header — never itself a terminator.
+    _PS_SECTION_END = re.compile(
+        r"^(INPUTS|OUTPUTS|NOTES|EXAMPLES|REMARKS|ALIASES|"
+        r"RELATED LINKS|SYNTAX|DESCRIPTION|SYNOPSIS)\s*$"
+    )
     end = len(lines)
     for i, line in enumerate(lines):
-        if i > 0 and re.match(r"^[A-Z][A-Z]+\s*$", line):
+        if i > 0 and _PS_SECTION_END.match(line):
             end = i
             break
 

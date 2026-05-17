@@ -68,7 +68,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -124,7 +126,12 @@ def migrate_one(
     changed = False
 
     cur_version = data.get("schema_version", 1)
-    if cur_version != _TARGET_SCHEMA_VERSION:
+    # M1 fix: only ever UPGRADE.  A file already at the target — or,
+    # crucially, a *newer* file (a hypothetical schema_version 4) —
+    # must not be rewritten.  ``!=`` would silently downgrade a v4
+    # file to v3, corrupting it; ``<`` makes the migrator a pure
+    # forward step and keeps it idempotent across future versions.
+    if cur_version < _TARGET_SCHEMA_VERSION:
         data["schema_version"] = _TARGET_SCHEMA_VERSION
         changed = True
 
@@ -141,9 +148,29 @@ def migrate_one(
             changed = True
 
     if changed and not dry_run:
-        path.write_text(
-            json.dumps(data, indent=2) + "\n", encoding="utf-8"
+        # M2 fix: atomic write.  ``path.write_text`` truncates the
+        # user's source file then writes — an interruption (disk
+        # full, kill, power loss) between those steps leaves a
+        # zero/partial ``.scriptree``.  Write to a temp file in the
+        # same directory (so ``os.replace`` is atomic — same
+        # filesystem) and rename over the original.  On any failure
+        # the original is left untouched.
+        payload = json.dumps(data, indent=2) + "\n"
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
         )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp_name, path)
+        except OSError:
+            # Best-effort cleanup; never leave the temp behind, and
+            # never partially clobber the original.
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
     if changed:
         log(f"  {'would migrate' if dry_run else 'migrated'}: {path}")
     return changed

@@ -302,8 +302,14 @@ def resolve(
     else:
         # Default to the executable's directory so tools that read
         # config files relative to their own location still work.
+        # L2 fix: for a bare exe name (``python``) ``Path.parent`` is
+        # ``Path('.')`` whose ``as_posix()`` is the truthy string
+        # ``"."`` — that made cwd ``"."`` instead of ``None``,
+        # diverging from the documented "no anchor → inherit process
+        # CWD" intent (and from ``build_env``'s analogous check).
+        # Treat ``""``/``"."`` as "no directory".
         exe_parent = Path(exe).parent
-        cwd = str(exe_parent) if exe_parent.as_posix() else None
+        cwd = str(exe_parent) if str(exe_parent) not in ("", ".") else None
 
     # V3 v0.3.13+ — when the tool spawns Python, splice in the
     # ScripTree runtime shim so sibling imports (`import _foo` from
@@ -997,9 +1003,15 @@ def spawn_streaming_as_user(
     pi = PROCESS_INFORMATION()
 
     # Build command line string.
-    cmd_line = " ".join(
-        f'"{a}"' if " " in a or '"' in a else a for a in cmd.argv
-    )
+    # L1 fix: the old hand-rolled quoting (``f'"{a}"' if " " in a or
+    # '"' in a else a``) wrapped an arg containing a ``"`` in quotes
+    # WITHOUT escaping the inner quote, producing a malformed /
+    # mis-split command line for ``CreateProcessWithLogonW``
+    # (argument corruption / injection).  ``subprocess.list2cmdline``
+    # implements the exact MS C runtime quoting rules (backslash +
+    # quote handling) and is what the non-elevated path already uses
+    # (see ``ResolvedCommand.display``); use it here too.
+    cmd_line = subprocess.list2cmdline(cmd.argv)
 
     # Build environment block (null-terminated key=val pairs, double-null end).
     env_block = None
@@ -1058,12 +1070,26 @@ def spawn_streaming_as_user(
 
     # Notify caller with a lightweight Popen-like wrapper for Stop.
     class _ProcProxy:
-        """Minimal Popen-like wrapper for the Stop button."""
+        """Minimal Popen-like wrapper for the Stop button.
+
+        H1 fix: this object outlives the function (the caller stores
+        it via ``on_start`` for the Stop button).  The OS process
+        handle is closed once the child exits and this function
+        returns; without a guard, a Stop click *after* natural exit
+        would call ``TerminateProcess`` / ``GetExitCodeProcess`` on a
+        closed handle whose value the OS may have RECYCLED for an
+        unrelated object — i.e. Stop could kill the wrong handle.
+        ``close(exit_code)`` latches the final return code and marks
+        the proxy dead; every method no-ops once closed.
+        """
         def __init__(self, hProcess: int, pid: int):
             self._hProcess = hProcess
             self.pid = pid
             self.returncode: int | None = None
+            self._closed = False
         def poll(self) -> int | None:
+            if self._closed:
+                return self.returncode
             ret = wt.DWORD()
             if kernel32.GetExitCodeProcess(self._hProcess, ctypes.byref(ret)):
                 if ret.value != 259:  # STILL_ACTIVE
@@ -1071,9 +1097,20 @@ def spawn_streaming_as_user(
                     return ret.value
             return None
         def terminate(self) -> None:
+            if self._closed:
+                return
             kernel32.TerminateProcess(self._hProcess, 1)
         def kill(self) -> None:
+            if self._closed:
+                return
             kernel32.TerminateProcess(self._hProcess, 1)
+        def close(self, exit_code: int | None = None) -> None:
+            """Latch the final exit code and mark the proxy dead so
+            no later Stop click touches the (about-to-be-closed,
+            possibly-recycled) handle."""
+            if exit_code is not None:
+                self.returncode = exit_code
+            self._closed = True
 
     proxy = _ProcProxy(pi.hProcess, pi.dwProcessId)
     if on_start is not None:
@@ -1100,6 +1137,11 @@ def spawn_streaming_as_user(
     exit_code = ret.value
 
     stderr_thread.join(timeout=2.0)
+    # H1 fix: mark the proxy dead (latching the real exit code)
+    # BEFORE closing the handle, so a Stop click racing this teardown
+    # — or any later one — sees a closed proxy and no-ops instead of
+    # calling TerminateProcess on a soon-to-be-recycled handle value.
+    proxy.close(exit_code)
     kernel32.CloseHandle(pi.hProcess)
 
     return RunResult(
