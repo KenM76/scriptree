@@ -146,7 +146,7 @@ the declared sections.
   — the trademark-safe monochrome line-icon spec. Every catalog you
   author SHOULD carry an icon: reuse the shipped `icons/` set by
   functional category, or generate one strictly to this spec, then
-  **embed** it (`cell.icon_data` base64 + `cell.icon_format:"svg"`).
+  **embed** it as PNG (`cell.icon_data` base64 of the PNG + `cell.icon_format:"png"`) — the portable runtime has no SVG plugin.
   See `scriptree_format.md` → "`cell` sub-object" authoring rule.
 - [`parsers/`](parsers) — rules for generating CLI tools whose `--help`
   output will import cleanly into ScripTree on the first try. One file
@@ -227,6 +227,6 @@ Before saving any generated `.scriptree`, verify each of these:
    cell menu / tree view is a defect. Reuse the shipped `icons/` set
    by functional category, or generate one to
    [`../host-software-icon-style.md`](../host-software-icon-style.md),
-   then embed it (`cell.icon_data` base64 + `cell.icon_format:"svg"`).
+   then embed it as PNG (`cell.icon_data` base64 of the PNG + `cell.icon_format:"png"`; portable runtime has no SVG plugin).
    Never a vendor's real logo (legal gate). See
    `scriptree_format.md` → "`cell` sub-object".

@@ -293,11 +293,13 @@ class ForestController(QObject):
         # wins while the label survives as a fallback.
         try:
             ic_data = self.forest.icon_data
-            ic_fmt = self.forest.icon_format or "svg"
+            ic_fmt = self.forest.icon_format or "png"
             if not ic_data:
-                from scriptree.shell.icon_assets import bundled_icon_b64
+                from scriptree.shell.icon_assets import (
+                    BUNDLED_FORMAT, bundled_icon_b64,
+                )
                 ic_data = bundled_icon_b64("folder")
-                ic_fmt = "svg"
+                ic_fmt = BUNDLED_FORMAT
             if ic_data:
                 self.forest_window._icon_data_b64 = ic_data
                 self.forest_window._icon_data_format = ic_fmt

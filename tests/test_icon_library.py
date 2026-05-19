@@ -96,9 +96,35 @@ def test_icon_renders_non_blank(svg: Path) -> None:
         f"{svg.name}: renders blank/near-blank at 24px ({nonwhite}px)"
 
 
+@pytest.mark.parametrize("svg", _SVGS, ids=lambda p: p.name)
+def test_every_icon_has_a_png_runtime_artifact(svg: Path) -> None:
+    """v0.6.8: the embed/runtime artifact is PNG (the portable
+    vendored PySide6 has no qsvg plugin / QtSvg, so embedded SVG
+    renders blank there).  Every spec .svg must have a sibling
+    .png that decodes via the plugin-less core path
+    (QPixmap.loadFromData(bytes,"PNG"))."""
+    from PySide6.QtGui import QPixmap
+    png = svg.with_suffix(".png")
+    assert png.is_file(), f"missing runtime artifact {png.name}"
+    pm = QPixmap()
+    assert pm.loadFromData(png.read_bytes(), "PNG"), \
+        f"{png.name}: QPixmap could not decode PNG"
+    assert not pm.isNull() and pm.width() >= 48
+
+
+def test_bundled_icon_format_is_png() -> None:
+    from scriptree.shell.icon_assets import (
+        BUNDLED_FORMAT, bundled_icon_b64,
+    )
+    import base64
+    assert BUNDLED_FORMAT == "png"
+    raw = base64.b64decode(bundled_icon_b64("folder").encode("ascii"))
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n", "hub icon must be a PNG"
+
+
 def test_embedded_catalog_icon_round_trips(tmp_path: Path) -> None:
-    """A catalog with an embedded icons/ SVG resolves to a non-null
-    QIcon through the production helper."""
+    """A catalog with an embedded PNG resolves to a non-null QIcon
+    through the production helper (the portable-safe path)."""
     import json
     from scriptree.core.cell_metadata import (
         embed_icon, qicon_for_catalog, read_for,
@@ -108,9 +134,9 @@ def test_embedded_catalog_icon_round_trips(tmp_path: Path) -> None:
         "schema_version": 3, "name": "t",
         "executable": "echo", "params": [],
     }), encoding="utf-8")
-    embed_icon(str(cat), str(_ICONS_DIR / "icon-cli.svg"))
+    embed_icon(str(cat), str(_ICONS_DIR / "icon-cli.png"))
     md = read_for(cat)
-    assert md.has_icon() and md.icon_format == "svg"
+    assert md.has_icon() and md.icon_format == "png"
     ic = qicon_for_catalog(str(cat))
     assert ic is not None and not ic.isNull()
 
@@ -126,8 +152,9 @@ def test_icon_assets_resolves_bundled_set() -> None:
     for nm in ("container", "folder", "tool", "cli"):
         b = bundled_icon_b64(nm)
         assert b, f"bundled icon {nm} empty"
-        # Valid base64 of a real SVG.
-        assert b"<svg" in base64.b64decode(b)
+        # v0.6.8: the bundled runtime artifact is PNG (renders in
+        # the plugin-less portable runtime), not SVG.
+        assert base64.b64decode(b)[:8] == b"\x89PNG\r\n\x1a\n"
     assert bundled_icon_b64("definitely-not-an-icon") == ""
 
 

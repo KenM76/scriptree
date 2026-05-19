@@ -340,14 +340,27 @@ legacy files stay byte-identical.
 >    in the 4→44 band, must read at 24 px. **Never** a vendor's real
 >    logo/wordmark/brand colour (hard legal gate).
 >
-> **Embed it**, don't path-link it: set `cell.icon_data` to the
-> base64 of the SVG and `cell.icon_format` to `"svg"` (leave
-> `cell.icon` empty). Embedding makes the icon travel with the file
-> across deploy locations / `make_portable` / repo moves — a
-> relative `cell.icon` path breaks the moment the catalog is copied
-> elsewhere. SVG renders through the cell/menu/tree pipeline
-> (`QPixmap.loadFromData(bytes, "SVG")`). Do **not** clobber an
-> icon a human already set.
+> **Embed it as PNG**, don't path-link it: rasterise the chosen
+> SVG to PNG, set `cell.icon_data` to the **base64 of the PNG** and
+> `cell.icon_format` to `"png"` (leave `cell.icon` empty). The
+> `.svg` is the design source-of-truth; the embedded runtime
+> artifact must be **PNG**.
+>
+> *Why PNG, not SVG (v0.6.8 — learned the hard way):* a
+> `make_portable` deploy uses a trimmed vendored PySide6 that does
+> **not** register the `qsvg` image-format plugin and does **not**
+> ship the `QtSvg` module — so `QPixmap.loadFromData(bytes, "SVG")`
+> returns `False` there and every embedded-SVG icon renders **blank
+> on the portable/R: drive** (it only worked in a full dev Qt).
+> PNG decoding is built into QtGui core (no plugin) and renders in
+> every deploy. `QImageReader.supportedImageFormats()` on a
+> portable build has `png`/`jpg` but **no `svg`**.
+>
+> Embedding (vs a relative `cell.icon` path) makes the icon travel
+> with the file across deploy locations / `make_portable` / repo
+> moves. The shipped `icons/` set carries both `icon-<x>.svg` (the
+> spec source) and `icon-<x>.png` (embed this). Do **not** clobber
+> an icon a human already set.
 
 ```json
 "cell": {
