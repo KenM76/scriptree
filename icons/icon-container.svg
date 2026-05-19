@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic stacked-container shape — placeholder, not the Docker trademark logo -->
+  <rect x="6" y="22" width="36" height="18" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M13 14h7v8h-7zM22 14h7v8h-7zM22 6h7v8h-7z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

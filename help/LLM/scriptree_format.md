@@ -315,6 +315,40 @@ Controls how the V3 cell shell paints a launcher cell bound to this
 default the whole sub-object is omitted from the on-disk JSON, so
 legacy files stay byte-identical.
 
+> ### Authoring rule (v0.6.5+): every catalog SHOULD ship an icon
+>
+> A tool/tree with no icon renders as a bare text row in the cell
+> menu and the tree view. **When you author or generate a
+> `.scriptree` / `.scriptreetree`, give it an icon.** Two ways, in
+> order of preference:
+>
+> 1. **Reuse the shipped facet set.** The repo's `icons/` directory
+>    holds a curated, trademark-safe, monochrome line set
+>    (`icon-cli.svg`, `icon-spreadsheet.svg`, `icon-media.svg`,
+>    `icon-solidworks.svg`, `icon-folder.svg`, `icon-database.svg`,
+>    `icon-search.svg`, `icon-archive.svg`, `icon-settings.svg`,
+>    `icon-tool.svg`, …). Pick the one whose **functional category**
+>    matches the tool (a CLI wrapper → `cli`; a spreadsheet tool →
+>    `spreadsheet`; a file-copy tool → `folder`; a generic utility
+>    → `tool`). One archetype per category, fixed program-wide.
+> 2. **Generate a new one** only if no category fits — strictly per
+>    [`../host-software-icon-style.md`](../host-software-icon-style.md):
+>    48-grid, `fill="none"`, every element
+>    `stroke="currentColor" stroke-width="2.5"`, round caps/joins,
+>    1–4 stroke-only primitives, a leading
+>    `<!-- Generic … not the … trademark logo -->` comment, content
+>    in the 4→44 band, must read at 24 px. **Never** a vendor's real
+>    logo/wordmark/brand colour (hard legal gate).
+>
+> **Embed it**, don't path-link it: set `cell.icon_data` to the
+> base64 of the SVG and `cell.icon_format` to `"svg"` (leave
+> `cell.icon` empty). Embedding makes the icon travel with the file
+> across deploy locations / `make_portable` / repo moves — a
+> relative `cell.icon` path breaks the moment the catalog is copied
+> elsewhere. SVG renders through the cell/menu/tree pipeline
+> (`QPixmap.loadFromData(bytes, "SVG")`). Do **not** clobber an
+> icon a human already set.
+
 ```json
 "cell": {
   "icon": "string, optional — path to an icon file",

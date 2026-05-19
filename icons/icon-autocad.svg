@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic drafting/T-square shape — placeholder, not the AutoCAD trademark logo -->
+  <path d="M8 40L24 8l16 32H8z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M14 30h20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

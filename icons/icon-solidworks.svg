@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic gear shape — placeholder, not the SolidWorks trademark logo -->
+  <circle cx="24" cy="24" r="7" stroke="currentColor" stroke-width="2.5"/>
+  <path d="M24 4v5M24 39v5M4 24h5M39 24h5M8.686 8.686l3.536 3.536M35.778 35.778l3.536 3.536M8.686 39.314l3.536-3.536M35.778 12.222l3.536-3.536" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

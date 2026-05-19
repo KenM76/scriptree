@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic media/play-frame shape — placeholder, not the FFmpeg trademark logo -->
+  <rect x="6" y="10" width="36" height="28" rx="3" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M20 18l11 6-11 6z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

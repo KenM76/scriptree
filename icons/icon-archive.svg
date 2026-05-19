@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic archive-box shape — generic, no trademark risk -->
+  <rect x="8" y="8" width="32" height="32" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M24 8v32" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="21" y="20" width="6" height="9" rx="1" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

@@ -142,6 +142,12 @@ the declared sections.
   choices or value from an external command at form-open time
   (cascading dropdowns, dependent checkbox lists, auto-detected
   paths). The full provider stdin/stdout contract.
+- [`../host-software-icon-style.md`](../host-software-icon-style.md)
+  — the trademark-safe monochrome line-icon spec. Every catalog you
+  author SHOULD carry an icon: reuse the shipped `icons/` set by
+  functional category, or generate one strictly to this spec, then
+  **embed** it (`cell.icon_data` base64 + `cell.icon_format:"svg"`).
+  See `scriptree_format.md` → "`cell` sub-object" authoring rule.
 - [`parsers/`](parsers) — rules for generating CLI tools whose `--help`
   output will import cleanly into ScripTree on the first try. One file
   per tool family (`python_scripts.md`, `windows_exe.md`,
@@ -217,3 +223,10 @@ Before saving any generated `.scriptree`, verify each of these:
    by hand and run against the actual binary.** JSON validity is not
    enough — the argv has to actually work. This is the difference
    between "it loads" and "it does the thing."
+7. **The catalog carries an embedded icon.** A bare text row in the
+   cell menu / tree view is a defect. Reuse the shipped `icons/` set
+   by functional category, or generate one to
+   [`../host-software-icon-style.md`](../host-software-icon-style.md),
+   then embed it (`cell.icon_data` base64 + `cell.icon_format:"svg"`).
+   Never a vendor's real logo (legal gate). See
+   `scriptree_format.md` → "`cell` sub-object".

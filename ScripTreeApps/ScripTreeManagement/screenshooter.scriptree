@@ -126,24 +126,27 @@
       "default": false
     }
   ],
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  },
   "sections": [
     {
-      "id": "target",
-      "label": "What to capture",
-      "default_collapsed": false
+      "name": "",
+      "collapsed": false
     },
     {
-      "id": "output",
-      "label": "Output",
-      "default_collapsed": false
+      "name": "",
+      "collapsed": false
     },
     {
-      "id": "geometry",
-      "label": "Geometry",
-      "default_collapsed": true
+      "name": "",
+      "collapsed": false
     }
   ],
   "cell": {
+    "icon_data": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgYXJpYS1oaWRkZW49InRydWUiPg0KICA8IS0tIEdlbmVyaWMgcGljdHVyZSBzaGFwZSDigJQgZ2VuZXJpYywgbm8gdHJhZGVtYXJrIHJpc2sgLS0+DQogIDxyZWN0IHg9IjYiIHk9IjgiIHdpZHRoPSIzNiIgaGVpZ2h0PSIzMiIgcng9IjIiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPg0KICA8Y2lyY2xlIGN4PSIxNiIgY3k9IjE4IiByPSIzIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyLjUiLz4NCiAgPHBhdGggZD0iTTkgMzhsMTEtMTIgNyA3IDYtNiA3IDgiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+DQo8L3N2Zz4NCg==",
+    "icon_format": "svg",
     "text_label": "\ud83d\udcf8"
   }
 }
