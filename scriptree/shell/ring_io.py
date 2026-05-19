@@ -641,11 +641,13 @@ def load_ring(
             and not getattr(master_win, "_text_label", None)
         )
         if bare:
-            from scriptree.shell.icon_assets import bundled_icon_b64
+            from scriptree.shell.icon_assets import (
+                BUNDLED_FORMAT, bundled_icon_b64,
+            )
             b64 = bundled_icon_b64("container")
             if b64:
                 master_win._icon_data_b64 = b64
-                master_win._icon_data_format = "svg"
+                master_win._icon_data_format = BUNDLED_FORMAT
     except Exception as _hubexc:  # noqa: BLE001
         _log(f"load_ring: hub default-icon failed: {_hubexc!r}")
 

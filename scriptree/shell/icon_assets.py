@@ -42,19 +42,37 @@ def icons_dir() -> Path | None:
     return None
 
 
+# Runtime format: PNG, NOT SVG.  The portable/vendored PySide6 in a
+# make_portable deploy does NOT register the qsvg image-format
+# plugin and does NOT ship the QtSvg module, so
+# QPixmap.loadFromData(svg, "SVG") returns False there — every
+# embedded-SVG icon resolved blank on the R: drive.  PNG decoding
+# is built into QtGui core (no plugin), so it works in every
+# deploy.  The .svg files remain the design source-of-truth
+# (spec-compliant per help/host-software-icon-style.md); the .png
+# is the rasterised runtime artifact embedded into catalogs / hubs.
+BUNDLED_FORMAT = "png"
+
+
 @lru_cache(maxsize=64)
 def bundled_icon_b64(name: str) -> str:
-    """Return base64 of ``icon-<name>.svg`` from the shipped set, or
-    ``""`` if unavailable.  Cached — the hub icon is read on every
+    """Return base64 of ``icon-<name>.png`` from the shipped set, or
+    ``""`` if unavailable.  PNG (not SVG) so it renders in the
+    plugin-less portable runtime.  Cached — read on every
     forest/ring launch."""
     d = icons_dir()
     if d is None:
         _log("icons/ directory not found; hub icon unavailable")
         return ""
-    p = d / f"icon-{name}.svg"
+    p = d / f"icon-{name}.png"
     if not p.is_file():
-        _log(f"bundled icon {name!r} missing at {p}")
-        return ""
+        # Fall back to the SVG only if the PNG is somehow absent
+        # (dev tree without rasterised assets).  Will not render in
+        # a portable deploy — see BUNDLED_FORMAT note.
+        p = d / f"icon-{name}.svg"
+        if not p.is_file():
+            _log(f"bundled icon {name!r} missing at {p}")
+            return ""
     try:
         return base64.b64encode(p.read_bytes()).decode("ascii")
     except OSError as exc:
@@ -62,4 +80,4 @@ def bundled_icon_b64(name: str) -> str:
         return ""
 
 
-__all__ = ["icons_dir", "bundled_icon_b64"]
+__all__ = ["icons_dir", "bundled_icon_b64", "BUNDLED_FORMAT"]
