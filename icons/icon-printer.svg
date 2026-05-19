@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic printer shape — placeholder, not a vendor trademark logo -->
+  <path d="M14 18V8h20v10" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <rect x="8" y="18" width="32" height="14" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <rect x="14" y="30" width="20" height="10" rx="1" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

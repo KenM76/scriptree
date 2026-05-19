@@ -1122,9 +1122,16 @@ class SettingsDialog(QDialog):
         self._icon_path_label.setMinimumWidth(160)
         self._icon_path_label.setWordWrap(True)
         self._icon_browse_btn = QPushButton("Browse…")
+        self._icon_library_btn = QPushButton("Library…")
+        self._icon_library_btn.setToolTip(
+            "Pick a shipped, trademark-safe line icon.  When the cell "
+            "is bound to a catalog the chosen glyph is embedded into "
+            "it (portable); otherwise it's linked from the icons/ set."
+        )
         self._icon_clear_btn = QPushButton("Clear")
         icon_path_row.addWidget(self._icon_path_label, stretch=1)
         icon_path_row.addWidget(self._icon_browse_btn)
+        icon_path_row.addWidget(self._icon_library_btn)
         icon_path_row.addWidget(self._icon_clear_btn)
         label_layout.addLayout(icon_path_row)
 
@@ -1173,6 +1180,29 @@ class SettingsDialog(QDialog):
         scale_row.addWidget(self._icon_scale_label)
         scale_row.addWidget(self._icon_scale_slider)
         label_layout.addLayout(scale_row)
+
+        # Superimpose-text-over-icon checkbox (v0.6.9+).  Per user
+        # direction: "we should have the choice to superimpose the
+        # text label options we had earlier."  Only meaningful in
+        # Icon mode — when on, the cell paints the icon AND the text
+        # label (custom override or auto-letters) in a band over it.
+        tover_row = QHBoxLayout()
+        tover_row.addSpacing(20)
+        self._text_over_icon_cb = QCheckBox(
+            "Also show the text label over the icon"
+        )
+        self._text_over_icon_cb.setChecked(
+            bool(getattr(hexagon, "_label_text_over_icon", False))
+        )
+        self._text_over_icon_cb.setToolTip(
+            "Draw the cell's text label (custom text, or the "
+            "auto-derived letters) on top of the icon instead of "
+            "hiding it.  Uses the custom text from the box above "
+            "when set, otherwise the auto letters."
+        )
+        tover_row.addWidget(self._text_over_icon_cb)
+        tover_row.addStretch(1)
+        label_layout.addLayout(tover_row)
 
         # Label opacity slider — multiplies the cell's transparency.
         # Always visible (applies to all modes including default
@@ -1236,6 +1266,7 @@ class SettingsDialog(QDialog):
         self._label_mode_grp.idToggled.connect(self._on_label_mode_changed)
         self._text_input.textChanged.connect(self._on_label_text_changed)
         self._icon_browse_btn.clicked.connect(self._on_icon_browse)
+        self._icon_library_btn.clicked.connect(self._on_icon_library)
         self._icon_clear_btn.clicked.connect(self._on_icon_clear)
         self._icon_scale_slider.valueChanged.connect(
             self._on_icon_scale_changed
@@ -1245,6 +1276,9 @@ class SettingsDialog(QDialog):
         )
         self._icon_embed_btn.clicked.connect(self._on_icon_embed)
         self._icon_unembed_btn.clicked.connect(self._on_icon_unembed)
+        self._text_over_icon_cb.toggled.connect(
+            self._on_text_over_icon_toggled
+        )
 
     # ------------------------------------------------------------------
     # Show-time geometry — clamp into the visible work area
@@ -1392,11 +1426,16 @@ class SettingsDialog(QDialog):
 
         self._text_input.setEnabled(is_text)
         self._icon_browse_btn.setEnabled(is_icon)
+        if hasattr(self, "_icon_library_btn"):
+            self._icon_library_btn.setEnabled(is_icon)
         self._icon_clear_btn.setEnabled(
             is_icon and (has_icon_path or has_embedded)
         )
         self._icon_scale_slider.setEnabled(is_icon)
         self._icon_scale_label.setEnabled(is_icon)
+        # Superimpose-text checkbox only matters when an icon is shown.
+        if hasattr(self, "_text_over_icon_cb"):
+            self._text_over_icon_cb.setEnabled(is_icon)
         # Embed: needs an external path AND a catalog to embed into.
         self._icon_embed_btn.setEnabled(
             is_icon and has_icon_path and catalog_bound
@@ -1432,11 +1471,14 @@ class SettingsDialog(QDialog):
             )
         elif btn_id == 2:
             # Icon — keep the existing path (if any).  User clicks
-            # Browse to assign one.  Clear text_label to give icon
-            # priority.
+            # Browse to assign one.  We deliberately PRESERVE any
+            # custom text_label here (v0.6.9+): the paint code already
+            # suppresses text when an icon is present *unless* the
+            # superimpose-text-over-icon checkbox is on, so keeping
+            # the text means the user can tick that box and get their
+            # custom label back over the icon without retyping it.
             self._hex.apply_label_change(
                 icon_path=self._hex._icon_path,
-                text_label=None,
             )
         self._update_label_controls_enabled()
 
@@ -1461,6 +1503,112 @@ class SettingsDialog(QDialog):
         self._icon_path_label.setText(chosen)
         self._icon_clear_btn.setEnabled(True)
 
+    def _on_icon_library(self) -> None:
+        """Pick a glyph from the shipped, trademark-safe ``icons/``
+        set.  Per user direction: "I should have the option to change
+        the icon … from the settings menu."
+
+        When the cell is bound to a catalog the chosen icon is
+        *embedded* (base64 PNG) so it travels with the file and
+        renders in the plugin-less portable runtime; otherwise the
+        bundled PNG path is linked directly.
+        """
+        from scriptree.shell.icon_assets import (
+            bundled_icon_png_path, list_bundled_icons,
+        )
+        names = list_bundled_icons()
+        if not names:
+            QMessageBox.information(
+                self, "Icon library unavailable",
+                "The shipped icons/ set could not be located.",
+            )
+            return
+
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QGridLayout, QToolButton,
+            QVBoxLayout, QScrollArea, QWidget,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Choose an icon")
+        outer = QVBoxLayout(dlg)
+        scroll = QScrollArea(dlg)
+        scroll.setWidgetResizable(True)
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setSpacing(6)
+
+        chosen: dict[str, str] = {}
+
+        def _pick(nm: str) -> None:
+            chosen["name"] = nm
+            dlg.accept()
+
+        cols = 5
+        for i, nm in enumerate(names):
+            p = bundled_icon_png_path(nm)
+            btn = QToolButton()
+            btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            btn.setText(nm)
+            if p is not None:
+                btn.setIcon(QIcon(str(p)))
+                btn.setIconSize(QSize(40, 40))
+            btn.setAutoRaise(True)
+            btn.setFixedSize(84, 78)
+            btn.clicked.connect(lambda _=False, n=nm: _pick(n))
+            grid.addWidget(btn, i // cols, i % cols)
+
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
+        bb = QDialogButtonBox(QDialogButtonBox.Cancel)
+        bb.rejected.connect(dlg.reject)
+        outer.addWidget(bb)
+        dlg.resize(480, 420)
+
+        if dlg.exec() != QDialog.Accepted or "name" not in chosen:
+            return
+
+        png_path = bundled_icon_png_path(chosen["name"])
+        if png_path is None:
+            QMessageBox.warning(
+                self, "Icon unavailable",
+                f"Could not locate icon-{chosen['name']}.png.",
+            )
+            return
+
+        # Make sure the cell is in Icon mode so the dialog state and
+        # the painted result agree.
+        self._label_mode_icon_rb.setChecked(True)
+
+        if self._hex._catalog_path:
+            # Embed into the bound catalog (portable).
+            try:
+                from scriptree.core.cell_metadata import embed_icon
+                md = embed_icon(
+                    self._hex._catalog_path, str(png_path),
+                )
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self, "Embed failed",
+                    f"Could not embed the icon:\n\n{exc}",
+                )
+                return
+            self._hex._icon_data_b64 = md.icon_data
+            self._hex._icon_data_format = md.icon_format
+            self._hex._icon_path = None
+            self._hex._label_cache = None
+            self._hex.update()
+            self._icon_path_label.setText(
+                f"(embedded: icon-{chosen['name']})"
+            )
+        else:
+            # Unbound cell — link the bundled PNG directly.
+            self._hex.apply_label_change(icon_path=str(png_path))
+            self._icon_path_label.setText(str(png_path))
+        self._update_label_controls_enabled()
+
     def _on_icon_clear(self) -> None:
         """Clear the cell's icon_path (icon mode falls back to default
         text if no path; auto-letters otherwise)."""
@@ -1477,6 +1625,10 @@ class SettingsDialog(QDialog):
         """Live preview for label opacity."""
         self._label_opacity_label.setText(f"Label opacity: {value}%")
         self._hex.apply_label_opacity_change(value / 100.0)
+
+    def _on_text_over_icon_toggled(self, on: bool) -> None:
+        """Live-toggle the superimpose-text-over-icon mode."""
+        self._hex.apply_text_over_icon_change(bool(on))
 
     def _on_icon_embed(self) -> None:
         """Embed the currently-linked external icon into the bound
@@ -2599,6 +2751,12 @@ class CellWindow(QMainWindow):
         from scriptree.shell.cell_registry import CellRegistry
         CellRegistry.instance().register(self)
 
+        # Hover tooltip — show what this cell/ring is for even before
+        # any paint.  ``_refresh_label_from_catalog`` (called above
+        # when a catalog is bound) already set it; this unconditional
+        # call covers no-catalog cells, masters, and forests too.
+        self._update_hover_tooltip()
+
         _log(
             f"CellWindow created id={self._id} role={self.role} "
             f"size={self._size_px}px shape={self._shape} orient={self._orientation} "
@@ -2708,6 +2866,11 @@ class CellWindow(QMainWindow):
             )))
         except (TypeError, ValueError):
             self._label_opacity = 1.0
+        # Superimpose-text-over-icon toggle (v0.6.9+).  QSettings
+        # stores it as a string; coerce defensively.
+        self._label_text_over_icon = _coerce_bool(
+            s.value(self._settings_key("text_over_icon"), False)
+        )
 
     def _save_settings(self) -> None:
         """Persist current per-hex settings to QSettings immediately."""
@@ -2722,6 +2885,10 @@ class CellWindow(QMainWindow):
         s.setValue(self._settings_key("text_label"), self._text_label or "")
         s.setValue(self._settings_key("icon_scale"), float(self._icon_scale))
         s.setValue(self._settings_key("label_opacity"), float(self._label_opacity))
+        s.setValue(
+            self._settings_key("text_over_icon"),
+            bool(getattr(self, "_label_text_over_icon", False)),
+        )
         s.sync()
 
     # ------------------------------------------------------------------
@@ -3186,6 +3353,12 @@ class CellWindow(QMainWindow):
         self._persist_label_state(opacity_changed=True)
         self.update()
 
+    def apply_text_over_icon_change(self, on: bool) -> None:
+        """Live-toggle the superimpose-text-over-icon mode (v0.6.9+)."""
+        self._label_text_over_icon = bool(on)
+        self._persist_label_state(text_over_icon_changed=True)
+        self.update()
+
     def _persist_label_state(  # noqa: C901
         self,
         *,
@@ -3193,6 +3366,7 @@ class CellWindow(QMainWindow):
         text_changed: bool = False,
         scale_changed: bool = False,
         opacity_changed: bool = False,
+        text_over_icon_changed: bool = False,
     ) -> None:
         from pathlib import Path
         """Persist the cell's label state to wherever it belongs.
@@ -3227,6 +3401,10 @@ class CellWindow(QMainWindow):
                 kwargs["icon_scale"] = float(self._icon_scale)
             if opacity_changed:
                 kwargs["label_opacity"] = float(self._label_opacity)
+            if text_over_icon_changed:
+                kwargs["text_over_icon"] = bool(
+                    getattr(self, "_label_text_over_icon", False)
+                )
             if not kwargs:
                 # Initial sync — write everything.
                 kwargs = {
@@ -3234,6 +3412,9 @@ class CellWindow(QMainWindow):
                     "text_label": self._text_label or "",
                     "icon_scale": float(self._icon_scale),
                     "label_opacity": float(self._label_opacity),
+                    "text_over_icon": bool(
+                        getattr(self, "_label_text_over_icon", False)
+                    ),
                 }
             write_for(catalog, **kwargs)
             _log(
@@ -3329,6 +3510,7 @@ class CellWindow(QMainWindow):
         self._text_label = md.text_label or None
         self._icon_scale = md.icon_scale
         self._label_opacity = md.label_opacity
+        self._label_text_over_icon = bool(md.text_over_icon)
         # Fill colour override (V3 v0.3.6+).  Empty hex → revert to
         # branding default; non-empty → apply.  We touch
         # ``_fill_color`` directly here (not via
@@ -3356,7 +3538,29 @@ class CellWindow(QMainWindow):
         else:
             self._text_color_hex = ""
         self._label_cache = None
+        self._update_hover_tooltip()
         self.update()
+
+    def _update_hover_tooltip(self) -> None:
+        """Set the cell's hover tooltip to a human title for whatever
+        it's bound to (the bound catalog's name, else the user's text
+        label, else a role-based default — Forest / Tree Ring /
+        ScripTree).  Mirrors the single-click popup header so the
+        hover label and the menu title agree.
+
+        Called from ``__init__`` (covers no-catalog cells),
+        ``_refresh_label_from_catalog`` (covers bind / Load… / drop),
+        and the catalog-cleared / save-as paths.
+        """
+        try:
+            from scriptree.shell.tree_popup import _popup_header_text
+            title = _popup_header_text(self)
+        except Exception:  # noqa: BLE001 — never let a tooltip break paint
+            title = getattr(self, "_text_label", None) or "ScripTree"
+        try:
+            self.setToolTip(title or "ScripTree")
+        except Exception:  # noqa: BLE001
+            pass
 
     def apply_always_on_top_change(self, on: bool) -> None:
         """Toggle the WindowStaysOnTopHint flag live."""
@@ -3582,6 +3786,18 @@ class CellWindow(QMainWindow):
                     int(cy - scaled.height() / 2),
                     scaled,
                 )
+            # v0.6.9: superimpose the text label over the icon when
+            # the user opted in.  Drawn in a legible band across the
+            # lower third with a translucent backing so it reads
+            # against any icon.  Without the opt-in we keep the
+            # historical icon-suppresses-text behaviour.
+            if getattr(self, "_label_text_over_icon", False):
+                over = self._text_label or self._auto_label_text()
+                if over:
+                    self._paint_label_text(
+                        painter, size, cx, cy, over,
+                        anchor="bottom", backing=True,
+                    )
             return
 
         # Priority 2 / 3: text — explicit override or auto-derived.
@@ -3640,6 +3856,7 @@ class CellWindow(QMainWindow):
     def _paint_label_text(
         self, painter: QPainter, size: int,
         cx: float, cy: float, text: str,
+        *, anchor: str = "center", backing: bool = False,
     ) -> None:
         """Paint ``text`` centred in the cell, auto-sized to fit.
 
@@ -3653,10 +3870,20 @@ class CellWindow(QMainWindow):
         coordinated) at the cell's transparency multiplier.  This
         keeps the label visually part of the cell rather than a
         sticker.
+
+        ``anchor`` — ``"center"`` (default, historical) or
+        ``"bottom"`` (lower-third band, used when superimposing the
+        text over an icon so the glyph stays visible).
+        ``backing`` — when True draw a translucent rounded pill
+        behind the text for legibility over a busy icon.
         """
-        # Target box: 70 % of cell width.
+        # Target box: 70 % of cell width.  The bottom-anchored band
+        # is shorter so it doesn't cover the icon's centre.
         target_w = max(16, int(size * 0.70))
-        target_h = max(16, int(size * 0.70))
+        target_h = (
+            max(12, int(size * 0.34)) if anchor == "bottom"
+            else max(16, int(size * 0.70))
+        )
 
         # Initial font size guess based on text length.
         if len(text) <= 2:
@@ -3701,14 +3928,38 @@ class CellWindow(QMainWindow):
             0.0, min(1.0, self._transparency * self._label_opacity),
         )
         col.setAlpha(round(255 * effective_op))
-        painter.setPen(col)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # Vertical placement: centred, or pushed into the lower third
+        # when superimposed over an icon.
+        if anchor == "bottom":
+            top = int(cy + size * 0.5 - target_h - size * 0.06)
+        else:
+            top = int(cy - target_h / 2)
         rect = QRect(
             int(cx - target_w / 2),
-            int(cy - target_h / 2),
+            top,
             target_w,
             target_h,
         )
+        if backing:
+            # Translucent dark pill so light text reads over a busy
+            # icon (and a light pill is unnecessary — text is bold).
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            backing_col = QColor(0, 0, 0)
+            backing_col.setAlpha(round(140 * effective_op))
+            painter.setBrush(backing_col)
+            pad = max(2, int(size * 0.04))
+            painter.drawRoundedRect(
+                rect.adjusted(-pad, -pad // 2, pad, pad // 2),
+                max(3, int(size * 0.10)),
+                max(3, int(size * 0.10)),
+            )
+            painter.restore()
+            # Force a high-contrast colour for the overlaid text.
+            col = QColor(255, 255, 255)
+            col.setAlpha(round(255 * max(effective_op, 0.85)))
+        painter.setPen(col)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawText(
             rect,
             Qt.AlignmentFlag.AlignCenter,
@@ -4547,6 +4798,7 @@ class CellWindow(QMainWindow):
         elif clear_catalog_action is not None and chosen == clear_catalog_action:
             self._catalog_path = None
             self._save_settings()
+            self._update_hover_tooltip()
             _log(f"Catalog cleared for id={self._id[:8]}")
         elif chosen == save_as_action:
             self._save_catalog_as_dialog()
@@ -5065,6 +5317,7 @@ class CellWindow(QMainWindow):
         self._catalog_path = str(dest)
         self._save_settings()
         _rf.add(str(dest))
+        self._update_hover_tooltip()
         _log(f"Catalog saved-as {dest!r} for id={self._id[:8]}")
 
     def _explicit_leave_group(self) -> None:

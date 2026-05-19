@@ -111,6 +111,7 @@ from scriptree.shell.forest_io import (
     AutoDiscoverConfig, ForestDef, ForestItem, ForestPreferences, ItemKind,
     default_autoload_path, kind_for_suffix, list_autoload_forest,
     load_forest, load_preferences, save_forest, save_preferences,
+    shared_autoload_path,
 )
 from scriptree.shell.forest_discover import (
     DiscoveredItem, DiscoveryDiff, diff_against, discover,
@@ -726,29 +727,70 @@ class ForestController(QObject):
             return
         if self.forest.loaded_from:
             return  # had a target; a real write failure already logged
+        # v0.6.9 — the forest started empty with no file loaded and
+        # the user never did Save As.  Per user direction: don't ask
+        # WHERE or for a filename — just offer Personal vs Shared,
+        # write to that fixed default-load spot, and remember it so
+        # next launch loads it automatically without asking.
         try:
-            reply = QMessageBox.question(
-                self.forest_window,
-                "Unsaved forest",
+            personal = default_autoload_path(self._branding)
+            shared = shared_autoload_path(self._branding)
+            box = QMessageBox(self.forest_window)
+            box.setWindowTitle("Save this forest?")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText(
                 f"This forest has {len(self.forest.items)} item(s) "
-                "and is running as a transient (in-memory) session — "
-                "it will NOT be saved automatically.\n\n"
-                "Save it to a file before exiting?",
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Discard,
-                QMessageBox.StandardButton.Save,
+                "but hasn't been saved to a file.\n\n"
+                "Save it as your default forest so it loads "
+                "automatically next time?"
             )
-            if reply == QMessageBox.StandardButton.Save:
-                path, _ = QFileDialog.getSaveFileName(
-                    self.forest_window, "Save forest as",
-                    "forest.scriptreeforest",
-                    "ScripTree forest (*.scriptreeforest)",
-                )
-                if path:
-                    self.save_as(path)
+            box.setInformativeText(
+                f"Personal:  {personal}\n"
+                f"Shared:  {shared}"
+            )
+            personal_btn = box.addButton(
+                "Personal", QMessageBox.ButtonRole.AcceptRole
+            )
+            shared_btn = box.addButton(
+                "Shared", QMessageBox.ButtonRole.AcceptRole
+            )
+            discard_btn = box.addButton(
+                "Don't save", QMessageBox.ButtonRole.DestructiveRole
+            )
+            box.setDefaultButton(personal_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is discard_btn or clicked is None:
+                return
+            target = personal if clicked is personal_btn else shared
+            self._save_as_default(target)
         except Exception as exc:  # noqa: BLE001
             # Never let the exit-time guard itself block shutdown.
             _log(f"flush_if_dirty: transient-save prompt failed: {exc!r}")
+
+    def _save_as_default(self, target: "Path") -> None:
+        """Write the forest to ``target`` (a fixed personal/shared
+        default path — no filename/dir prompt) and record it as the
+        auto-load default for next launch.
+
+        Mirrors ``save_as`` for the write, then additionally persists
+        ``ForestPreferences`` so ``fallback_to_default`` is on and
+        ``default_forest_path`` points here — that's what makes it
+        "the default to load next time without asking"."""
+        target = Path(target)
+        self.save_as(target)
+        try:
+            if getattr(self, "_preferences", None) is None:
+                self._preferences = load_preferences(self._branding)
+            self._preferences.fallback_to_default = True
+            self._preferences.default_forest_path = str(target)
+            save_preferences(self._preferences, self._branding)
+            _log(
+                f"_save_as_default: saved {target} and set it as the "
+                "auto-load default"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_save_as_default: preference persist failed: {exc!r}")
 
     def get_preferences(self) -> ForestPreferences:
         """Return a snapshot of the user's launch preferences."""

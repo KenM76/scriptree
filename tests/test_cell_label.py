@@ -358,6 +358,77 @@ class TestDropPathsFilter:
 
 
 # ---------------------------------------------------------------------------
+# Hover tooltip header (v0.6.9) — "when I hover over each cell or ring
+# there should be a header label that pops up over it so I know what
+# the icons are for".
+# ---------------------------------------------------------------------------
+
+class TestHoverTooltip:
+    def test_fresh_standalone_cell_tooltip_is_role_default(self) -> None:
+        c = _spawn_cell()
+        assert c.toolTip() == "ScripTree"
+        c.close()
+
+    def test_tooltip_follows_bound_catalog_name(
+        self, tmp_path: Path,
+    ) -> None:
+        tool = ToolDef(
+            name="alpha", executable="/bin/echo",
+            argument_template=["x"],
+            params=[ParamDef(id="x", label="X", default="hi")],
+        )
+        leaf = tmp_path / "alpha.scriptree"
+        save_tool(tool, leaf)
+        tree_path = tmp_path / "cat.scriptreetree"
+        save_tree(
+            TreeDef(name="My Fancy Catalog", nodes=[
+                TreeNode(type="leaf", name="alpha", path=leaf.name)
+            ]),
+            tree_path,
+        )
+        c = _spawn_cell()
+        c._handle_dropped_file(str(tree_path))
+        # The tree's display name becomes the hover header.
+        assert c.toolTip() == "My Fancy Catalog"
+        c.close()
+
+    def test_tooltip_reverts_to_default_when_catalog_cleared(
+        self, tmp_path: Path,
+    ) -> None:
+        tool = ToolDef(
+            name="solo", executable="/bin/echo",
+            argument_template=["x"],
+            params=[ParamDef(id="x", label="X", default="hi")],
+        )
+        p = tmp_path / "solo.scriptree"
+        save_tool(tool, p)
+        c = _spawn_cell()
+        c._handle_dropped_file(str(p))
+        assert c.toolTip() == "solo"
+        # Simulate the "Clear catalog" menu path.
+        c._catalog_path = None
+        c._update_hover_tooltip()
+        assert c.toolTip() == "ScripTree"
+        c.close()
+
+    def test_master_tooltip_is_tree_ring(self) -> None:
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        m = CellWindow(load_branding(), role="master")
+        assert m.toolTip() == "Tree Ring"
+        m.close()
+
+    def test_forest_master_tooltip_is_forest(self) -> None:
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        f = CellWindow(
+            load_branding(), role="master", is_forest_master=True,
+        )
+        assert f.toolTip() == "Forest"
+        f.close()
+
+
+# ---------------------------------------------------------------------------
 # Ring file round-trip for icon_path / text_label
 # ---------------------------------------------------------------------------
 
@@ -440,6 +511,30 @@ class TestApplyLabelChanges:
         assert c._label_opacity == 1.00
         c.apply_label_opacity_change(0.6)
         assert c._label_opacity == 0.6
+        c.close()
+
+    def test_apply_text_over_icon_toggles_and_persists(
+        self, tmp_path: Path,
+    ) -> None:
+        """v0.6.9 superimpose flag: toggling it on a catalog-bound
+        cell writes through to the catalog JSON."""
+        from scriptree.core.cell_metadata import read_for
+        tool = ToolDef(
+            name="alpha", executable="/bin/echo",
+            argument_template=["x"],
+            params=[ParamDef(id="x", label="X", default="hi")],
+        )
+        p = tmp_path / "alpha.scriptree"
+        save_tool(tool, p)
+        c = _spawn_cell()
+        c._handle_dropped_file(str(p))
+        assert c._label_text_over_icon is False
+        c.apply_text_over_icon_change(True)
+        assert c._label_text_over_icon is True
+        # Persisted into the bound catalog.
+        assert read_for(p).text_over_icon is True
+        c.apply_text_over_icon_change(False)
+        assert read_for(p).text_over_icon is False
         c.close()
 
 

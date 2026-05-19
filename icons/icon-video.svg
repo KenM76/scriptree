@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic video/film shape — placeholder, not a vendor trademark logo -->
+  <rect x="6" y="12" width="36" height="24" rx="3" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M21 19l10 5-10 5z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

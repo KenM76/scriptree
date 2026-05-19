@@ -88,6 +88,9 @@ class CellMetadata:
     text_label: str = ""
     icon_scale: float = 1.0
     label_opacity: float = 1.0
+    # Superimpose the text label over the icon (V3 v0.6.9+).  Default
+    # False == historical "icon XOR text" behaviour.
+    text_over_icon: bool = False
     icon_resolved_path: str = ""  # absolute path (computed) or "" if embedded/none
     # Click-to-run fields (V3 v0.3.5+).  See ``ToolDef.cell_click_action``
     # / ``ToolDef.cell_click_run_mode`` for the contract.
@@ -141,6 +144,7 @@ def read_for(catalog_path: str | Path) -> CellMetadata:
         text_label=getattr(obj, "cell_text_label", "") or "",
         icon_scale=float(getattr(obj, "cell_icon_scale", 1.0) or 1.0),
         label_opacity=float(getattr(obj, "cell_label_opacity", 1.0) or 1.0),
+        text_over_icon=bool(getattr(obj, "cell_text_over_icon", False)),
         click_action=str(getattr(obj, "cell_click_action", "menu") or "menu"),
         click_run_mode=str(
             getattr(obj, "cell_click_run_mode", "sequential")
@@ -189,6 +193,7 @@ def write_for(
     text_label: str | None = None,
     icon_scale: float | None = None,
     label_opacity: float | None = None,
+    text_over_icon: bool | None = None,
     click_action: str | None = None,
     click_run_mode: str | None = None,
     fill_color: str | None = None,
@@ -243,6 +248,8 @@ def write_for(
         obj.cell_icon_scale = float(icon_scale)
     if label_opacity is not None:
         obj.cell_label_opacity = float(label_opacity)
+    if text_over_icon is not None:
+        obj.cell_text_over_icon = bool(text_over_icon)
     if click_action is not None:
         # Coerce to a known value.  Unknown values fall back to
         # the safe default ("menu") so mistyped JSON can't unlock

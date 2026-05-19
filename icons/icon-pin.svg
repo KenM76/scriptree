@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic location/pin shape — placeholder, not a vendor trademark logo -->
+  <path d="M24 42c8-9 12-15 12-22a12 12 0 10-24 0c0 7 4 13 12 22z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="24" cy="20" r="4" stroke="currentColor" stroke-width="2.5"/>
+</svg>

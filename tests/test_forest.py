@@ -1164,3 +1164,130 @@ class TestDefaultForestFilenameRename:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         result = migrate_legacy_autoload_path({"appName": "ScripTree"})
         assert result is None
+
+
+# ===========================================================================
+# v0.6.9 — unsaved-forest default-spot save (personal vs shared, no
+# filename/dir prompt; becomes the auto-load default next launch)
+# ===========================================================================
+
+class TestUnsavedForestDefaultSpot:
+    def test_shared_path_distinct_from_personal(self) -> None:
+        from scriptree.shell.forest_io import (
+            default_autoload_path, shared_autoload_path,
+        )
+        br = load_branding()
+        personal = default_autoload_path(br)
+        shared = shared_autoload_path(br)
+        assert personal != shared
+        assert personal.name == "default.scriptreeforest"
+        assert shared.name == "default.scriptreeforest"
+
+    def test_save_as_default_writes_and_sets_autoload(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """``_save_as_default`` writes the forest to the fixed path
+        AND records it as the auto-load default (so next launch
+        loads it without asking)."""
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import load_preferences
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        target = tmp_path / "personal" / "default.scriptreeforest"
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="Fresh"), suppress_first_run=True)
+        ctrl._save_as_default(target)
+
+        assert target.is_file()
+        assert ctrl.forest.loaded_from == str(target.resolve())
+        prefs = load_preferences(load_branding())
+        assert prefs.fallback_to_default is True
+        assert prefs.default_forest_path == str(target)
+
+    def test_flush_prompt_personal_choice_no_file_dialog(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """Transient forest with items at exit: the prompt offers
+        Personal/Shared and writes to the personal default WITHOUT
+        ever calling QFileDialog.getSaveFileName."""
+        from unittest.mock import patch
+
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import (
+            ForestItem, ForestPreferences, load_preferences,
+            save_preferences,
+        )
+
+        personal = tmp_path / "personal" / "default.scriptreeforest"
+        shared = tmp_path / "shared" / "default.scriptreeforest"
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path", lambda b: personal,
+        )
+        monkeypatch.setattr(
+            fc_mod, "shared_autoload_path", lambda b: shared,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path", lambda b: prefs_file,
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path", lambda b: personal,
+        )
+        # Run transient (fallback OFF) so save() is a no-op and the
+        # exit-time prompt actually fires — this is the user's
+        # "started empty, no file loaded" scenario.
+        save_preferences(
+            ForestPreferences(fallback_to_default=False), load_branding(),
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="T"), suppress_first_run=True)
+        ctrl.forest.loaded_from = None
+        ctrl.forest.items.append(
+            ForestItem(path="x.scriptree", kind="tool")
+        )
+        ctrl._dirty = True
+
+        def _pick_personal(self):
+            self._fake_clicked = next(
+                b for b in self.buttons() if b.text() == "Personal"
+            )
+            return 0
+
+        file_dialog_calls: list = []
+        with patch.object(QMessageBox, "exec", _pick_personal), \
+             patch.object(
+                 QMessageBox, "clickedButton",
+                 lambda self: self._fake_clicked,
+             ), \
+             patch.object(
+                 QFileDialog, "getSaveFileName",
+                 lambda *a, **k: file_dialog_calls.append(a) or ("", ""),
+             ):
+            ctrl.flush_if_dirty()
+
+        assert file_dialog_calls == []
+        assert personal.is_file()
+        assert not shared.exists()
+        assert ctrl.forest.loaded_from == str(personal.resolve())
+        prefs = load_preferences(load_branding())
+        assert prefs.fallback_to_default is True
+        assert prefs.default_forest_path == str(personal)

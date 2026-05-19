@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic shield/protect shape — placeholder, not a vendor trademark logo -->
+  <path d="M24 6l14 5v11c0 9-6 16-14 20-8-4-14-11-14-20V11z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M18 24l4 4 9-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -91,15 +91,48 @@ def _folder_icon() -> QIcon:
     return _std_icon(QStyle.StandardPixmap.SP_DirIcon)
 
 
-def _catalog_icon(path) -> QIcon:  # noqa: ANN001
-    """The catalog's own icon, or the generic file icon as a
-    fallback so a menu never has a ragged mix of iconned and
-    icon-less tool rows."""
+_BUNDLED_QICON_CACHE: dict[str, QIcon] = {}
+
+
+def _bundled_qicon(icon_name: str) -> QIcon | None:
+    """A ``QIcon`` for a shipped ``icons/`` glyph by name, cached.
+    Returns ``None`` if the set or that glyph can't be located."""
+    if icon_name in _BUNDLED_QICON_CACHE:
+        return _BUNDLED_QICON_CACHE[icon_name]
+    ic: QIcon | None = None
+    try:
+        from scriptree.shell.icon_assets import bundled_icon_png_path
+        p = bundled_icon_png_path(icon_name)
+        if p is not None:
+            cand = QIcon(str(p))
+            if not cand.isNull():
+                ic = cand
+    except Exception:  # noqa: BLE001
+        ic = None
+    _BUNDLED_QICON_CACHE[icon_name] = ic  # cache misses too
+    return ic
+
+
+def _catalog_icon(path, label: str = "") -> QIcon:  # noqa: ANN001
+    """The catalog's own icon; failing that, a category glyph chosen
+    by keyword from the tool's name/filename (v0.6.9 — variety, so a
+    menu isn't a wall of identical generic rows); failing *that*, the
+    OS file icon so a row is never bare."""
     try:
         from scriptree.core.cell_metadata import qicon_for_catalog
         ic = qicon_for_catalog(path)
         if ic is not None and not ic.isNull():
             return ic
+    except Exception:  # noqa: BLE001
+        pass
+    # No embedded/linked icon — classify by name for variety.
+    try:
+        from scriptree.shell.icon_assets import classify_icon
+        stem = Path(path).stem if path else ""
+        guess = classify_icon(name=label, filename=stem)
+        bundled = _bundled_qicon(guess)
+        if bundled is not None:
+            return bundled
     except Exception:  # noqa: BLE001
         pass
     return _file_icon()
@@ -167,7 +200,7 @@ def _add_node_to_menu(  # noqa: ANN001
     label = node.display_name or node.name or p.stem or "(unnamed)"
     cfg = node.configuration  # may be None
     act = menu.addAction(label)
-    leaf_icon = _catalog_icon(p)
+    leaf_icon = _catalog_icon(p, label)
     act.setIcon(leaf_icon)
     # Capture p, cfg in default args so the closure doesn't bind to
     # the loop variable.
@@ -245,7 +278,7 @@ def _build_menu_for_catalog(  # noqa: ANN001
             label = p.stem
         from scriptree.shell.v1_launcher import launch_tool
         act = menu.addAction(label)
-        leaf_icon = _catalog_icon(p)
+        leaf_icon = _catalog_icon(p, label)
         act.setIcon(leaf_icon)
 
         def _on_trigger(_c=False, leaf=str(p)):  # noqa: ANN001
@@ -291,16 +324,35 @@ def _rank(query: str, name: str, search_text: str) -> int | None:
     return None
 
 
-def _install_live_search(menu: QMenu, leaves: list) -> QLineEdit:
-    """Prepend a live-filter ``QLineEdit`` to ``menu`` and a flat
-    pool of result actions.
+def _make_header_action(menu: QMenu, text: str) -> QAction:
+    """A bold, disabled header row naming what this popup is for
+    (the catalog / forest / ring).  Restores the title that was
+    lost when the search bar was added — it sits ABOVE the search
+    field and is never hidden by filtering (it's chrome, not a
+    structural item)."""
+    hdr = QAction(text, menu)
+    hdr.setEnabled(False)               # non-clickable label
+    f = hdr.font()
+    f.setBold(True)
+    hdr.setFont(f)
+    return hdr
+
+
+def _install_live_search(
+    menu: QMenu, leaves: list, header_text: str = "",
+) -> "QLineEdit | None":
+    """Prepend a bold header label, then (when there are ≥2 tools)
+    a live-filter ``QLineEdit`` + flat result pool, to ``menu``.
 
     Empty box → the original nested submenu structure shows.
     Non-empty → the nested items hide and a ranked flat list of
     matching tools replaces them, refreshed on every keystroke.
 
-    Returns the ``QLineEdit`` so the caller can focus it once the
-    modal menu is up.
+    The header is added even when there's no search field, so a
+    1-tool / no-catalog popup is still titled.
+
+    Returns the ``QLineEdit`` (or ``None`` when no search field was
+    added) so the caller can focus it once the modal menu is up.
 
     Design notes (for maintainers / LLMs):
     * The result rows are a FIXED reusable pool (``QAction`` ×
@@ -315,24 +367,41 @@ def _install_live_search(menu: QMenu, leaves: list) -> QLineEdit:
       are snapshotted and toggled en masse — never destroyed — so
       clearing the box restores the exact original menu.
     """
-    structural = list(menu.actions())
+    structural = list(menu.actions())  # real items only (pre-chrome)
+    first = structural[0] if structural else None
 
-    # --- search field -------------------------------------------------
-    edit = QLineEdit()
-    edit.setPlaceholderText("Type to filter…")
-    edit.setClearButtonEnabled(True)
-    edit.setMinimumWidth(240)
-    edit.setStyleSheet("QLineEdit { margin: 4px 6px; padding: 3px; }")
-    wa = QWidgetAction(menu)
-    wa.setDefaultWidget(edit)
-    # Target order: [search] [sep] [structural…] [pool…] [overflow].
-    if structural:
-        first = structural[0]
-        menu.insertAction(first, wa)       # → [wa, structural…]
-        menu.insertSeparator(first)        # → [wa, sep, structural…]
+    # --- header (always) ---------------------------------------------
+    hdr = _make_header_action(menu, header_text or "ScripTree")
+
+    has_search = len(leaves) >= 2
+    edit = None
+    if has_search:
+        edit = QLineEdit()
+        edit.setPlaceholderText("Type to filter…")
+        edit.setClearButtonEnabled(True)
+        edit.setMinimumWidth(240)
+        edit.setStyleSheet(
+            "QLineEdit { margin: 4px 6px; padding: 3px; }"
+        )
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(edit)
+
+    # Target order: [header] [search] [sep] [structural…] [pool…].
+    # Each insertAction(first, X) puts X immediately before the
+    # original first item, so issuing them in order preserves it.
+    if first is not None:
+        menu.insertAction(first, hdr)
+        if has_search:
+            menu.insertAction(first, wa)
+        menu.insertSeparator(first)
     else:
-        menu.addAction(wa)
+        menu.addAction(hdr)
+        if has_search:
+            menu.addAction(wa)
         menu.addSeparator()
+
+    if not has_search:
+        return None
 
     # --- reusable flat result pool -----------------------------------
     pool_size = min(len(leaves), _MAX_RESULTS)
@@ -409,6 +478,42 @@ def _install_live_search(menu: QMenu, leaves: list) -> QLineEdit:
     edit.returnPressed.connect(_on_return)
 
     return edit
+
+
+def _popup_header_text(hex_win) -> str:  # noqa: ANN001
+    """A human title for the popup header: the bound catalog's name,
+    else the user's text label, else a role-based default
+    (Forest / Tree Ring / ScripTree)."""
+    role = getattr(hex_win, "role", "standalone")
+    # Real CellWindows store this as ``_is_forest_master``; synthetic
+    # test doubles may use the un-prefixed name — accept either.
+    is_forest = bool(
+        getattr(hex_win, "_is_forest_master", None)
+        if getattr(hex_win, "_is_forest_master", None) is not None
+        else getattr(hex_win, "is_forest_master", False)
+    )
+    base = (
+        "Forest" if is_forest
+        else "Tree Ring" if role == "master"
+        else "ScripTree"
+    )
+    cp = getattr(hex_win, "_catalog_path", None)
+    if cp:
+        try:
+            p = Path(cp)
+            if p.suffix.lower() == ".scriptreetree":
+                from scriptree.core.io import load_tree
+                return load_tree(str(p)).name or p.stem
+            if p.suffix.lower() == ".scriptree":
+                from scriptree.core.io import load_tool
+                return load_tool(str(p)).name or p.stem
+            return p.stem
+        except Exception:  # noqa: BLE001
+            pass
+    tl = getattr(hex_win, "_text_label", None)
+    if tl:
+        return str(tl)
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -495,14 +600,15 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
         else:
             _build_menu_for_catalog(menu, catalog_path, collector=leaves)
 
-    # ---- Live search bar (Windows/Mac-style flat filtering) --------
-    # Only worth showing when there are at least a couple of tools to
-    # sift through.  Typing collapses the nested submenu structure
-    # into a flat, ranked result list that updates on every
-    # keystroke; clearing the box restores the normal nested menu.
-    search_edit = None
-    if len(leaves) >= 2:
-        search_edit = _install_live_search(menu, leaves)
+    # ---- Header label + live search bar ----------------------------
+    # The bold header (the catalog / forest / ring name) is ALWAYS
+    # added — it's the title that was lost when the search bar
+    # arrived.  The live filter is added on top of it only when
+    # there are ≥2 tools to sift; both are chrome, never hidden by
+    # filtering.
+    search_edit = _install_live_search(
+        menu, leaves, header_text=_popup_header_text(hex_win),
+    )
 
     # Position: below-centre of the hex.
     try:

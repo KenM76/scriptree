@@ -305,6 +305,38 @@ class TestModelRoundTrip:
         assert loaded.cell_icon_scale == 1.5
         assert loaded.cell_label_opacity == 0.7
 
+    def test_text_over_icon_round_trips_and_is_additive(
+        self, tmp_path: Path,
+    ) -> None:
+        """v0.6.9 superimpose flag: absent when False (byte-stable),
+        present + read back when True, through both io.py and the
+        cell_metadata read_for/write_for helpers."""
+        tool = ToolDef(
+            name="alpha", executable="/bin/echo",
+            argument_template=["{x}"],
+            params=[ParamDef(id="x", label="X", default="hi")],
+        )
+        p = tmp_path / "alpha.scriptree"
+        save_tool(tool, p)
+        # Default False → key absent entirely.
+        on_disk = json.loads(p.read_text(encoding="utf-8"))
+        assert "cell" not in on_disk
+        assert read_for(p).text_over_icon is False
+
+        # Flip it on via write_for; it must persist + read back.
+        write_for(p, text_over_icon=True)
+        assert read_for(p).text_over_icon is True
+        blob = json.loads(p.read_text(encoding="utf-8"))
+        assert blob["cell"]["text_over_icon"] is True
+        assert load_tool(str(p)).cell_text_over_icon is True
+
+        # And it round-trips through the model layer for trees too.
+        tree = TreeDef(name="cat", nodes=[], cell_text_over_icon=True)
+        tp = tmp_path / "cat.scriptreetree"
+        save_tree(tree, tp)
+        assert load_tree(str(tp)).cell_text_over_icon is True
+        assert read_for(tp).text_over_icon is True
+
     def test_treedef_cell_fields_round_trip(self, tmp_path: Path) -> None:
         tree = TreeDef(
             name="cat",

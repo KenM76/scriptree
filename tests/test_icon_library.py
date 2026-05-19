@@ -158,6 +158,148 @@ def test_icon_assets_resolves_bundled_set() -> None:
     assert bundled_icon_b64("definitely-not-an-icon") == ""
 
 
+def test_list_bundled_icons_and_png_path() -> None:
+    """v0.6.9 — the Settings 'Library…' picker enumerates the
+    shipped set by name and resolves each to a real PNG file."""
+    from pathlib import Path
+    from scriptree.shell.icon_assets import (
+        bundled_icon_png_path, list_bundled_icons,
+    )
+    names = list_bundled_icons()
+    assert isinstance(names, tuple) and len(names) >= 20
+    # Sorted, de-prefixed, and includes the reference archetypes.
+    assert names == tuple(sorted(names))
+    for required in ("cli", "folder", "tool", "solidworks"):
+        assert required in names, f"missing {required} in library"
+    # Every advertised name resolves to an existing PNG.
+    for nm in names:
+        p = bundled_icon_png_path(nm)
+        assert p is not None and Path(p).is_file()
+        assert p.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    # Unknown name → None.
+    assert bundled_icon_png_path("definitely-not-an-icon") is None
+
+
+def test_classify_icon_maps_keywords_to_glyphs() -> None:
+    """v0.6.9 — the name→icon heuristic gives icon-less tools
+    *variety* instead of one generic glyph."""
+    from scriptree.shell.icon_assets import (
+        classify_icon, list_bundled_icons,
+    )
+    cases = {
+        "git status": "versioncontrol",
+        "Backup to Zip Archive": "archive",
+        "PostgreSQL dump": "database",
+        "ffmpeg convert": "convert",
+        "Run pytest suite": "test",
+        "SolidWorks exporter": "solidworks",
+        "DXF nesting / plasma cut": "scissors",
+        "PowerShell deploy": "power",
+        "ping host": "network",
+        "Encrypt secret": "lock",
+        "download release": "download",
+        "Search files (ripgrep)": "search",
+    }
+    for nm, expected in cases.items():
+        assert classify_icon(name=nm) == expected, (
+            f"{nm!r} → {classify_icon(name=nm)!r}, want {expected!r}"
+        )
+    # Unknown → generic 'tool', and it's always a real bundled name.
+    g = classify_icon(name="frobnicate the wibble")
+    assert g == "tool"
+    assert g in list_bundled_icons()
+    # Every rule target must be a shipped icon (no dangling names).
+    from scriptree.shell.icon_assets import _ICON_RULES
+    names = set(list_bundled_icons())
+    for _needles, icon in _ICON_RULES:
+        assert icon in names, f"rule points at missing icon {icon!r}"
+
+
+def test_catalog_icon_falls_back_to_classified_glyph(
+    tmp_path,
+) -> None:
+    """An icon-less .scriptree gets a category glyph (not the bare
+    OS file icon) chosen from its name."""
+    from scriptree.core.io import save_tool
+    from scriptree.core.model import ParamDef, ToolDef
+    from scriptree.shell.tree_popup import _bundled_qicon, _catalog_icon
+
+    tool = ToolDef(
+        name="Zip Archive Backup", executable="/bin/zip",
+        argument_template=["x"],
+        params=[ParamDef(id="x", label="X", default="hi")],
+    )
+    p = tmp_path / "backup.scriptree"
+    save_tool(tool, p)
+    ic = _catalog_icon(str(p), "Zip Archive Backup")
+    assert ic is not None and not ic.isNull()
+    # It is specifically the 'archive' bundled glyph.
+    expected = _bundled_qicon("archive")
+    assert expected is not None
+    assert ic.cacheKey() == expected.cacheKey()
+
+
+def test_settings_dialog_has_icon_library_button() -> None:
+    """The cell Settings dialog exposes a way to change the icon
+    (Browse… AND a bundled-Library… picker)."""
+    from scriptree.shell.branding_loader import load_branding
+    from scriptree.shell.cell_window import CellWindow, SettingsDialog
+    cell = CellWindow(load_branding())
+    dlg = SettingsDialog(cell)
+    assert hasattr(dlg, "_icon_browse_btn")
+    assert hasattr(dlg, "_icon_library_btn")
+    assert dlg._icon_library_btn.text() == "Library…"
+    dlg.close()
+    cell.close()
+
+
+def test_pick_library_icon_embeds_into_bound_catalog(tmp_path) -> None:
+    """Selecting a library icon on a catalog-bound cell embeds the
+    PNG into the catalog (portable path)."""
+    from unittest.mock import patch
+
+    from PySide6.QtWidgets import QDialog
+
+    from scriptree.core.cell_metadata import read_for
+    from scriptree.core.io import save_tool
+    from scriptree.core.model import ParamDef, ToolDef
+    from scriptree.shell.branding_loader import load_branding
+    from scriptree.shell.cell_window import CellWindow, SettingsDialog
+
+    tool = ToolDef(
+        name="alpha", executable="/bin/echo",
+        argument_template=["x"],
+        params=[ParamDef(id="x", label="X", default="hi")],
+    )
+    cat = tmp_path / "alpha.scriptree"
+    save_tool(tool, cat)
+
+    cell = CellWindow(load_branding())
+    cell._handle_dropped_file(str(cat))
+    dlg = SettingsDialog(cell)
+
+    # Drive the modal picker: accept with "folder" chosen.
+    def _fake_exec(self):
+        # The handler stores the pick in a local dict captured by the
+        # button lambdas; simulate the user clicking the "folder" tile
+        # by walking the tool buttons and triggering the matching one.
+        from PySide6.QtWidgets import QToolButton
+        for b in self.findChildren(QToolButton):
+            if b.text() == "folder":
+                b.click()
+                break
+        return QDialog.Accepted
+
+    with patch.object(QDialog, "exec", _fake_exec):
+        dlg._on_icon_library()
+
+    md = read_for(cat)
+    assert md.is_embedded() and md.icon_format == "png"
+    assert cell._icon_data_b64 and not cell._icon_path
+    dlg.close()
+    cell.close()
+
+
 def test_forest_icon_round_trips_and_is_additive(tmp_path) -> None:
     from scriptree.shell.forest_io import (
         ForestDef, load_forest, save_forest,

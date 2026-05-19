@@ -112,6 +112,7 @@ Public API
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -513,6 +514,36 @@ def default_autoload_path(branding: dict) -> Path:
     else:
         appdata = Path.home() / ".config" / brand_name
     return appdata / _DEFAULT_FOREST_FILENAME
+
+
+def shared_autoload_path(branding: dict) -> Path:
+    """Where a *machine-wide* default forest file lives — the
+    "shared location" the v0.6.9 unsaved-forest prompt offers next
+    to the per-user "personal" path.
+
+    This is a LOCAL shared spot (all users of this machine), NOT a
+    network/published location.  Same ``default.scriptreeforest``
+    filename so the two are interchangeable; only the directory
+    differs:
+
+      * Windows — ``%ProgramData%\\<brand>\\``
+      * macOS   — ``/Users/Shared/<brand>/``
+      * Linux   — ``/usr/local/share/<brand>/``
+
+    No directory is created here (the caller writes the file and
+    ``save_forest`` makes parents); if the shared dir isn't writable
+    by this user the write will surface its own error.
+    """
+    brand_name = branding.get("appName", "ScripTree")
+    if sys.platform == "win32":
+        base = Path(
+            os.environ.get("ProgramData", r"C:\ProgramData")
+        ) / brand_name
+    elif sys.platform == "darwin":
+        base = Path("/Users/Shared") / brand_name
+    else:
+        base = Path("/usr/local/share") / brand_name
+    return base / _DEFAULT_FOREST_FILENAME
 
 
 def migrate_legacy_autoload_path(branding: dict) -> Path | None:

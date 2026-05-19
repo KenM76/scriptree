@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic calendar/schedule shape — placeholder, not a vendor trademark logo -->
+  <rect x="8" y="11" width="32" height="29" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M8 19h32" stroke="currentColor" stroke-width="2.5"/>
+  <path d="M17 6v9M31 6v9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

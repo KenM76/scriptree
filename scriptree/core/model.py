@@ -531,6 +531,12 @@ class ToolDef:
     cell_text_label: str = ""
     cell_icon_scale: float = 1.0
     cell_label_opacity: float = 1.0
+    # Superimpose the text label ON TOP of the icon (V3 v0.6.9+).
+    # Default False keeps the historical "icon XOR text" behaviour
+    # (icon present → text suppressed) byte-identical on disk.  When
+    # True the cell paints BOTH: the icon, then the text label
+    # (explicit override or auto-letters) in a legible band over it.
+    cell_text_over_icon: bool = False
     # Cell single-click behaviour (V3 v0.3.5+).  When the cell shell
     # binds this catalog to a hex / square cell, ``cell_click_action``
     # determines what a single-left-click does:
@@ -722,6 +728,8 @@ class TreeDef:
     cell_text_label: str = ""
     cell_icon_scale: float = 1.0
     cell_label_opacity: float = 1.0
+    # Superimpose text over icon (V3 v0.6.9+).  See ToolDef.
+    cell_text_over_icon: bool = False
     # Cell single-click action (V3 v0.3.5+).  See the matching
     # docstring on ``ToolDef.cell_click_action`` for the full
     # contract — when set to ``"run"`` on a TreeDef, single-click

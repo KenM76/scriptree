@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic bug/debug shape — placeholder, not a vendor trademark logo -->
+  <circle cx="24" cy="26" r="10" stroke="currentColor" stroke-width="2.5"/>
+  <path d="M24 16v-4M14 21l-5-4M34 21l5-4M14 26H7M34 26h7M15 34l-5 5M33 34l5 5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

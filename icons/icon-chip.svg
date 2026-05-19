@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic processor/chip shape — placeholder, not a vendor trademark logo -->
+  <rect x="14" y="14" width="20" height="20" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M20 14V8M28 14V8M20 34v6M28 34v6M14 20H8M14 28H8M34 20h6M34 28h6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

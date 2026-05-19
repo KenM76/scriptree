@@ -268,9 +268,17 @@ def test_collector_captures_all_leaves_with_breadcrumb(
     ]
 
 
-def test_search_field_is_first_action(tmp_path: Path) -> None:
+def test_header_then_search_are_the_first_actions(
+    tmp_path: Path,
+) -> None:
+    # v0.6.9: a bold disabled header label is restored at index 0
+    # (the title lost when the search bar arrived); the search
+    # QWidgetAction follows at index 1.
     menu, _edit, _ = _menu_with_search(tmp_path)
-    assert isinstance(menu.actions()[0], QWidgetAction)
+    acts = menu.actions()
+    assert acts[0].text() and not acts[0].isEnabled()
+    assert acts[0].font().bold()
+    assert isinstance(acts[1], QWidgetAction)
 
 
 def test_empty_query_restores_structure(tmp_path: Path) -> None:
@@ -285,8 +293,9 @@ def test_empty_query_restores_structure(tmp_path: Path) -> None:
 def test_query_filters_to_flat_matches(tmp_path: Path) -> None:
     menu, edit, _ = _menu_with_search(tmp_path)
     edit.setText("ba")
+    # Enabled-only excludes the disabled header / placeholders.
     vis = [a.text() for a in menu.actions()
-           if a.isVisible() and a.text()
+           if a.isVisible() and a.text() and a.isEnabled()
            and not isinstance(a, QWidgetAction)]
     assert vis == ["backup_db"]
 
@@ -295,7 +304,7 @@ def test_query_prefix_outranks_substring(tmp_path: Path) -> None:
     menu, edit, _ = _menu_with_search(tmp_path)
     edit.setText("a")
     vis = [a.text() for a in menu.actions()
-           if a.isVisible() and a.text()
+           if a.isVisible() and a.text() and a.isEnabled()
            and not isinstance(a, QWidgetAction)]
     assert vis and vis[0] == "Tools / alpha"
 
@@ -385,3 +394,31 @@ def test_menu_leaf_actions_carry_icons(tmp_path: Path) -> None:
     leaf_acts = [x for x in sub.actions() if x.text()]
     assert leaf_acts
     assert all(not x.icon().isNull() for x in leaf_acts)
+
+
+def test_popup_header_text_resolves_catalog_name(tmp_path: Path) -> None:
+    """The restored header shows the catalog's name, else a
+    role-based default."""
+    from scriptree.shell.tree_popup import _popup_header_text
+
+    class _Cell:
+        role = "standalone"
+        is_forest_master = False
+        _text_label = None
+        def __init__(self, cp=None):
+            self._catalog_path = cp
+
+    # Bound catalog → its declared name.
+    cat = _save_tool(tmp_path, "alpha")
+    tree = _save_tree(tmp_path, "Engineering Tools", [cat])
+    assert _popup_header_text(_Cell(str(tree))) == "Engineering Tools"
+    # No catalog, no label → role default.
+    assert _popup_header_text(_Cell(None)) == "ScripTree"
+
+    class _Forest(_Cell):
+        is_forest_master = True
+    assert _popup_header_text(_Forest(None)) == "Forest"
+
+    class _Ring(_Cell):
+        role = "master"
+    assert _popup_header_text(_Ring(None)) == "Tree Ring"

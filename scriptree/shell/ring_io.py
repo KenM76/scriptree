@@ -228,6 +228,10 @@ def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> 
     label_opacity = getattr(hex_win, "_label_opacity", 1.0)
     if label_opacity != 1.0:
         d["label_opacity"] = float(label_opacity)
+    # Superimpose-text-over-icon (v0.6.9+).  Emit only when True so
+    # pre-v0.6.9 rings stay byte-identical.
+    if getattr(hex_win, "_label_text_over_icon", False):
+        d["text_over_icon"] = True
     return d
 
 
@@ -468,6 +472,9 @@ def load_ring(
             master_win._label_opacity = max(0.20, min(1.00, raw_op))
         except (TypeError, ValueError):
             pass
+        master_win._label_text_over_icon = bool(
+            master_raw.get("text_over_icon", False)
+        )
         master_win.show()
         _log(
             f"load_ring: standalone hex {master_win._id[:8]} spawned at "
@@ -545,6 +552,9 @@ def load_ring(
             member_win._label_opacity = max(0.20, min(1.00, raw_op))
         except (TypeError, ValueError):
             pass
+        member_win._label_text_over_icon = bool(
+            m_raw.get("text_over_icon", False)
+        )
         member_win.show()
 
         # preferred_position — also clamp.

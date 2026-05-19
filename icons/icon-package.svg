@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic package/parcel shape — placeholder, not a vendor trademark logo -->
+  <path d="M24 6l16 9v18l-16 9-16-9V15z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M8 15l16 9 16-9M24 24v18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
