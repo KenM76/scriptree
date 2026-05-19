@@ -113,3 +113,69 @@ def test_embedded_catalog_icon_round_trips(tmp_path: Path) -> None:
     assert md.has_icon() and md.icon_format == "svg"
     ic = qicon_for_catalog(str(cat))
     assert ic is not None and not ic.isNull()
+
+
+# ---------------------------------------------------------------------------
+# v0.6.7 — ring/forest hub icons + icon_assets
+# ---------------------------------------------------------------------------
+
+def test_icon_assets_resolves_bundled_set() -> None:
+    from scriptree.shell.icon_assets import bundled_icon_b64, icons_dir
+    assert icons_dir() is not None
+    import base64
+    for nm in ("container", "folder", "tool", "cli"):
+        b = bundled_icon_b64(nm)
+        assert b, f"bundled icon {nm} empty"
+        # Valid base64 of a real SVG.
+        assert b"<svg" in base64.b64decode(b)
+    assert bundled_icon_b64("definitely-not-an-icon") == ""
+
+
+def test_forest_icon_round_trips_and_is_additive(tmp_path) -> None:
+    from scriptree.shell.forest_io import (
+        ForestDef, load_forest, save_forest,
+    )
+    import json
+    p = tmp_path / "f.scriptreeforest"
+    # No icon → key absent (byte-stability contract).
+    save_forest(ForestDef(name="F"), str(p))
+    assert "icon_data" not in json.loads(p.read_text())
+    # With icon → round-trips.
+    f = load_forest(str(p))
+    f.icon_data = "QUJD"  # 'ABC'
+    f.icon_format = "svg"
+    save_forest(f, str(p))
+    blob = json.loads(p.read_text())
+    assert blob["icon_data"] == "QUJD" and blob["icon_format"] == "svg"
+    f2 = load_forest(str(p))
+    assert f2.icon_data == "QUJD" and f2.icon_format == "svg"
+
+
+def test_ring_hex_dict_icon_data_additive() -> None:
+    """_hex_to_dict emits icon_data ONLY when set (legacy rings with
+    no embedded icon must stay byte-identical)."""
+    from scriptree.shell.ring_io import _hex_to_dict
+
+    class _Stub:
+        role = "standalone"
+        _id = "x"
+        _shape = "hexagon"
+        _orientation = "flat-top"
+        _size_px = 96
+        _transparency = 0.85
+        _always_on_top = True
+
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+        def pos(self):
+            from PySide6.QtCore import QPoint
+            return QPoint(0, 0)
+
+    bare = _Stub()
+    d = _hex_to_dict(bare)
+    assert "icon_data" not in d and "icon_format" not in d
+
+    iconned = _Stub(_icon_data_b64="QUJD", _icon_data_format="svg")
+    d2 = _hex_to_dict(iconned)
+    assert d2["icon_data"] == "QUJD" and d2["icon_format"] == "svg"
