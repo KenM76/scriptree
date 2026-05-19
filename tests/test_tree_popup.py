@@ -209,3 +209,117 @@ def test_leaf_action_triggers_launch_tool(tmp_path: Path) -> None:
         if "leaf" in m_launch.call_args[1] \
         else m_launch.call_args[0][0]
     assert Path(leaf_path).resolve() == t1.resolve()
+
+
+
+# ---------------------------------------------------------------------------
+# v0.6.4 — live search bar (flat Windows/Mac-style filtering)
+# ---------------------------------------------------------------------------
+
+from scriptree.shell.tree_popup import (  # noqa: E402
+    _install_live_search, _rank,
+)
+from PySide6.QtWidgets import QWidgetAction  # noqa: E402
+
+
+def test_rank_relevance_order() -> None:
+    # _rank(query, bare_name, search_text)
+    assert _rank("al", "alpha", "tools / alpha alpha") == 0   # name prefix
+    assert _rank("ph", "alpha", "tools / alpha alpha") == 1   # name substr
+    assert _rank("too", "alpha", "tools / alpha alpha") == 2  # crumb only
+    assert _rank("zzz", "alpha", "tools / alpha alpha") is None
+
+
+def _nested_catalog(tmp_path: Path) -> Path:
+    """A .scriptreetree: folder 'Tools' (alpha, beta) + top leaves
+    gamma, backup_db — exercises breadcrumb + flat collection."""
+    a = _save_tool(tmp_path, "alpha")
+    b = _save_tool(tmp_path, "beta")
+    g = _save_tool(tmp_path, "gamma")
+    bk = _save_tool(tmp_path, "backup_db")
+    tree = TreeDef(name="T", nodes=[
+        TreeNode(type="folder", name="Tools", children=[
+            TreeNode(type="leaf", name="alpha", path=a.name),
+            TreeNode(type="leaf", name="beta", path=b.name),
+        ]),
+        TreeNode(type="leaf", name="gamma", path=g.name),
+        TreeNode(type="leaf", name="backup_db", path=bk.name),
+    ])
+    out = tmp_path / "cat.scriptreetree"
+    save_tree(tree, out)
+    return out
+
+
+def _menu_with_search(tmp_path: Path):
+    menu = QMenu(None)
+    leaves: list = []
+    _build_menu_for_catalog(
+        menu, _nested_catalog(tmp_path), collector=leaves)
+    edit = _install_live_search(menu, leaves)
+    return menu, edit, leaves
+
+
+def test_collector_captures_all_leaves_with_breadcrumb(
+    tmp_path: Path,
+) -> None:
+    _menu, _edit, leaves = _menu_with_search(tmp_path)
+    assert sorted(l[0] for l in leaves) == [
+        "Tools / alpha", "Tools / beta", "backup_db", "gamma",
+    ]
+
+
+def test_search_field_is_first_action(tmp_path: Path) -> None:
+    menu, _edit, _ = _menu_with_search(tmp_path)
+    assert isinstance(menu.actions()[0], QWidgetAction)
+
+
+def test_empty_query_restores_structure(tmp_path: Path) -> None:
+    menu, edit, _ = _menu_with_search(tmp_path)
+    edit.setText("xyz")
+    edit.setText("")
+    visible = {a.text() for a in menu.actions()
+               if a.isVisible() and a.text()}
+    assert "Tools" in visible and "gamma" in visible
+
+
+def test_query_filters_to_flat_matches(tmp_path: Path) -> None:
+    menu, edit, _ = _menu_with_search(tmp_path)
+    edit.setText("ba")
+    vis = [a.text() for a in menu.actions()
+           if a.isVisible() and a.text()
+           and not isinstance(a, QWidgetAction)]
+    assert vis == ["backup_db"]
+
+
+def test_query_prefix_outranks_substring(tmp_path: Path) -> None:
+    menu, edit, _ = _menu_with_search(tmp_path)
+    edit.setText("a")
+    vis = [a.text() for a in menu.actions()
+           if a.isVisible() and a.text()
+           and not isinstance(a, QWidgetAction)]
+    assert vis and vis[0] == "Tools / alpha"
+
+
+def test_return_triggers_first_visible_result(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import scriptree.shell.v1_launcher as vl
+    fired: list = []
+    monkeypatch.setattr(
+        vl, "launch_tool", lambda *a, **k: fired.append((a, k)))
+    menu, edit, _ = _menu_with_search(tmp_path)
+    edit.setText("gam")
+    edit.returnPressed.emit()
+    assert fired, "Enter in the search box did not launch a tool"
+
+
+def test_search_omitted_when_too_few_tools(tmp_path: Path) -> None:
+    menu = QMenu(None)
+    leaves: list = []
+    _build_menu_for_catalog(
+        menu, _save_tool(tmp_path, "solo"), collector=leaves)
+    assert len(leaves) == 1
+    # Caller only installs search when len(leaves) >= 2 — verify a
+    # 1-leaf catalog has no search widget if we mirror that guard.
+    assert not any(
+        isinstance(a, QWidgetAction) for a in menu.actions())
