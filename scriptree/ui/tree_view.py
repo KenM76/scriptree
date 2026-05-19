@@ -85,9 +85,11 @@ from PySide6.QtGui import (
     QDragMoveEvent,
     QDropEvent,
     QFont,
+    QIcon,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -96,11 +98,36 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+
+# --- icons (v0.6.5) --------------------------------------------------------
+#
+# Tree rows are iconned the same way the cell/ring/forest popup menu
+# is: a tool leaf shows its catalog's configured ``cell`` icon (or
+# the OS file icon as a fallback), a subtree shows its catalog icon
+# (or the OS folder icon), and a plain folder shows the OS folder
+# icon — so the tree view and the launcher menus look consistent.
+
+def _tv_std_icon(which) -> QIcon:  # noqa: ANN001
+    app = QApplication.instance()
+    return app.style().standardIcon(which) if app is not None else QIcon()
+
+
+def _tv_catalog_icon(path, fallback) -> QIcon:  # noqa: ANN001
+    try:
+        from scriptree.core.cell_metadata import qicon_for_catalog
+        ic = qicon_for_catalog(path)
+        if ic is not None and not ic.isNull():
+            return ic
+    except Exception:  # noqa: BLE001
+        pass
+    return _tv_std_icon(fallback)
 
 from ..core.io import (
     check_circular_tree_refs,
@@ -567,6 +594,7 @@ class TreeLauncherView(QWidget):
 
     def _new_folder_item(self, name: str) -> QTreeWidgetItem:
         item = QTreeWidgetItem([name])
+        item.setIcon(0, _tv_std_icon(QStyle.StandardPixmap.SP_DirIcon))
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
             | Qt.ItemFlag.ItemIsSelectable
@@ -593,6 +621,8 @@ class TreeLauncherView(QWidget):
             except Exception:  # noqa: BLE001
                 label = Path(abs_path).stem
         item = QTreeWidgetItem([label])
+        item.setIcon(0, _tv_catalog_icon(
+            abs_path, QStyle.StandardPixmap.SP_FileIcon))
         item.setData(0, _ROLE_PATH, abs_path)
         if display_name:
             item.setData(0, _ROLE_DISPLAY_NAME, display_name)
@@ -634,7 +664,12 @@ class TreeLauncherView(QWidget):
                 label = sub.name or Path(abs_path).stem
             except Exception:  # noqa: BLE001
                 label = Path(abs_path).stem
-        item = QTreeWidgetItem([f"\U0001F4C2 {label}"])  # 📂
+        # v0.6.5 — was a 📂 emoji text-prefix; now a real QIcon (the
+        # referenced tree's configured icon, else the OS folder
+        # icon) so it matches the leaf rows and the popup menu.
+        item = QTreeWidgetItem([label])
+        item.setIcon(0, _tv_catalog_icon(
+            abs_path, QStyle.StandardPixmap.SP_DirIcon))
         item.setData(0, _ROLE_PATH, abs_path)
         item.setData(0, _ROLE_SUBTREE, abs_path)
         if display_name:
@@ -1009,9 +1044,13 @@ class TreeLauncherView(QWidget):
         if item is not None:
             self._tree_widget.setCurrentItem(item)
         menu = QMenu(self)
+        # v0.6.5 — program/built-in menu items get OS standard icons
+        # too (the user: "menu items both for the program and apps").
+        _SP = QStyle.StandardPixmap
         if item is not None:
             if _is_leaf(item):
                 act_open = QAction("Open", self)
+                act_open.setIcon(_tv_std_icon(_SP.SP_MediaPlay))
                 act_open.triggered.connect(
                     lambda _=False, it=item: self._on_item_activated(it, 0)
                 )
@@ -1020,12 +1059,15 @@ class TreeLauncherView(QWidget):
                 # editRequested so the main window opens the tool
                 # editor bound to this file (Save writes back here).
                 act_edit = QAction("Edit", self)
+                act_edit.setIcon(
+                    _tv_std_icon(_SP.SP_FileDialogContentsView))
                 act_edit.triggered.connect(
                     lambda _=False, it=item: self._emit_edit_for(it)
                 )
                 menu.addAction(act_edit)
             if _is_subtree(item):
                 act_refresh = QAction("Refresh subtree", self)
+                act_refresh.setIcon(_tv_std_icon(_SP.SP_BrowserReload))
                 act_refresh.triggered.connect(
                     lambda _=False, it=item: self._expand_subtree(it)
                 )
@@ -1033,24 +1075,31 @@ class TreeLauncherView(QWidget):
             # Open standalone — same gesture as double-right-click,
             # also reachable from the menu.
             act_standalone = QAction("Open standalone", self)
+            act_standalone.setIcon(
+                _tv_std_icon(_SP.SP_TitleBarNormalButton))
             act_standalone.triggered.connect(
                 lambda _=False, it=item: self._emit_standalone_for(it)
             )
             menu.addAction(act_standalone)
             act_remove = QAction("Remove", self)
+            act_remove.setIcon(_tv_std_icon(_SP.SP_TrashIcon))
             act_remove.triggered.connect(self._remove_selected)
             menu.addAction(act_remove)
             if _is_folder(item):
                 act_rename = QAction("Rename", self)
+                act_rename.setIcon(
+                    _tv_std_icon(_SP.SP_FileDialogDetailedView))
                 act_rename.triggered.connect(
                     lambda _=False, it=item: self._tree_widget.editItem(it, 0)
                 )
                 menu.addAction(act_rename)
             menu.addSeparator()
         act_new_folder = QAction("New folder", self)
+        act_new_folder.setIcon(_tv_std_icon(_SP.SP_FileDialogNewFolder))
         act_new_folder.triggered.connect(self._add_folder)
         menu.addAction(act_new_folder)
         act_add_tool = QAction("Add tool...", self)
+        act_add_tool.setIcon(_tv_std_icon(_SP.SP_DialogOpenButton))
         act_add_tool.triggered.connect(self._add_tool_via_dialog)
         menu.addAction(act_add_tool)
         menu.exec(self._tree_widget.viewport().mapToGlobal(pos))
