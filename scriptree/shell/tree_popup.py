@@ -59,19 +59,34 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QApplication, QLineEdit, QMenu, QWidgetAction,
+)
 
 
 def _log(msg: str) -> None:
     print(f"[tree_popup] {msg}", file=sys.stderr)
 
 
+# Don't paint a flat result list longer than this — a launcher menu
+# with hundreds of visible rows is unusable and slow to lay out.
+_MAX_RESULTS = 60
+
+
 # ---------------------------------------------------------------------------
 # Menu builder
 # ---------------------------------------------------------------------------
 
-def _add_node_to_menu(menu: QMenu, node, source_dir: Path) -> None:  # noqa: ANN001
+def _add_node_to_menu(  # noqa: ANN001
+    menu: QMenu,
+    node,
+    source_dir: Path,
+    *,
+    collector: list | None = None,
+    path_prefix: str = "",
+) -> None:
     """Recursively walk a V1 ``TreeNode`` into a QMenu hierarchy.
 
     Folder nodes become submenus; leaf nodes become actions whose
@@ -83,14 +98,28 @@ def _add_node_to_menu(menu: QMenu, node, source_dir: Path) -> None:  # noqa: ANN
       2. ``name`` if non-empty
       3. for leaves only: file stem of the leaf's path
       4. ``"(unnamed)"`` last resort
+
+    ``collector`` (optional, keyword-only) — when given, every leaf
+    is also appended as a ``(display, search_text, trigger)`` tuple
+    so the caller can build a flat live-search result list.
+    ``path_prefix`` accumulates the folder breadcrumb for that
+    search text / disambiguation.  Both default to "off" so the
+    nested-menu behaviour (and the existing tests) are byte-identical.
     """
     from scriptree.shell.v1_launcher import launch_tool
 
     if node.type == "folder":
         label = node.display_name or node.name or "(unnamed)"
         sub = menu.addMenu(label)
+        # ASCII '/' breadcrumb (not a unicode arrow): this string can
+        # reach cp1252 logs / serialisation, and this codebase has
+        # been bitten by mojibake before — keep it 7-bit.
+        child_prefix = f"{path_prefix}{label} / "
         for child in node.children:
-            _add_node_to_menu(sub, child, source_dir)
+            _add_node_to_menu(
+                sub, child, source_dir,
+                collector=collector, path_prefix=child_prefix,
+            )
         return
 
     # Leaf — resolve the path relative to the catalog's directory.
@@ -110,11 +139,36 @@ def _add_node_to_menu(menu: QMenu, node, source_dir: Path) -> None:  # noqa: ANN
         except Exception as exc:  # noqa: BLE001
             _log(f"launch_tool({leaf!r}) failed: {exc!r}")
     act.triggered.connect(_on_trigger)
+    if collector is not None:
+        # 4-tuple: (display = breadcrumbed label for the result row,
+        # name = the bare leaf label that ranking prefixes against,
+        # search_text = full lowercased haystack incl. folder path +
+        # filename for the weakest "matches anywhere" tier, trigger).
+        # Ranking on the bare name (not the breadcrumbed display) is
+        # what makes typing "a" surface tools NAMED a*, like the
+        # Start menu / Spotlight.
+        search_text = f"{path_prefix}{label} {p.stem}".lower()
+        collector.append((
+            f"{path_prefix}{label}" if path_prefix else label,
+            label,
+            search_text,
+            _on_trigger,
+        ))
 
 
-def _build_menu_for_catalog(menu: QMenu, catalog_path: str | Path) -> bool:
+def _build_menu_for_catalog(  # noqa: ANN001
+    menu: QMenu,
+    catalog_path: str | Path,
+    *,
+    collector: list | None = None,
+    path_prefix: str = "",
+) -> bool:
     """Populate ``menu`` from one catalog file.  Returns True iff at
-    least one item was added."""
+    least one item was added.
+
+    ``collector`` / ``path_prefix`` (keyword-only, optional) feed the
+    flat live-search index — see :func:`_add_node_to_menu`.  Defaults
+    keep the nested-menu behaviour identical for existing callers."""
     from scriptree.core.io import load_tool, load_tree
 
     p = Path(catalog_path).resolve()
@@ -134,7 +188,10 @@ def _build_menu_for_catalog(menu: QMenu, catalog_path: str | Path) -> bool:
             menu.addAction("(empty tree)").setEnabled(False)
             return False
         for node in tree.nodes:
-            _add_node_to_menu(menu, node, p.parent)
+            _add_node_to_menu(
+                menu, node, p.parent,
+                collector=collector, path_prefix=path_prefix,
+            )
         return True
 
     if ext == ".scriptree":
@@ -148,11 +205,166 @@ def _build_menu_for_catalog(menu: QMenu, catalog_path: str | Path) -> bool:
             label = p.stem
         from scriptree.shell.v1_launcher import launch_tool
         act = menu.addAction(label)
-        act.triggered.connect(lambda _c=False, leaf=str(p): launch_tool(leaf))
+
+        def _on_trigger(_c=False, leaf=str(p)):  # noqa: ANN001
+            launch_tool(leaf)
+        act.triggered.connect(_on_trigger)
+        if collector is not None:
+            collector.append((
+                f"{path_prefix}{label}" if path_prefix else label,
+                label,
+                f"{path_prefix}{label} {p.stem}".lower(),
+                _on_trigger,
+            ))
         return True
 
     menu.addAction(f"(unsupported: {p.suffix})").setEnabled(False)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Live search (Windows/Mac-style flat filtering)
+# ---------------------------------------------------------------------------
+
+def _rank(query: str, name: str, search_text: str) -> int | None:
+    """Match score, lower = better; ``None`` = no match.
+
+    Ranks against the tool's *bare* name (not the breadcrumbed
+    display), so typing ``a`` surfaces tools NAMED ``a*`` first —
+    the Start-menu / Spotlight relevance order:
+
+      0 = name starts with the query
+      1 = query is a substring of the name
+      2 = query matches only the folder breadcrumb / filename
+          (``search_text``)
+    """
+    nl = name.lower()
+    if nl.startswith(query):
+        return 0
+    if query in nl:
+        return 1
+    if query in search_text:
+        return 2
+    return None
+
+
+def _install_live_search(menu: QMenu, leaves: list) -> QLineEdit:
+    """Prepend a live-filter ``QLineEdit`` to ``menu`` and a flat
+    pool of result actions.
+
+    Empty box → the original nested submenu structure shows.
+    Non-empty → the nested items hide and a ranked flat list of
+    matching tools replaces them, refreshed on every keystroke.
+
+    Returns the ``QLineEdit`` so the caller can focus it once the
+    modal menu is up.
+
+    Design notes (for maintainers / LLMs):
+    * The result rows are a FIXED reusable pool (``QAction`` ×
+      min(#leaves, _MAX_RESULTS)).  Each filter pass reassigns text
+      + the bound trigger to the top matches and shows exactly that
+      many — this gives ranked order without reordering QMenu
+      actions (QMenu has no public reorder).
+    * ``_current`` maps a pool action → its currently-bound leaf
+      trigger; a single dispatcher connected once at creation reads
+      it, so we never disconnect/reconnect per keystroke.
+    * Structural actions (the nested menu built before this call)
+      are snapshotted and toggled en masse — never destroyed — so
+      clearing the box restores the exact original menu.
+    """
+    structural = list(menu.actions())
+
+    # --- search field -------------------------------------------------
+    edit = QLineEdit()
+    edit.setPlaceholderText("Type to filter…")
+    edit.setClearButtonEnabled(True)
+    edit.setMinimumWidth(240)
+    edit.setStyleSheet("QLineEdit { margin: 4px 6px; padding: 3px; }")
+    wa = QWidgetAction(menu)
+    wa.setDefaultWidget(edit)
+    # Target order: [search] [sep] [structural…] [pool…] [overflow].
+    if structural:
+        first = structural[0]
+        menu.insertAction(first, wa)       # → [wa, structural…]
+        menu.insertSeparator(first)        # → [wa, sep, structural…]
+    else:
+        menu.addAction(wa)
+        menu.addSeparator()
+
+    # --- reusable flat result pool -----------------------------------
+    pool_size = min(len(leaves), _MAX_RESULTS)
+    pool: list[QAction] = []
+    current: dict[QAction, object] = {}
+
+    def _fire(act: QAction) -> None:
+        fn = current.get(act)
+        if callable(fn):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"live-search launch failed: {exc!r}")
+
+    for _ in range(pool_size):
+        a = QAction(menu)
+        a.setVisible(False)
+        a.triggered.connect(lambda _c=False, _a=a: _fire(_a))
+        menu.addAction(a)
+        pool.append(a)
+
+    overflow = menu.addAction("")
+    overflow.setEnabled(False)
+    overflow.setVisible(False)
+
+    def _apply(text: str) -> None:
+        q = text.strip().lower()
+        if not q:
+            for act in structural:
+                act.setVisible(True)
+            for a in pool:
+                a.setVisible(False)
+            overflow.setVisible(False)
+            return
+        # Query active: hide the nested structure, show ranked flat
+        # matches in the reusable pool.
+        for act in structural:
+            act.setVisible(False)
+        scored = []
+        for display, name, search_text, trig in leaves:
+            s = _rank(q, name, search_text)
+            if s is not None:
+                # Tie-break within a score tier by the bare name so
+                # the order is stable + name-alphabetical.
+                scored.append((s, name.lower(), display, trig))
+        scored.sort(key=lambda t: (t[0], t[1]))
+        shown = scored[:pool_size]
+        for i, a in enumerate(pool):
+            if i < len(shown):
+                _, _, display, trig = shown[i]
+                a.setText(display)
+                current[a] = trig
+                a.setVisible(True)
+            else:
+                a.setVisible(False)
+        extra = len(scored) - len(shown)
+        if extra > 0:
+            overflow.setText(f"… {extra} more — keep typing")
+            overflow.setVisible(True)
+        else:
+            overflow.setVisible(False)
+        if not scored:
+            overflow.setText("(no matches)")
+            overflow.setVisible(True)
+
+    edit.textChanged.connect(_apply)
+
+    def _on_return() -> None:
+        for a in pool:
+            if a.isVisible():
+                a.trigger()
+                return
+    edit.returnPressed.connect(_on_return)
+
+    return edit
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +382,9 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     role = getattr(hex_win, "role", "standalone")
 
     menu = QMenu(None)
+    # Flat live-search index — every leaf across the whole (possibly
+    # master-union) catalog as (display, search_text, trigger).
+    leaves: list = []
 
     if role == "master":
         # ``_members`` is a ``dict[member_id, QPoint]`` per
@@ -217,7 +432,11 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
                 except Exception:  # noqa: BLE001
                     pass
                 sub = menu.addMenu(top_label)
-                if _build_menu_for_catalog(sub, src):
+                if _build_menu_for_catalog(
+                    sub, src,
+                    collector=leaves,
+                    path_prefix=f"{top_label} / ",
+                ):
                     populated_any = True
             if not populated_any:
                 menu.addAction(
@@ -229,7 +448,16 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
         if not catalog_path:
             menu.addAction("(no catalog loaded — right-click → Load…)").setEnabled(False)
         else:
-            _build_menu_for_catalog(menu, catalog_path)
+            _build_menu_for_catalog(menu, catalog_path, collector=leaves)
+
+    # ---- Live search bar (Windows/Mac-style flat filtering) --------
+    # Only worth showing when there are at least a couple of tools to
+    # sift through.  Typing collapses the nested submenu structure
+    # into a flat, ranked result list that updates on every
+    # keystroke; clearing the box restores the normal nested menu.
+    search_edit = None
+    if len(leaves) >= 2:
+        search_edit = _install_live_search(menu, leaves)
 
     # Position: below-centre of the hex.
     try:
@@ -255,5 +483,12 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
         except Exception:  # noqa: BLE001
             pass
     menu.aboutToHide.connect(_on_about_to_hide)
+
+    # Focus the search field once the modal menu loop is running so
+    # the user can type immediately (Spotlight/Start-menu feel).
+    # QMenu forwards key events to a focused QWidgetAction widget;
+    # the 0-ms timer defers until after exec() has shown the menu.
+    if search_edit is not None:
+        QTimer.singleShot(0, search_edit.setFocus)
 
     menu.exec(global_pt)
