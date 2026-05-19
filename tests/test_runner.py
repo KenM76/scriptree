@@ -81,7 +81,7 @@ class TestResolveConditionalFlag:
     def _bool_tool(self) -> ToolDef:
         return _tool(
             ["{verbose?--verbose}"],
-            [ParamDef(id="verbose", type=ParamType.BOOL, widget=Widget.CHECKBOX)],
+            [ParamDef(id="verbose", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX)],
         )
 
     def test_true_emits_flag(self) -> None:
@@ -99,7 +99,7 @@ class TestResolveConditionalFlag:
     def test_conditional_embedded_raises(self) -> None:
         tool = _tool(
             ["prefix{v?--v}"],
-            [ParamDef(id="v", type=ParamType.BOOL, widget=Widget.CHECKBOX)],
+            [ParamDef(id="v", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX)],
         )
         with pytest.raises(RunnerError, match="standalone token"):
             resolve(tool, {"v": True})
@@ -142,7 +142,7 @@ class TestTokenGroups:
                 ParamDef(id="system"),
                 ParamDef(
                     id="verbose",
-                    type=ParamType.BOOL,
+                    type=ParamType.BOOLEAN,
                     widget=Widget.CHECKBOX,
                     default=False,
                 ),
@@ -248,7 +248,7 @@ class TestStringPassthroughAutoSplit:
         tool = _tool(
             ["{p}"],
             [ParamDef(
-                id="p", type=ParamType.PATH, widget=Widget.FILE_OPEN,
+                id="p", type=ParamType.PATH, widget=Widget.FILE,
             )],
         )
         cmd = resolve(tool, {"p": r"C:\Program Files\Foo"})
@@ -280,7 +280,7 @@ class TestStringPassthroughAutoSplit:
         tool = _tool(
             ["{b}"],
             [ParamDef(
-                id="b", type=ParamType.BOOL, widget=Widget.CHECKBOX,
+                id="b", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX,
             )],
         )
         cmd = resolve(tool, {"b": True})
@@ -293,7 +293,7 @@ class TestStringPassthroughAutoSplit:
         tool = _tool(
             ["{enabled?--flag value with spaces}"],
             [ParamDef(
-                id="enabled", type=ParamType.BOOL, widget=Widget.CHECKBOX,
+                id="enabled", type=ParamType.BOOLEAN, widget=Widget.CHECKBOX,
             )],
         )
         cmd = resolve(tool, {"enabled": True})

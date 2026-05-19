@@ -1,5 +1,7 @@
 """Tier-1 parser for PowerShell ``Get-Help -Full`` output.
 
+## For humans
+
 PowerShell cmdlets emit a distinctive structured help format::
 
     NAME
@@ -40,6 +42,33 @@ Common parameters (``-Verbose``, ``-Debug``, ``-ErrorAction``, ``-WhatIf``,
 Because ScripTree wraps ``powershell.exe -NoProfile -Command "CmdletName ..."``,
 the generated tool uses ``powershell.exe`` as the executable and emits the
 cmdlet name as a literal in the argument template.
+
+## For maintainers / LLMs
+
+- EDITOR-time plugin. ``PRIORITY=25`` (after click 20, before
+  winhelp 30) — winhelp's slash-flag heuristic would otherwise
+  also fire on some cmdlet help, so this must stay lower-numbered
+  than winhelp.
+- Detection requires ``NAME`` AND ``PARAMETERS`` headers (SYNTAX is
+  documented but not required by ``looks_like_powershell_help``).
+- Skip lists are layered: ``_SKIP_PARAMS`` (common/-WhatIf/-Confirm
+  by flag name), ``_SKIP_TYPES`` (securestring/pscredential — not
+  argv-passable), ``_PIPELINE_ONLY_TYPES`` (object refs).
+  ``_map_type`` returns None for the latter two => param dropped.
+  Unknown type tags fall back to ``(STRING, TEXT)``.
+- Type tags are matched lowercased; ``_TYPE_MAP`` keys must be
+  lowercase. Empty type tag = switch = boolean.
+- Multi-parameter-set handling: when >1 non-``(All)`` sets exist,
+  params outside ``(All)`` are forced ``required=False`` (user may
+  pick a different set). Booleans are ALWAYS ``required=False``.
+- Template construction is positional-aware: a param is emitted
+  bare ``{id}`` only if ``Position?`` is non-``Named`` AND digit;
+  otherwise it's a ``["-Flag", "{id}"]`` token group. Booleans emit
+  ``{id?-Flag}``. Final argv =
+  ``["-NoProfile","-Command", <cmdlet>, *tokens]``.
+- ``_flag_to_id`` does CamelCase→snake_case then uniquifies; an
+  empty/invalid id drops the param. Returns ``""`` (not None) on
+  failure — callers test falsiness.
 """
 from __future__ import annotations
 
@@ -138,9 +167,24 @@ def _extract_parameters(text: str) -> list[_ParsedParam]:
 
     # Find where the section ends (next top-level header like INPUTS,
     # OUTPUTS, ALIASES, REMARKS, NOTES, EXAMPLES, etc.).
+    #
+    # L4 fix: the old regex ``^[A-Z][A-Z]+\s*$`` only matched a
+    # single all-caps WORD — so the standard ``Get-Help -Full``
+    # multi-word terminator ``RELATED LINKS`` (and any spaced
+    # header) slipped through and its text got swallowed into the
+    # PARAMETERS block.  Match the known top-level section headers
+    # explicitly (allowing internal spaces, optional trailing
+    # whitespace).  This is precise (won't false-positive on an
+    # all-caps parameter value line) and covers the real header set.
+    # The ``i > 0`` guard stays: line 0 is the line immediately
+    # after the PARAMETERS header — never itself a terminator.
+    _PS_SECTION_END = re.compile(
+        r"^(INPUTS|OUTPUTS|NOTES|EXAMPLES|REMARKS|ALIASES|"
+        r"RELATED LINKS|SYNTAX|DESCRIPTION|SYNOPSIS)\s*$"
+    )
     end = len(lines)
     for i, line in enumerate(lines):
-        if i > 0 and re.match(r"^[A-Z][A-Z]+\s*$", line):
+        if i > 0 and _PS_SECTION_END.match(line):
             end = i
             break
 
@@ -236,11 +280,11 @@ _TYPE_MAP: dict[str, tuple[ParamType, Widget]] = {
     "uint32": (ParamType.INTEGER, Widget.NUMBER),
     "uint64": (ParamType.INTEGER, Widget.NUMBER),
     "long": (ParamType.INTEGER, Widget.NUMBER),
-    "double": (ParamType.FLOAT, Widget.NUMBER),
-    "float": (ParamType.FLOAT, Widget.NUMBER),
-    "decimal": (ParamType.FLOAT, Widget.NUMBER),
-    "bool": (ParamType.BOOL, Widget.CHECKBOX),
-    "switch": (ParamType.BOOL, Widget.CHECKBOX),
+    "double": (ParamType.NUMBER, Widget.NUMBER),
+    "float": (ParamType.NUMBER, Widget.NUMBER),
+    "decimal": (ParamType.NUMBER, Widget.NUMBER),
+    "bool": (ParamType.BOOLEAN, Widget.CHECKBOX),
+    "switch": (ParamType.BOOLEAN, Widget.CHECKBOX),
     "datetime": (ParamType.STRING, Widget.TEXT),
     "timespan": (ParamType.STRING, Widget.TEXT),
     "uri": (ParamType.STRING, Widget.TEXT),
@@ -274,7 +318,7 @@ def _map_type(type_tag: str) -> tuple[ParamType, Widget] | None:
     lower = type_tag.lower().strip()
     if not lower:
         # No type tag = switch parameter → boolean.
-        return (ParamType.BOOL, Widget.CHECKBOX)
+        return (ParamType.BOOLEAN, Widget.CHECKBOX)
     if lower in _SKIP_TYPES:
         return None
     if lower in _PIPELINE_ONLY_TYPES:
@@ -359,13 +403,13 @@ def detect(help_text: str) -> ToolDef | None:
         if has_multiple_sets and pp.param_set != "(All)":
             required = False
 
-        if ptype is ParamType.BOOL:
+        if ptype is ParamType.BOOLEAN:
             # Switch / bool parameters → conditional flag.
             params.append(ParamDef(
                 id=pid,
                 label=label,
                 description=pp.description,
-                type=ParamType.BOOL,
+                type=ParamType.BOOLEAN,
                 widget=Widget.CHECKBOX,
                 required=False,  # bool flags are never "required"
                 default=False,

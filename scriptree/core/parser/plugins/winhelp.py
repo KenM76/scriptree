@@ -1,5 +1,7 @@
 """Tier-1 parser for Windows-style ``/?`` help text.
 
+## For humans
+
 Windows command-line tools (tasklist, taskkill, sc, net, robocopy, xcopy,
 reg, schtasks, …) almost all follow the same help layout:
 
@@ -23,6 +25,42 @@ Masked widget hint: if the flag name is ``/P`` or the metavar mentions
 ``password``, the description is tagged so the editor knows to render
 it with masked entry (v2 feature — v1 just uses a regular text widget
 but flags the param via its description).
+
+## For maintainers / LLMs
+
+- EDITOR-time plugin. ``PRIORITY=30`` — last specific parser before
+  the 999 heuristic. Detection is intentionally LOOSE (a
+  Parameter-List header OR an all-caps ``NAME [/`` usage line OR
+  ≥2 slash-flag lines), so it must stay highest-numbered of the
+  specific plugins or it would steal argparse/click text. The
+  ``options`` header is deliberately excluded from
+  ``_PARAMETER_LIST_HEADER`` for the same reason — do not add it.
+- Three-regex-per-line cascade in ``_parse_flag_block``, order is
+  load-bearing: strict (``_WIN_FLAG_LINE``, needs ≥2-space gap
+  before desc so a metavar isn't eaten) → loose (1-space gap, only
+  for flush flags like ``/OFF[LINE]``) → positional. Reordering or
+  loosening the strict form re-breaks the tasklist-``/S system``
+  vs find-``/OFF[LINE]`` tension.
+- ``_canonical_flag`` strips the ``[...]`` optional-suffix
+  (``/OFF[LINE]`` → ``/OFF``) and that short form is what goes in
+  the template; both forms are tool-accepted. ``/?``,``/H``,
+  ``/HELP`` flags are dropped after canonicalization.
+- Value flags → ``[flag, "{id}"]`` token group (TWO argv tokens,
+  never ``/X=val``). Bare flags → ``{id?flag}``. Positionals are
+  appended AFTER all flag tokens (matches Windows usage docs).
+- Quoted-string positionals (``"string"``) are wrapped in LITERAL
+  double quotes in the template (``'"{id}"'``) because find/findstr
+  re-parse their own command line; the description gets a prepended
+  note. Bracket/angle positionals default to PATH/FILE then keyword
+  promotion may downgrade to folder.
+- ``_extract_choices`` prefers quoted tokens after ``Valid
+  values:``; unquoted fallback splits on commas and drops
+  ``|``-prefixed tokens. ``_synth_id`` prefers the metavar's LAST
+  underscore segment (``domain_user`` → ``user``); id helpers
+  return ``""`` (not None) on failure and callers test falsiness.
+- ``_PROMOTE_RULES`` here is a deliberately smaller inlined copy of
+  ``_core._KEYWORD_RULES`` (avoids a circular import); they can
+  drift — update both if promotion behaviour must stay aligned.
 """
 from __future__ import annotations
 
@@ -173,14 +211,25 @@ def _extract_flag_block(lines: list[str]) -> list[_ParsedFlag]:
 
     # Find the end: next all-caps header like "Filters:", "Examples:",
     # "NOTE:", or a line at col 0 starting with a letter.
+    #
+    # M3 fix: the old guard ``if i > start`` was meant to skip the
+    # just-consumed Parameter-List header — but when a header IS
+    # found we set ``start = i + 1``, so the header sits at
+    # ``start - 1`` and is already outside ``range(start, …)``; the
+    # guard never needed to protect it.  Worse, ``i > start``
+    # (strictly greater) made a colon-header sitting on the FIRST
+    # line of the block (``i == start``) fail to end the section, so
+    # it got mis-parsed as flag content — and in the no-header case
+    # (``start == 0``) a leading ``Description:`` line never
+    # terminated the (empty) param block.  The header line is always
+    # excluded by the range start, so the first colon-header at
+    # ``i >= start`` is unconditionally the section end.
     end = len(lines)
     for i in range(start, len(lines)):
         line = lines[i]
         if re.match(r"^[A-Z][A-Za-z ]*:\s*$", line):
-            # But skip if we just consumed the Parameter List header.
-            if i > start:
-                end = i
-                break
+            end = i
+            break
 
     block = lines[start:end]
     return _parse_flag_block(block)
@@ -436,7 +485,7 @@ def detect(help_text: str) -> ToolDef | None:
             else:
                 # Bracketed or angle-wrapped → probably a file path.
                 ptype = ParamType.PATH
-                widget = Widget.FILE_OPEN
+                widget = Widget.FILE
                 # Let keyword promotion downgrade to folder if needed.
                 promoted = _promote_by_keyword(pf.description, raw)
                 if promoted:
@@ -508,7 +557,7 @@ def detect(help_text: str) -> ToolDef | None:
                     id=pid,
                     label=label,
                     description=pf.description,
-                    type=ParamType.BOOL,
+                    type=ParamType.BOOLEAN,
                     widget=Widget.CHECKBOX,
                     required=False,
                     default=False,
@@ -536,9 +585,9 @@ def detect(help_text: str) -> ToolDef | None:
 
 _PROMOTE_RULES: list[tuple[re.Pattern[str], ParamType, Widget]] = [
     (re.compile(r"\b(directory|folder)\b", re.I), ParamType.PATH, Widget.FOLDER),
-    (re.compile(r"\boutput\s+file\b", re.I), ParamType.PATH, Widget.FILE_SAVE),
-    (re.compile(r"\binput\s+file\b", re.I), ParamType.PATH, Widget.FILE_OPEN),
-    (re.compile(r"\bpath\s+to\b", re.I), ParamType.PATH, Widget.FILE_OPEN),
+    (re.compile(r"\boutput\s+file\b", re.I), ParamType.PATH, Widget.SAVE_FILE),
+    (re.compile(r"\binput\s+file\b", re.I), ParamType.PATH, Widget.FILE),
+    (re.compile(r"\bpath\s+to\b", re.I), ParamType.PATH, Widget.FILE),
     (re.compile(r"\b(port|count|number of|size|limit)\b", re.I),
      ParamType.INTEGER, Widget.NUMBER),
 ]

@@ -436,7 +436,7 @@ def detect(help_text: str) -> ToolDef | None:
             else:
                 # Bracketed or angle-wrapped → probably a file path.
                 ptype = ParamType.PATH
-                widget = Widget.FILE_OPEN
+                widget = Widget.FILE
                 # Let keyword promotion downgrade to folder if needed.
                 promoted = _promote_by_keyword(pf.description, raw)
                 if promoted:
@@ -508,7 +508,7 @@ def detect(help_text: str) -> ToolDef | None:
                     id=pid,
                     label=label,
                     description=pf.description,
-                    type=ParamType.BOOL,
+                    type=ParamType.BOOLEAN,
                     widget=Widget.CHECKBOX,
                     required=False,
                     default=False,
@@ -536,9 +536,9 @@ def detect(help_text: str) -> ToolDef | None:
 
 _PROMOTE_RULES: list[tuple[re.Pattern[str], ParamType, Widget]] = [
     (re.compile(r"\b(directory|folder)\b", re.I), ParamType.PATH, Widget.FOLDER),
-    (re.compile(r"\boutput\s+file\b", re.I), ParamType.PATH, Widget.FILE_SAVE),
-    (re.compile(r"\binput\s+file\b", re.I), ParamType.PATH, Widget.FILE_OPEN),
-    (re.compile(r"\bpath\s+to\b", re.I), ParamType.PATH, Widget.FILE_OPEN),
+    (re.compile(r"\boutput\s+file\b", re.I), ParamType.PATH, Widget.SAVE_FILE),
+    (re.compile(r"\binput\s+file\b", re.I), ParamType.PATH, Widget.FILE),
+    (re.compile(r"\bpath\s+to\b", re.I), ParamType.PATH, Widget.FILE),
     (re.compile(r"\b(port|count|number of|size|limit)\b", re.I),
      ParamType.INTEGER, Widget.NUMBER),
 ]

@@ -1,10 +1,52 @@
 """Dialog for editing tree-level configurations.
 
+## For humans
+
 A tree configuration maps each leaf tool in a ``.scriptreetree`` to a
 named configuration from that tool's sidecar. This dialog shows a list
 of tools with a dropdown for each, lets the user pick which config each
 tool should use in standalone mode, and saves the result to the tree's
-sidecar file.
+sidecar file. It also offers Save / Save As / Delete and switching
+between named tree configurations. A ``read_only`` flag disables the
+write controls.
+
+## For maintainers / LLMs
+
+- ``_collect_leaf_paths`` recurses folders but SKIPS nested
+  ``.scriptreetree`` leaves (only direct ``.scriptree`` tools get a
+  row); display name is the file stem. Relative paths from the tree
+  are the dict keys throughout — tool paths are resolved against
+  ``self._tree_dir`` only when reading a tool's sidecar.
+- The per-tool combo's first item is the literal ``"(default)"``
+  meaning "use the tool's own active config" — it maps to an ABSENT
+  key in ``tool_configs``, not the string ``"(default)"``.
+  ``_read_form_into_config`` deliberately omits any combo left on
+  ``"(default)"``; ``_load_active_into_form`` falls back to index 0
+  when the stored value isn't found. Keep that empty-string /
+  missing-key sentinel convention.
+- ``_available_configs_for_tool`` always returns at least
+  ``["default"]`` and EXCLUDES ``SAFETREE_CONFIG_NAME`` (users must
+  not pick the reserved safetree fallback manually). A missing tool
+  file degrades to ``["default"]`` rather than erroring.
+- Re-entrancy guard: ``_cfg_loading`` is set around
+  ``_refresh_combo`` so the programmatic ``clear()`` /
+  ``setCurrentIndex`` does not fire ``_on_combo_changed`` (which
+  would switch the active config mid-rebuild). Always wrap combo
+  repopulation in this flag.
+- Save semantics: ``_save_current`` flushes the form into the active
+  config THEN writes the whole set; ``_on_accept`` calls
+  ``_save_current`` before ``accept()`` so OK persists pending edits
+  even if the user never pressed Save. Switching tree configs via the
+  combo silently discards unsaved per-tool edits (``_on_combo_changed``
+  reloads the form) — known behaviour, not a save-on-switch.
+- ``_save_as`` rejects reserved names (``is_reserved_config_name``)
+  and confirms before overwriting an existing tree config. ``Delete``
+  is disabled when only one config remains (a set must keep ≥1); after
+  delete, ``active`` is reset to ``configurations[0].name``.
+- ``read_only`` only disables Save/Save As/Delete buttons — combos
+  remain interactive and OK still calls ``_save_current``; if true
+  read-only is required, the accept path must also be gated (it
+  currently is NOT). See bug audit.
 """
 from __future__ import annotations
 
@@ -310,5 +352,13 @@ class TreeConfigEditorDialog(QDialog):
     # --- accept ---
 
     def _on_accept(self) -> None:
+        # M7 fix: the constructor only disables the Save/Save-As/
+        # Delete *buttons* for a read-only tree — but OK still ran
+        # ``_save_current`` and clobbered the tree-config sidecar of
+        # a locked/vendored tree, defeating the read-only contract.
+        # Honour read-only here: just close without writing.
+        if self._read_only:
+            self.accept()
+            return
         self._save_current()
         self.accept()

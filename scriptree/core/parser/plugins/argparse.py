@@ -1,5 +1,7 @@
 """Plugin: Python argparse detector.
 
+## For humans
+
 argparse has a very recognizable shape::
 
     usage: PROG [-h] [--flag] POSITIONAL
@@ -17,6 +19,25 @@ argparse has a very recognizable shape::
 Older Python versions say ``optional arguments:`` instead of ``options:``.
 If we detect this shape we reuse the shared heuristic parser (which
 already handles argparse's formatting well) and just retag the source.
+
+## For maintainers / LLMs
+
+- EDITOR-time plugin. ``PRIORITY=10`` (runs before click at 20,
+  powershell 25, winhelp 30, heuristic 999) — it should win for any
+  genuine argparse output.
+- Detection requires BOTH a ``usage:`` prefix (case-insensitive) AND
+  an ``options:``/``optional arguments:`` header line. Older Python
+  emits ``optional arguments:``; keep both alternatives in
+  ``_ARGPARSE_SIGNATURE`` or pre-3.10 tools stop detecting.
+- Parsing is delegated to ``_core.parse_heuristic``; this plugin
+  only retags ``source.mode = "argparse"`` and strips the synthetic
+  ``help`` entry. That strip depends on ``parse_heuristic`` emitting
+  a param with ``id == "help"`` and template tokens containing
+  ``"{help"`` — a contract shared with the click plugin's identical
+  ``_keep_entry``. Change one, change both.
+- ``_keep_entry`` handles list (token-group) and str template
+  entries; the literal ``entry != "{help}"`` guard is redundant with
+  the ``"{help" not in entry`` check but kept for clarity — harmless.
 """
 from __future__ import annotations
 

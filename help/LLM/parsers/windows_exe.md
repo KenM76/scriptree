@@ -79,10 +79,10 @@ static void PrintHelp()
 }
 ```
 
-ScripTree's heuristic parser produces: `input` (file_open, required),
-`output` (file_save, optional), `/V` checkbox, `/N` number spin box
+ScripTree's heuristic parser produces: `input` (file, required),
+`output` (save_file, optional), `/V` checkbox, `/N` number spin box
 (keyword "number" in description), `/MODE` dropdown with three
-choices (extracted from the description), `/OUT` file_save picker.
+choices (extracted from the description), `/OUT` save_file picker.
 
 ## Alternative: System.CommandLine (preferred for new code)
 
@@ -136,3 +136,19 @@ Then import into ScripTree and confirm the produced draft has the
 right param count, types, and widgets. Iterate on the help text, not
 on the `.scriptree` file — the `.scriptree` is regenerated any time
 the tool is re-parsed.
+
+## Ship a standalone-mode configuration
+
+After the `.scriptree` is generated, also write a sidecar
+`<tool>.scriptree.configs.json` with a `"standalone"` configuration
+marked as `default_name`.  That configuration's `ui_visibility`
+block should turn OFF the developer-facing widgets — `extras_box`,
+`command_line`, `copy_argv`, `env_button`, `tools_sidebar` — and
+turn ON `popup_on_error` and `popup_on_success` so the end user
+gets clear close-the-loop feedback.  Only deviate from that recipe
+when a specific control is genuinely useful for the tool's
+purpose (e.g. a diagnostic tool that needs `command_line` visible).
+
+See `help/LLM/configurations_sidecar.md` → "Standalone-mode recipe"
+for the full JSON shape, the per-element rationale, and the
+exceptions.

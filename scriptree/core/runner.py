@@ -1,10 +1,12 @@
 """Argv template substitution and subprocess spawn.
 
+## For humans
+
 Pure Python, no Qt. The UI layer wires the subprocess stdout/stderr
 streams into an output pane, but the business logic lives here so it
 can be unit-tested headlessly.
 
-## Template syntax
+### Template syntax
 
 Each entry in ``ToolDef.argument_template`` is either:
 
@@ -22,6 +24,73 @@ Bools in non-conditional substitution are emitted as "true" / "false".
 Empty substitutions (optional non-required params left blank) cause the
 whole token to be dropped — so you can write ``--name={name}`` and it'll
 either emit ``--name=foo`` or nothing at all.
+
+Beyond template substitution this module also owns: path resolution
+relative to the .scriptree (``resolve_tool_path``), the Python
+runtime-shim splice (``_inject_runtime_shim``), environment layering
+(``build_env`` / ``inject_tool_dir_env``), the two spawn paths
+(``spawn_streaming`` and the Windows run-as-user
+``spawn_streaming_as_user``), and the reverse direction —
+parsing an edited command line back into widget values
+(``reconcile_edit``).
+
+## For maintainers / LLMs
+
+* Keep Qt-free (it is headless-testable and on the no-Qt path). The
+  only lazy imports are stdlib (``sys``, ``time``, ``threading``,
+  ``msvcrt``, ``ctypes``) and the sibling ``.sanitize.split_command``.
+* Spawn safety: every spawn passes a LIST argv with ``shell=False``
+  (or, on the run-as-user path, builds the command line with explicit
+  quoting). ``reconcile_edit`` deliberately DROPS the edited argv[0]
+  and rebuilds the executable from ``tool.executable`` so a user
+  editing the preview can't change which program runs — do not
+  "restore" argv[0] from the edited text.
+* ``resolve_tool_path`` order is load-bearing: expandvars FIRST,
+  then absolute/UNC short-circuit, then anchor against
+  ``tool.loaded_from``'s dir, then the exists-check fallback that
+  lets bare names (``python``) defer to PATH. Reordering changes
+  which files resolve. ``providers.resolve_provider`` reuses this
+  exact function — they must stay behaviourally identical.
+* Shim splice (``_inject_runtime_shim``) only fires for
+  python/pythonw + a script-shaped argv[1]; it is a NO-OP (returns
+  argv unchanged) for native exes, ``py.exe``, ``-c``/``-m``/``-X``,
+  or a missing shim file. If you change the shape it produces, also
+  update ``scriptree/core/_runtime_shim.py`` (they are a contract:
+  ``[python, shim, tool.py, ...args]``).
+* ``build_env`` returns ``None`` when there is nothing to override
+  (so the child inherits the parent env verbatim — keeps tracebacks
+  readable). Callers MUST treat ``None`` as "pass env=None to Popen",
+  not "empty env". Layering order is documented inline and differs
+  under ``global_*_overrides`` flags — change both the code and the
+  docstring table together.
+* ``inject_tool_dir_env`` runs AFTER ``build_env`` in
+  ``build_full_argv`` so user PYTHONPATH wins at the head; it is
+  idempotent on ``SCRIPTREE_TOOL_DIR`` and de-dupes the PYTHONPATH
+  head. It pairs with the bundled ``sitecustomize.py`` and the
+  runtime shim — three layers solving the embeddable-Python
+  restricted-sys.path problem; don't remove one assuming the others
+  cover it.
+* ``_argv_split`` / ``reconcile_edit`` use a non-POSIX ``shlex``
+  validator to reject unclosed quotes on every platform WITHOUT
+  mangling Windows backslashes, then split via
+  ``sanitize.split_command`` (CommandLineToArgvW) on Windows or
+  ``shlex.split(posix=True)`` elsewhere. An unclosed quote returns
+  the value unchanged / ``ok=False`` (treated as "user mid-typing"),
+  never a partial parse.
+* String-passthrough auto-split (``_is_string_passthrough``) only
+  applies to a standalone ``{id}`` of a STRING param without
+  ``no_split``. Embedded/conditional/non-string keep single-token
+  semantics. This is observable tool behaviour — see
+  ``help/LLM/argument_template.md``; don't widen it silently.
+* ``resolve`` honours ``visible_when`` / ``required_when``: a field
+  hidden by ``visible_when`` is exempt from the required check
+  (lazy-imports ``visible_when.evaluate``). Preview callers pass
+  ``ignore_required=True`` to skip the whole block.
+* Run-as-user path is Windows-only ctypes; it zeroes the password
+  buffer immediately after ``CreateProcessWithLogonW`` and closes
+  pipe write-ends in the parent. Any change there must preserve the
+  password-wipe and handle-inheritance setup (read ends NOT
+  inherited) or it leaks credentials / hangs the child.
 """
 from __future__ import annotations
 
@@ -162,9 +231,28 @@ def resolve(
     errors: list[str] = []
 
     # Required-value check (skipped for preview).
+    #
+    # v0.4.0 — honour ``visible_when`` and ``required_when``:
+    #   * A field hidden by ``visible_when`` is exempt from the
+    #     required check (and from required_when too) — its row
+    #     doesn't exist in the form, so requiring it would be a
+    #     bug-magnet.
+    #   * A field's effective requirement is
+    #     ``required_when`` (when set) OR static ``required``.
     if not ignore_required:
+        from scriptree.core.visible_when import evaluate as _vw_eval
         for p in tool.params:
-            if p.required and _is_empty(values.get(p.id)):
+            vw = getattr(p, "visible_when", "") or ""
+            if vw and not _vw_eval(vw, values):
+                continue  # hidden — skip the required check
+            rw = getattr(p, "required_when", "") or ""
+            if rw:
+                if not _vw_eval(rw, values):
+                    continue  # not required in this mode
+                effective_required = True
+            else:
+                effective_required = p.required
+            if effective_required and _is_empty(values.get(p.id)):
                 errors.append(f"Required parameter {p.label!r} is empty.")
         if errors:
             raise RunnerError("\n".join(errors))
@@ -214,10 +302,121 @@ def resolve(
     else:
         # Default to the executable's directory so tools that read
         # config files relative to their own location still work.
+        # L2 fix: for a bare exe name (``python``) ``Path.parent`` is
+        # ``Path('.')`` whose ``as_posix()`` is the truthy string
+        # ``"."`` — that made cwd ``"."`` instead of ``None``,
+        # diverging from the documented "no anchor → inherit process
+        # CWD" intent (and from ``build_env``'s analogous check).
+        # Treat ``""``/``"."`` as "no directory".
         exe_parent = Path(exe).parent
-        cwd = str(exe_parent) if exe_parent.as_posix() else None
+        cwd = str(exe_parent) if str(exe_parent) not in ("", ".") else None
+
+    # V3 v0.3.13+ — when the tool spawns Python, splice in the
+    # ScripTree runtime shim so sibling imports (`import _foo` from
+    # a sibling .py file) work reliably.  See ``_inject_runtime_shim``
+    # for the detection rules and the rationale.
+    argv = _inject_runtime_shim(argv)
 
     return ResolvedCommand(argv=argv, cwd=cwd)
+
+
+# Filename patterns that mark a Python interpreter — used by
+# ``_inject_runtime_shim`` to decide whether to splice the shim in.
+# We match by basename (case-folded on Windows) so ``python``,
+# ``python3``, ``python.exe``, ``pythonw.exe``, ``python3.13.exe``
+# all qualify.  Bare ``py`` (the Windows launcher) is intentionally
+# excluded because it has its own argv parsing rules — splicing
+# into ``py -3 script.py`` would land the shim in the wrong slot.
+_PYTHON_EXE_PREFIXES = ("python", "pythonw")
+
+
+def _looks_like_python_interpreter(arg: str) -> bool:
+    """Return True if ``arg`` looks like a Python interpreter path.
+
+    Matches ``python``, ``python3``, ``python.exe``, ``pythonw.exe``,
+    ``python3.13.exe``, and various absolute / relative path forms
+    of the same.  Doesn't match ``py.exe`` (the Windows launcher) —
+    that one has its own argv conventions and would need separate
+    handling if we ever decided to support it.
+    """
+    if not arg:
+        return False
+    name = os.path.basename(arg).lower()
+    # Strip a trailing ``.exe`` for the prefix check.
+    if name.endswith(".exe"):
+        name = name[:-4]
+    for prefix in _PYTHON_EXE_PREFIXES:
+        if name == prefix or name.startswith(prefix + "3") or name.startswith(prefix + "2"):
+            return True
+    # Bare ``python`` / ``pythonw`` exact matches handled above.
+    return False
+
+
+def _looks_like_script_path(arg: str) -> bool:
+    """Return True when ``arg`` looks like a Python source script
+    rather than a flag or option-value the user happens to put first.
+
+    The rule is conservative: we only splice the shim BEFORE a real
+    script reference.  If argv[1] is ``-c``, ``-m``, ``-`` (stdin),
+    or ``-X foo``, we leave the command alone — the shim only
+    handles the ``python script.py args`` shape.
+    """
+    if not arg:
+        return False
+    if arg.startswith("-"):
+        return False
+    # Accept any path-shaped reference.  The shim itself defends
+    # against bogus paths (FileNotFoundError → clear error).
+    return arg.endswith(".py") or arg.endswith(".pyw") or os.sep in arg or "/" in arg
+
+
+def _inject_runtime_shim(argv: list[str]) -> list[str]:
+    """Splice the ScripTree runtime shim between the Python
+    interpreter and the script it's about to run.
+
+    Input shape (no shim)::
+
+        [python.exe, tool.py, --flag, value, ...]
+
+    Output shape (shim spliced in)::
+
+        [python.exe, <abs path to _runtime_shim.py>, tool.py,
+         --flag, value, ...]
+
+    The shim then handles ``sys.path`` setup before delegating to
+    the real tool via ``runpy.run_path``.  See
+    ``scriptree/core/_runtime_shim.py`` for what runs inside the
+    spawned process.
+
+    No-op cases (argv is returned unchanged):
+      * argv has fewer than 2 entries.
+      * argv[0] doesn't look like a Python interpreter (the tool
+        is a native exe, .bat, etc. — sibling-import quirks don't
+        apply).
+      * argv[1] is a Python flag like ``-c``, ``-m``, ``-X opt`` —
+        the shim only handles the ``python script.py`` shape, and
+        splicing it elsewhere would break the user's CLI.
+      * The shim file itself can't be located on disk (e.g. a
+        broken install).  Failing safe: skip splicing and let the
+        tool run with whatever path setup Python provides natively;
+        sibling imports may fail but the tool still launches.
+    """
+    if len(argv) < 2:
+        return argv
+    if not _looks_like_python_interpreter(argv[0]):
+        return argv
+    if not _looks_like_script_path(argv[1]):
+        return argv
+
+    # Locate the shim.  This file lives at scriptree/core/runner.py;
+    # the shim is its sibling.
+    shim_path = Path(__file__).resolve().parent / "_runtime_shim.py"
+    if not shim_path.is_file():
+        # Broken install — the shim should always be next to the
+        # runner.  Skip splicing rather than fail the run.
+        return argv
+
+    return [argv[0], str(shim_path), *argv[1:]]
 
 
 def _resolve_token(
@@ -277,7 +476,7 @@ def _resolve_conditional(
     param = param_map[name]
     val = values.get(name, param.default)
 
-    if param.type is ParamType.BOOL:
+    if param.type is ParamType.BOOLEAN:
         return flag if _is_truthy(val) else None
 
     # For non-bool params, "?--flag=" means "emit --flag=<value>" when
@@ -295,7 +494,7 @@ def _resolve_conditional(
 def _value_to_str(val: Any, param: ParamDef) -> str:
     if val is None:
         return ""
-    if param.type is ParamType.BOOL:
+    if param.type is ParamType.BOOLEAN:
         return "true" if _is_truthy(val) else "false"
     if isinstance(val, (list, tuple)):
         return ",".join(str(x) for x in val)
@@ -406,6 +605,7 @@ def build_env(
     global_env_overrides: bool = False,
     global_path_prepend: list[str] | None = None,
     global_path_overrides: bool = False,
+    tree_path_prepend: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Merge environment overrides into an effective child environment.
 
@@ -424,10 +624,25 @@ def build_env(
         config_env
         global_env              ← overrides everything
 
-    ``path_prepend`` entries from the tool and the configuration are
-    concatenated (tool first, config second) and prepended to the
-    resulting ``PATH``. Relative directories are resolved against the
-    tool's ``working_directory`` if one is set, else the executable's
+    ``path_prepend`` entries are concatenated and prepended to ``PATH``.
+    Default order (earliest = highest search priority)::
+
+        [tool.path_prepend, config_path_prepend, tree_path_prepend,
+         global_path_prepend, original PATH]
+
+    When ``global_path_overrides`` is True, global goes first::
+
+        [global_path_prepend, tool.path_prepend, config_path_prepend,
+         tree_path_prepend, original PATH]
+
+    The **tree** layer (V3 v0.3.2+) carries a ``.scriptreetree``'s
+    own ``path_prepend`` list when a tool is launched through that
+    tree.  Per the documented intent on ``TreeDef.path_prepend``:
+    "tree-wide overrides win over global but lose to per-tool".
+    Pass ``None`` (the default) when no parent tree exists.
+
+    Relative directories are resolved against the tool's
+    ``working_directory`` if one is set, else the executable's
     directory.
 
     Returns ``None`` when there's nothing to override — the caller can
@@ -441,9 +656,11 @@ def build_env(
     tool_paths = list(tool.path_prepend or [])
     cfg_paths = list(config_path_prepend or [])
     g_paths = list(global_path_prepend or [])
+    tree_paths = list(tree_path_prepend or [])
 
     if (not tool_env and not cfg_env and not tool_paths
-            and not cfg_paths and not g_env and not g_paths):
+            and not cfg_paths and not g_env and not g_paths
+            and not tree_paths):
         return None
 
     env = dict(base_env if base_env is not None else os.environ)
@@ -482,23 +699,122 @@ def build_env(
             return str(p)
         return str((anchor / p).resolve(strict=False))
 
-    # Assemble the PATH prepend list. Default order (earliest = highest
-    # search priority):
-    #   [config_paths, tool_paths, global_paths, <original PATH>]
-    #
-    # When global_path_overrides is True, global goes first:
-    #   [global_paths, config_paths, tool_paths, <original PATH>]
+    # Assemble the PATH prepend list per the layering documented above.
     tool_and_cfg = [_resolve(d) for d in (tool_paths + cfg_paths)]
+    tree_resolved = [_resolve(d) for d in tree_paths]
     global_resolved = [_resolve(d) for d in g_paths]
 
     if global_path_overrides:
-        prepend = global_resolved + tool_and_cfg
+        # [global, tool, cfg, tree, base]
+        prepend = global_resolved + tool_and_cfg + tree_resolved
     else:
-        prepend = tool_and_cfg + global_resolved
+        # [tool, cfg, tree, global, base]
+        prepend = tool_and_cfg + tree_resolved + global_resolved
 
     if prepend:
         current = env.get("PATH", "")
         env["PATH"] = os.pathsep.join([*prepend, current]) if current else os.pathsep.join(prepend)
+
+    return env
+
+
+def inject_tool_dir_env(
+    env: dict[str, str] | None,
+    tool: ToolDef,
+    *,
+    base_env: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    """Add ``SCRIPTREE_TOOL_DIR`` and ``PYTHONPATH`` entries to ``env``
+    so sibling imports inside the tool's folder always resolve.
+
+    The problem this fixes (V3 v0.3.12+):
+
+      * The Windows embeddable Python ships with a ``python<ver>._pth``
+        file that puts the interpreter in restricted-``sys.path`` mode.
+        ``PYTHONPATH`` is ignored, ``PYTHONHOME`` is ignored, and the
+        script's own directory is **not** auto-prepended to
+        ``sys.path[0]``.  A multi-file tool that does ``import _foo``
+        from a sibling module will fail with ``ModuleNotFoundError``
+        even though the same code runs fine on a system Python.
+
+        Fix on the bundled side: ``lib/python/Lib/site-packages/
+        sitecustomize.py`` reads ``SCRIPTREE_TOOL_DIR`` and prepends
+        it to ``sys.path``.  This function sets that env var here.
+
+      * System Python invocations get the script-dir auto-prepend by
+        default — but Python 3.11+ ``-P`` and ``PYTHONSAFEPATH=1``
+        disable it, and ``runpy``-style invocations have never had
+        it.  Setting ``PYTHONPATH`` covers those cases too.
+
+    Both env keys are set to the directory containing the
+    ``.scriptree`` file (i.e. ``Path(tool.loaded_from).parent``).
+    When ``loaded_from`` is unavailable the function falls back to
+    the executable's resolved parent directory; if even that's
+    not derivable, the function returns ``env`` unchanged.
+
+    Idempotent: if ``SCRIPTREE_TOOL_DIR`` is already set we don't
+    clobber it (a wrapper script may have set a more authoritative
+    value).  ``PYTHONPATH`` gets the tool dir prepended; any
+    existing entries are preserved.
+
+    Returns the (possibly-mutated) ``env`` dict, or a fresh dict
+    derived from ``base_env`` (or ``os.environ``) if ``env`` was
+    ``None`` and we have something to add.  Returns ``None`` only
+    if there's nothing to add and ``env`` was ``None`` to start.
+    """
+    # Resolve the tool's own folder.
+    tool_dir: str | None = None
+    if tool.loaded_from:
+        try:
+            tool_dir = str(Path(tool.loaded_from).resolve().parent)
+        except (OSError, ValueError, RuntimeError):
+            tool_dir = None
+    if not tool_dir and tool.executable:
+        # Fall back to the executable's parent — but only when the
+        # executable is a path-shaped reference (contains a separator
+        # or a drive prefix).  A bare name like ``echo`` is resolved
+        # by Popen via PATH at spawn time; there's no meaningful
+        # "tool directory" for those and using CWD would be a bug
+        # magnet.  We don't require the file to actually exist on
+        # disk — the .scriptree's intended folder layout is a static
+        # fact regardless of whether the binary happens to be present
+        # on the current machine.
+        exe_str = tool.executable
+        looks_pathy = (
+            "/" in exe_str or "\\" in exe_str or
+            (len(exe_str) >= 2 and exe_str[1] == ":")  # C:..., D:...
+        )
+        if looks_pathy:
+            try:
+                exe_resolved = resolve_tool_path(exe_str, tool.loaded_from)
+                tool_dir = str(Path(exe_resolved).resolve().parent)
+            except (OSError, ValueError, RuntimeError):
+                tool_dir = None
+    if not tool_dir:
+        # Nothing actionable — leave env exactly as the caller passed it.
+        return env
+
+    # Materialise an env dict to mutate.  When env is None we'd
+    # otherwise inherit the parent's verbatim; now that we DO have
+    # something to add, copy from base_env (or os.environ) so the
+    # final block is complete.
+    if env is None:
+        env = dict(base_env if base_env is not None else os.environ)
+
+    # SCRIPTREE_TOOL_DIR — only set if the caller / tool didn't already.
+    if not env.get("SCRIPTREE_TOOL_DIR"):
+        env["SCRIPTREE_TOOL_DIR"] = tool_dir
+
+    # PYTHONPATH — prepend the tool dir (preserving any existing entries).
+    existing_pp = env.get("PYTHONPATH", "")
+    if not existing_pp:
+        env["PYTHONPATH"] = tool_dir
+    else:
+        # Avoid duplicating if the tool dir is already at the front.
+        first = existing_pp.split(os.pathsep, 1)[0]
+        if os.path.normcase(os.path.abspath(first or ".")) != \
+                os.path.normcase(os.path.abspath(tool_dir)):
+            env["PYTHONPATH"] = os.pathsep.join([tool_dir, existing_pp])
 
     return env
 
@@ -509,6 +825,7 @@ def spawn_streaming(
     on_stderr_line: Callable[[str], None],
     *,
     on_start: Callable[[subprocess.Popen], None] | None = None,
+    interactive: bool = False,
 ) -> RunResult:
     """Run the command, streaming stdout/stderr line-by-line to callbacks.
 
@@ -520,14 +837,24 @@ def spawn_streaming(
     begins. The UI layer uses this to stash the handle so a Stop
     button can call :meth:`Popen.terminate`/:meth:`Popen.kill` from
     the GUI thread without racing the pump threads.
+
+    ``interactive`` (V3 v0.3.0) — when ``True``, the child's stdin is
+    opened as a pipe so the UI can ``proc.stdin.write(...)`` /
+    ``flush()`` while the process is running.  Default ``False``
+    leaves stdin closed (DEVNULL on Windows / inherited elsewhere),
+    matching pre-v0.3 behaviour.  The flag is independent of the
+    ``interactive_stdin`` permission gate — that gate is applied at
+    the UI layer; this function trusts its caller.
     """
     import time
 
     start = time.monotonic()
+    stdin_arg = subprocess.PIPE if interactive else subprocess.DEVNULL
     proc = subprocess.Popen(
         cmd.argv,
         cwd=cmd.cwd,
         env=cmd.env,
+        stdin=stdin_arg,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -676,9 +1003,15 @@ def spawn_streaming_as_user(
     pi = PROCESS_INFORMATION()
 
     # Build command line string.
-    cmd_line = " ".join(
-        f'"{a}"' if " " in a or '"' in a else a for a in cmd.argv
-    )
+    # L1 fix: the old hand-rolled quoting (``f'"{a}"' if " " in a or
+    # '"' in a else a``) wrapped an arg containing a ``"`` in quotes
+    # WITHOUT escaping the inner quote, producing a malformed /
+    # mis-split command line for ``CreateProcessWithLogonW``
+    # (argument corruption / injection).  ``subprocess.list2cmdline``
+    # implements the exact MS C runtime quoting rules (backslash +
+    # quote handling) and is what the non-elevated path already uses
+    # (see ``ResolvedCommand.display``); use it here too.
+    cmd_line = subprocess.list2cmdline(cmd.argv)
 
     # Build environment block (null-terminated key=val pairs, double-null end).
     env_block = None
@@ -737,12 +1070,26 @@ def spawn_streaming_as_user(
 
     # Notify caller with a lightweight Popen-like wrapper for Stop.
     class _ProcProxy:
-        """Minimal Popen-like wrapper for the Stop button."""
+        """Minimal Popen-like wrapper for the Stop button.
+
+        H1 fix: this object outlives the function (the caller stores
+        it via ``on_start`` for the Stop button).  The OS process
+        handle is closed once the child exits and this function
+        returns; without a guard, a Stop click *after* natural exit
+        would call ``TerminateProcess`` / ``GetExitCodeProcess`` on a
+        closed handle whose value the OS may have RECYCLED for an
+        unrelated object — i.e. Stop could kill the wrong handle.
+        ``close(exit_code)`` latches the final return code and marks
+        the proxy dead; every method no-ops once closed.
+        """
         def __init__(self, hProcess: int, pid: int):
             self._hProcess = hProcess
             self.pid = pid
             self.returncode: int | None = None
+            self._closed = False
         def poll(self) -> int | None:
+            if self._closed:
+                return self.returncode
             ret = wt.DWORD()
             if kernel32.GetExitCodeProcess(self._hProcess, ctypes.byref(ret)):
                 if ret.value != 259:  # STILL_ACTIVE
@@ -750,9 +1097,20 @@ def spawn_streaming_as_user(
                     return ret.value
             return None
         def terminate(self) -> None:
+            if self._closed:
+                return
             kernel32.TerminateProcess(self._hProcess, 1)
         def kill(self) -> None:
+            if self._closed:
+                return
             kernel32.TerminateProcess(self._hProcess, 1)
+        def close(self, exit_code: int | None = None) -> None:
+            """Latch the final exit code and mark the proxy dead so
+            no later Stop click touches the (about-to-be-closed,
+            possibly-recycled) handle."""
+            if exit_code is not None:
+                self.returncode = exit_code
+            self._closed = True
 
     proxy = _ProcProxy(pi.hProcess, pi.dwProcessId)
     if on_start is not None:
@@ -779,6 +1137,11 @@ def spawn_streaming_as_user(
     exit_code = ret.value
 
     stderr_thread.join(timeout=2.0)
+    # H1 fix: mark the proxy dead (latching the real exit code)
+    # BEFORE closing the handle, so a Stop click racing this teardown
+    # — or any later one — sees a closed proxy and no-ops instead of
+    # calling TerminateProcess on a soon-to-be-recycled handle value.
+    proxy.close(exit_code)
     kernel32.CloseHandle(pi.hProcess)
 
     return RunResult(
@@ -1072,6 +1435,7 @@ def build_full_argv(
     global_env_overrides: bool = False,
     global_path_prepend: list[str] | None = None,
     global_path_overrides: bool = False,
+    tree_path_prepend: list[str] | None = None,
 ) -> ResolvedCommand:
     """Resolve ``tool`` and append user-added extras.
 
@@ -1081,6 +1445,12 @@ def build_full_argv(
     returned ``ResolvedCommand.env`` carries the merged environment
     block; otherwise it's ``None`` so the child just inherits the
     parent env verbatim.
+
+    ``tree_path_prepend`` (V3 v0.3.2+) carries the parent
+    ``.scriptreetree``'s own ``path_prepend`` list so its entries
+    reach the spawned child's PATH.  The runner populates this from
+    ``TreeLauncherView.tree_path_prepend()`` whenever a tool is
+    opened through a loaded tree.
     """
     cmd = resolve(tool, values, ignore_required=ignore_required)
     env = build_env(
@@ -1089,7 +1459,15 @@ def build_full_argv(
         global_env_overrides=global_env_overrides,
         global_path_prepend=global_path_prepend,
         global_path_overrides=global_path_overrides,
+        tree_path_prepend=tree_path_prepend,
     )
+    # V3 v0.3.12+ — make sibling imports work bulletproof for Python
+    # tools laid out as a folder with ``.scriptree`` + helper modules
+    # (``import _outlook_common`` from a sibling file, etc.).  See
+    # ``inject_tool_dir_env`` for the full rationale.  Applied AFTER
+    # ``build_env`` so user-supplied PYTHONPATH overrides win at the
+    # head of the path.
+    env = inject_tool_dir_env(env, tool)
     return ResolvedCommand(
         argv=[*cmd.argv, *extras], cwd=cmd.cwd, env=env
     )

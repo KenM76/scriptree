@@ -51,7 +51,7 @@ def _write_tool(path: Path, name: str) -> None:
 def _write_tree(path: Path, name: str, nodes: list[dict]) -> None:
     path.write_text(
         json.dumps(
-            {"schema_version": 1, "name": name, "nodes": nodes},
+            {"schema_version": 3, "name": name, "nodes": nodes},
             indent=2,
         ),
         encoding="utf-8",

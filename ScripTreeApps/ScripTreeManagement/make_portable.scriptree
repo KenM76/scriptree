@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "name": "Build portable copy of ScripTree",
-  "description": "Copy this ScripTree install to another folder as a portable, end-user-ready single folder — stripping dev files (.git, __pycache__, tests, etc.) and smoke-testing the launcher. Handles ScripTreeApps/ with a keep/overwrite/backup choice so existing user tools aren't clobbered.",
+  "description": "Copy this ScripTree install to another folder as a portable, end-user-ready single folder \u2014 stripping dev files (.git, __pycache__, tests, etc.) and smoke-testing the launcher. Handles ScripTreeApps/ with a keep/overwrite/backup choice so existing user tools aren't clobbered.",
   "executable": "python",
   "working_directory": "../..",
   "argument_template": [
@@ -10,7 +10,10 @@
     "{force?--force}",
     "{zip?--zip}",
     "{no_smoke?--no-smoke-test}",
-    ["--scriptreeapps", "{scriptreeapps}"]
+    [
+      "--scriptreeapps",
+      "{scriptreeapps}"
+    ]
   ],
   "params": [
     {
@@ -26,7 +29,7 @@
       "id": "force",
       "label": "Force (overwrite existing destination)",
       "description": "Equivalent to --force. Required if the destination folder already exists. Combined with a protected ScripTreeApps action, the existing user content is preserved or backed up per your choice below.",
-      "type": "bool",
+      "type": "boolean",
       "widget": "checkbox",
       "required": false,
       "default": false
@@ -39,13 +42,17 @@
       "widget": "dropdown",
       "required": true,
       "default": "keep",
-      "choices": ["keep", "overwrite", "backup"]
+      "choices": [
+        "keep",
+        "overwrite",
+        "backup"
+      ]
     },
     {
       "id": "zip",
       "label": "Also produce .zip alongside the folder",
       "description": "Equivalent to --zip. Creates <dest>.zip (deflated) next to the folder. Handy for shipping a ready-to-extract download to an end user.",
-      "type": "bool",
+      "type": "boolean",
       "widget": "checkbox",
       "required": false,
       "default": false
@@ -54,7 +61,7 @@
       "id": "no_smoke",
       "label": "Skip smoke-test (don't launch the portable copy)",
       "description": "Equivalent to --no-smoke-test. Skips the 6-second launch test. Use if you're building on a headless machine, or you've already confirmed the build works and just want to iterate faster.",
-      "type": "bool",
+      "type": "boolean",
       "widget": "checkbox",
       "required": false,
       "default": false

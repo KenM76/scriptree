@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scriptree.dev/schemas/scriptree-v3.json",
+  "title": "ScripTree tool definition (.scriptree)",
+  "description": "JSON Schema for ScripTree v3 .scriptree files. JSON-Schema-aligned type names (string/integer/number/boolean) plus ScripTree extensions (path/enum/multiselect). HTML5-aligned widget names (text/textarea/number/checkbox/dropdown/file/save_file/folder/radio).",
+  "type": "object",
+  "required": ["schema_version", "name", "executable", "params"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. When set to a path or URL pointing at this schema, editors auto-validate the file on save."
+    },
+    "schema_version": {
+      "const": 3,
+      "description": "Always 3 for ScripTree v0.5.0+. v2 files must be upgraded via `scriptree migrate`."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "User-visible tool name. Shown as the form's title and the cell's auto-derived label."
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line summary of what the tool does. Shown in the cell shell's tooltip and the tree-view leaf row."
+    },
+    "executable": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Command to invoke. Bare names (e.g. `python`) resolve via PATH; relative paths resolve against the .scriptree file's directory; absolute paths are used verbatim."
+    },
+    "working_directory": {
+      "type": "string",
+      "description": "CWD for the subprocess. Relative paths resolve against the .scriptree file's directory. When empty, defaults to the executable's parent directory."
+    },
+    "argument_template": {
+      "type": "array",
+      "description": "Argv template. Each entry is either a string (with {placeholder} substitutions) or a nested array of strings (a token group that emits together or drops together).",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {"type": "array", "items": {"type": "string"}}
+        ]
+      }
+    },
+    "params": {
+      "type": "array",
+      "description": "Parameter definitions.",
+      "items": {"$ref": "#/$defs/Param"}
+    },
+    "sections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/Section"}
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "Environment variables applied on every run. Per-configuration overrides layer on top."
+    },
+    "path_prepend": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Directories prepended to PATH on every run."
+    },
+    "menus": {"type": "array"},
+    "interactive": {
+      "type": "boolean",
+      "description": "When true, the runner spawns with stdin=PIPE and shows a send-line widget. For tools with query/reply prompt loops."
+    },
+    "cell": {
+      "type": "object",
+      "description": "Cell appearance overrides (icon, text label, fill colour, etc.)."
+    },
+    "cell_text_color": {"type": "string"},
+    "cell_fill_color": {"type": "string"}
+  },
+  "$defs": {
+    "Param": {
+      "type": "object",
+      "required": ["id", "label", "type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Python-identifier-shaped key. Used in argument-template substitutions ({id}) and as the configurations dict key. Must be unique within a tool."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short user-facing field label shown left of the input."
+        },
+        "description": {
+          "type": "string",
+          "description": "Inline help shown as placeholder text + hover tooltip in the runner form. Write as if the reader has never seen the tool before."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "path", "enum", "multiselect"],
+          "description": "JSON-Schema-aligned data type. Note: ScripTree v3 uses 'boolean' (not 'bool') and 'number' (not 'float'). 'path' / 'enum' / 'multiselect' are ScripTree extensions."
+        },
+        "widget": {
+          "type": "string",
+          "enum": ["text", "textarea", "number", "checkbox", "dropdown", "checkbox_list", "file", "save_file", "folder", "radio"],
+          "description": "HTML5-aligned widget kind. 'file' = HTML <input type=file>, 'save_file' = file-save variant, 'radio' = HTML radio group, 'checkbox_list' = scrollable checkbox column for multiselect (v0.6.0). Must be compatible with the param's type."
+        },
+        "required": {
+          "type": "boolean",
+          "default": false,
+          "description": "Block Run when this field is empty. See also `required_when` for runtime-conditional requirement."
+        },
+        "default": {
+          "description": "Pre-filled value shown when the user first opens the form. Most useful starting point, not an example."
+        },
+        "choices": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Allowed values for enum / multiselect. Required when type is 'enum' or 'multiselect'."
+        },
+        "choice_labels": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Parallel to `choices` — human-readable label for each value. Optional; defaults to the value itself."
+        },
+        "file_filter": {
+          "type": "string",
+          "description": "Qt file-dialog filter for path widgets, e.g. \"Text (*.txt);;All files (*)\"."
+        },
+        "section": {
+          "type": "string",
+          "description": "Which section this param belongs to. Empty string = synthetic 'Other' bucket. See the tool's `sections` array."
+        },
+        "no_persist": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the value is never saved to a configuration — for passwords / tokens / scratch values."
+        },
+        "no_split": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt out of the auto-split rule for string params that fill an entire token. Forces emission as a single argv token even with embedded spaces."
+        },
+        "visible_when": {
+          "type": "string",
+          "description": "Conditional visibility expression. Tiny grammar: <ident> == 'value', <ident> in ('a', 'b'), AND/OR/NOT, parens. Empty = always visible. See help/LLM/scriptree_format.md."
+        },
+        "required_when": {
+          "type": "string",
+          "description": "Conditional requirement expression. Same grammar as visible_when. Overrides static `required` when set."
+        },
+        "choices_provider": {
+          "type": "object",
+          "description": "v0.6.0 — dynamic provider. Run an external command at form-open/refresh time to populate this param's choices (enum/multiselect/checkbox_list) or scalar value (text/path/number/…). Mutually exclusive with a non-empty static `choices`. See help/LLM/dynamic_providers.md.",
+          "required": ["command"],
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1,
+              "description": "Argv list (NOT a shell string). First entry resolves against the .scriptree dir like `executable`; bare names via PATH."
+            },
+            "working_directory": {"type": "string"},
+            "refresh": {
+              "type": "string",
+              "enum": ["on_open", "manual", "on_change"],
+              "description": "on_open (run at form build), manual (Refresh click only), on_change (debounced re-run when a depends_on value changes)."
+            },
+            "timeout_sec": {"type": "integer", "minimum": 1},
+            "cache": {
+              "type": "string",
+              "enum": ["form_session", "none"]
+            }
+          }
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "v0.6.0 — upstream param ids forwarded to this param's choices_provider on stdin; a change re-runs it when refresh='on_change'. A cycle or unknown id is a load error."
+        },
+        "select_all": {
+          "type": "boolean",
+          "default": false,
+          "description": "v0.6.0 — only valid with widget 'checkbox_list'. Adds a tri-state select-all/none master checkbox."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "enum"}}},
+          "then": {"required": ["choices"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "multiselect"}}},
+          "then": {"required": ["choices"]}
+        }
+      ]
+    },
+    "Section": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "label": {"type": "string"},
+        "layout": {
+          "type": "string",
+          "enum": ["collapse", "tab"]
+        },
+        "default_collapsed": {"type": "boolean"}
+      }
+    }
+  }
+}

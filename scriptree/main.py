@@ -1,5 +1,7 @@
 """Application entry point.
 
+## For humans
+
 Usage::
 
     # Normal IDE window
@@ -22,6 +24,42 @@ Usage::
 
     # Tree standalone with a specific tree-level configuration
     python -m scriptree path/to/tree.scriptreetree -standalone -configuration production
+
+``-configuration`` and ``-run`` both imply ``-standalone``. ``-run``
+(V3 v0.3.5+) auto-clicks Run on the active tool once the standalone
+window is up; the V3 cell shell uses it for click-to-run cells.
+
+## For maintainers / LLMs
+
+- HEADLESS PATH (L17 fixed): ``main()`` inspects ``raw_argv[0]`` for
+  ``validate`` / ``migrate`` and dispatches to ``.cli.validate`` /
+  ``.cli.migrate`` BEFORE any Qt is touched. Those CLI subcommands
+  are pure stdlib and must run with no display. PySide6 is imported
+  **inside the GUI branch of** ``main()`` only — never at module
+  scope — so the headless dispatch is genuinely Qt-free (verified by
+  ``tests/test_core_purity.py``'s subprocess check). Do NOT hoist
+  the ``from PySide6...`` import back up to module level or above the
+  CLI-dispatch branch.
+- ``main(argv=None)`` reads ``sys.argv[1:]`` for subcommand detection
+  but passes ``argv`` (possibly ``None``) to ``_parse_args``; keep
+  both in sync when changing argument plumbing. Returns an int exit
+  code (CLI subcommand return or ``app.exec()``).
+- Argparse uses single-dash long options (``-standalone``,
+  ``-configuration``, ``-run``) intentionally — not GNU ``--`` — to
+  match the documented CLI surface; ``args.standalone`` is the
+  attribute name argparse derives from ``-standalone``.
+- ``standalone`` is derived as ``args.standalone or
+  args.configuration is not None or args.run`` — preserve that OR so
+  ``-configuration`` / ``-run`` keep implying ``-standalone``.
+- ``_autorun_active_tool`` is deferred via ``QTimer.singleShot(0,…)``
+  so construction-time signals settle before the synthetic click; it
+  introspects ``win._runner`` (from-tool) or ``win._tabs`` (from-tree)
+  by duck-typing and only clicks ``_btn_run`` when it ``isEnabled()``,
+  so capability gates / sanitisation prompts still apply. Its broad
+  ``except Exception`` is intentional (a failed convenience click must
+  not crash startup) but it swallows the error to stderr only.
+- GUI-only imports (branding, io, windows, QTimer) are lazy by design
+  to keep the headless path Qt-light; do not hoist them.
 """
 from __future__ import annotations
 
@@ -29,7 +67,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QStyleFactory
+# L17 fix: PySide6 is NOT imported at module scope.  ``main()``
+# dispatches the headless ``validate`` / ``migrate`` subcommands
+# BEFORE any QApplication is built; a top-level Qt import made even
+# ``python -m scriptree validate …`` force-load Qt (and fail on a
+# headless box with no Qt platform plugin).  The Qt import now lives
+# inside the GUI branch of ``main()``.
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -62,10 +105,80 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "each sub-tool to its own config. Implies -standalone."
         ),
     )
+    parser.add_argument(
+        "-run",
+        action="store_true",
+        default=False,
+        help=(
+            "After the standalone window opens, immediately click "
+            "Run on the active tool.  Implies -standalone.  Used by "
+            "the V3 cell shell when a cell is configured for "
+            "click-to-run (cell.click_action = \"run\" in the "
+            "catalog JSON)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
+def _autorun_active_tool(win) -> None:  # noqa: ANN001
+    """Click the Run button on the standalone window's active tool.
+
+    V3 v0.3.5+ — invoked via ``QTimer.singleShot(0, ...)`` so the
+    window's construction-time signals (config loaded, form populated,
+    visibility hooks) finish before we synthesise the click.
+
+    The standalone window can host either a single ``ToolRunnerView``
+    (for a ``.scriptree`` file) or a tabbed window of runners (for
+    a ``.scriptreetree`` file launched in flat mode).  We trigger
+    ``_btn_run.click()`` on whichever runner is currently visible —
+    that respects the same code path as a real human click,
+    including sanitisation warnings, run-tools capability gates,
+    and credential prompts.
+    """
+    try:
+        # Lazy attribute lookup — avoids a hard import dep on
+        # standalone_window from main's top-of-file.
+        runner = None
+        # StandaloneWindow.from_tool stashes the runner directly.
+        if hasattr(win, "_runner") and getattr(win, "_runner", None):
+            runner = win._runner
+        # StandaloneWindow.from_tree uses a tab widget — pick the
+        # currently-visible tab's runner.
+        elif hasattr(win, "_tabs"):
+            current = win._tabs.currentWidget()
+            if current is not None and hasattr(current, "_btn_run"):
+                runner = current
+        if runner is not None and hasattr(runner, "_btn_run"):
+            if runner._btn_run.isEnabled():
+                runner._btn_run.click()
+    except Exception as exc:  # noqa: BLE001
+        import sys
+        print(
+            f"[scriptree -run] auto-click failed: {exc!r}",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
+    # v0.5.0 — CLI subcommand dispatch.  When invoked as
+    # ``scriptree validate <path>`` or ``scriptree migrate <path>``
+    # we hand off to the relevant module BEFORE constructing a
+    # QApplication (the CLI subcommands are pure stdlib + Python
+    # core — no Qt, no display required).
+    raw_argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if raw_argv and raw_argv[0] in ("validate", "migrate"):
+        sub = raw_argv[0]
+        rest = raw_argv[1:]
+        if sub == "validate":
+            from .cli.validate import main as _validate_main
+            return _validate_main(rest)
+        from .cli.migrate import main as _migrate_main
+        return _migrate_main(rest)
+
+    # GUI path only — import Qt here (NOT at module scope) so the
+    # headless CLI dispatch above never forces a Qt load (L17 fix).
+    from PySide6.QtWidgets import QApplication, QStyleFactory
+
     args = _parse_args(argv)
 
     app = QApplication(sys.argv)
@@ -84,8 +197,10 @@ def main(argv: list[str] | None = None) -> int:
             app.setStyle(style)
             break
 
-    # -configuration implies -standalone.
-    standalone = args.standalone or args.configuration is not None
+    # -configuration AND -run both imply -standalone.
+    standalone = (
+        args.standalone or args.configuration is not None or args.run
+    )
 
     if args.file and standalone:
         # Standalone mode — lightweight window with optional config.
@@ -104,6 +219,14 @@ def main(argv: list[str] | None = None) -> int:
                 tool, file_path, config_name=args.configuration
             )
         win.show()
+        # ``-run`` (V3 v0.3.5+) — auto-click the Run button on the
+        # active runner once the window is up.  We defer via a 0-ms
+        # ``QTimer.singleShot`` so the window finishes its
+        # construction-time signals (config loaded, form populated)
+        # before we synthesise the click.
+        if args.run:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: _autorun_active_tool(win))
     else:
         # Normal IDE window.
         from .ui.main_window import MainWindow

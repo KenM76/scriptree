@@ -109,7 +109,7 @@ multiple flag occurrences into one text field. Use a `string` param
 
 **What is NOT auto-split** (each keeps existing single-token semantics):
 
-- `path` / `bool` / `int` / `float` / `enum` params — only `STRING`.
+- `path` / `boolean` / `integer` / `number` / `enum` params — only `string`.
 - String params with `"no_split": true` set on their `ParamDef` —
   per-field opt-out for tool authors who genuinely want a string
   field that holds one logical value with embedded whitespace
@@ -138,14 +138,43 @@ blow up the runner.
 }
 ```
 
-### 3. Conditional flag (bool)
+### 3. Conditional flag (boolean)
 
 ```
 {param_id?--flag}
 ```
 
-For a `bool` param. Emits `--flag` when the value is truthy; emits
+For a `boolean` param. Emits `--flag` when the value is truthy; emits
 nothing when false. Used as a standalone token, not inside a group.
+
+The literal text after `?` is **arbitrary** — it does not have to
+start with `-`. It's whatever string should appear in argv when the
+bool is true. This enables the next pattern.
+
+#### Boolean flags that need a separate value token
+
+Some CLIs use `-flag 1` rather than just `-flag` (ffmpeg's image2
+muxer flags `-strftime 1`, `-update 1`, `-frame_pts 1`; some
+PostgreSQL utilities; etc.). The flag and the literal `1` must both
+appear or both disappear. Use **two paired conditional-flag tokens
+sharing the same bool param**:
+
+```json
+"argument_template": [
+  "{strftime?-strftime}",
+  "{strftime?1}",
+  ...
+]
+```
+
+When `strftime` is true, both tokens evaluate truthy and emit in
+order: `["-strftime", "1"]`. When false, both drop. The pair is not
+a group — it just shares a condition, so the engine handles it
+without any new mechanism.
+
+The same trick works for `-flag yes` / `-flag on` / `-flag enabled`
+or any other CLI dialect where a bool requires a paired literal
+value.
 
 ### 4. Conditional flag-value (inline)
 
@@ -302,3 +331,16 @@ When you build an `argument_template`, ask:
 - **Is this a required positional argument?**
   Use a bare `"{id}"` — it's a single token; required validation
   catches empty values before argv is built.
+
+- **Does the CLI use a `-flag 1` / `-flag yes` style for booleans?**
+  Use the paired conditional-flag pattern — two tokens sharing the
+  same bool, one emitting the flag and the next emitting the value:
+  `"{id?-flag}"` then `"{id?1}"`. Both evaluate the same condition,
+  so they emit and drop together.
+
+- **Trace one example argv before saving.** Pick a representative
+  set of param values, walk the template by hand, and confirm the
+  result is the command you'd actually want to run. JSON validity
+  doesn't catch flag-without-value mistakes (a token group whose
+  placeholder is misnamed, a `{flag?--xxx=}` form on a CLI that
+  doesn't accept `=`, etc.).

@@ -74,7 +74,7 @@ ScripTree's top-level lib.
 ### Layout per tool
 
 ```
-ScripTreeApps/SolidWorksTools/DxfExport/dxf-to-pdf/
+ScripTreeApps/MyTools/DxfExport/dxf-to-pdf/
 ├── dxf-to-pdf.scriptree          ← tool definition
 ├── dxf_to_pdf.py                 ← script
 ├── README.md                     ← per-tool doc

@@ -77,7 +77,7 @@ class TestArgparseDetector:
         assert tool is not None
         verbose = tool.param_by_id("verbose")
         assert verbose is not None
-        assert verbose.type is ParamType.BOOL
+        assert verbose.type is ParamType.BOOLEAN
         assert verbose.widget is Widget.CHECKBOX
 
     def test_detects_output_as_file_save(self) -> None:
@@ -86,7 +86,7 @@ class TestArgparseDetector:
         out = tool.param_by_id("output")
         assert out is not None
         assert out.type is ParamType.PATH
-        assert out.widget is Widget.FILE_SAVE
+        assert out.widget is Widget.SAVE_FILE
 
     def test_detects_mode_enum(self) -> None:
         tool = argparse_detector.detect(ARGPARSE_HELP)
@@ -135,7 +135,7 @@ class TestClickDetector:
         assert tool is not None
         dry = tool.param_by_id("dry_run")
         assert dry is not None
-        assert dry.type is ParamType.BOOL
+        assert dry.type is ParamType.BOOLEAN
 
 
 # --- heuristic fallback ----------------------------------------------------
@@ -145,7 +145,7 @@ class TestHeuristic:
         tool = parse_heuristic(MESSY_HELP)
         r = tool.param_by_id("recursive")
         assert r is not None
-        assert r.type is ParamType.BOOL
+        assert r.type is ParamType.BOOLEAN
 
     def test_log_file_promoted_to_file_open(self) -> None:
         tool = parse_heuristic(MESSY_HELP)
@@ -153,7 +153,7 @@ class TestHeuristic:
         assert lf is not None
         # "path to log file" → FILE_OPEN (first matching "path to" rule)
         assert lf.type is ParamType.PATH
-        assert lf.widget in (Widget.FILE_OPEN, Widget.FILE_SAVE)
+        assert lf.widget in (Widget.FILE, Widget.SAVE_FILE)
 
     def test_regex_promoted_to_textarea(self) -> None:
         tool = parse_heuristic(MESSY_HELP)

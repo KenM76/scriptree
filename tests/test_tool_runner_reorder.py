@@ -150,7 +150,7 @@ class TestRunnerReorderPersistence:
                 ParamDef(
                     id="b",
                     label="Beta",
-                    type=ParamType.BOOL,
+                    type=ParamType.BOOLEAN,
                     widget=Widget.CHECKBOX,
                     default=False,
                 ),
@@ -167,5 +167,5 @@ class TestRunnerReorderPersistence:
         assert a.default == "hello"
         assert a.required is True
         b = reloaded.param_by_id("b")
-        assert b.type is ParamType.BOOL
+        assert b.type is ParamType.BOOLEAN
         assert b.default is False

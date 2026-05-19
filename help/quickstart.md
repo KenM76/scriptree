@@ -2,6 +2,13 @@
 
 Get a tool running in ScripTree in under two minutes.
 
+> **V3 ships two launchers.** This quickstart walks through the V1
+> editor (`run_scriptree.bat`) — the same form-driven runner V1 users
+> already know. The cell + ring shell (`run_scriptreering.bat`) is a
+> floating desktop launcher built on top of V1; see
+> [cell_shell.md](cell_shell.md) once you have at least one
+> `.scriptree` saved.
+
 ## Project layout
 
 ```

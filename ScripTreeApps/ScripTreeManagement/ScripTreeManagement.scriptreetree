@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "ScripTree management",
   "nodes": [
     {
@@ -27,6 +27,16 @@
         {
           "type": "leaf",
           "path": "./make_shortcut.scriptree"
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "Documentation",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./screenshooter.scriptree"
         }
       ]
     }

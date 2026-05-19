@@ -1,0 +1,77 @@
+{
+  "schema_version": 3,
+  "name": "Interactive find / replace",
+  "description": "Emacs M-% style query-replace as a GUI form. Pick a file, type the pattern and the replacement, click Run, then step through each match in the output pane: type 'y' (accept), 'n' (skip), '!' (accept all remaining), or 'q' (quit) \u2014 or click the matching quick-response button next to the send-line widget. Use the Dry run checkbox to preview without writing the file.\n\nRequires the 'interactive_stdin' permission (admin opt-in).",
+  "executable": "python",
+  "working_directory": ".",
+  "argument_template": [
+    "find_replace.py",
+    "{file}",
+    "{pattern}",
+    "{replacement}",
+    "{regex?--regex}",
+    "{case_sensitive?--case-sensitive}",
+    "{dry_run?--dry-run}"
+  ],
+  "params": [
+    {
+      "id": "file",
+      "label": "File to edit",
+      "description": "Path to the text file to search and modify. The file is read on Run, you step through matches one-by-one in the output pane, and (unless --dry-run is on) it is overwritten with the accepted replacements when you finish.",
+      "type": "path",
+      "widget": "file",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "pattern",
+      "label": "Find",
+      "description": "What to search for. Treated as a literal string by default \u2014 toggle 'Regex' to enable Python regular expressions (groups can be referenced from the replacement as \\1, \\2, etc.).",
+      "type": "string",
+      "widget": "text",
+      "required": true,
+      "default": ""
+    },
+    {
+      "id": "replacement",
+      "label": "Replace with",
+      "description": "What to replace each accepted match with. When 'Regex' is on, supports re.expand syntax (\\1, \\g<name>, etc.).",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "regex",
+      "label": "Regex",
+      "description": "Treat 'Find' as a Python regex instead of a literal string.",
+      "type": "boolean",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "case_sensitive",
+      "label": "Case-sensitive",
+      "description": "Match the case of letters exactly. Default is case-insensitive.",
+      "type": "boolean",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "dry_run",
+      "label": "Dry run (preview only \u2014 do not write the file)",
+      "description": "Show every prompt and accept answers, but do NOT write the file back to disk. Useful for checking what would change before committing.",
+      "type": "boolean",
+      "widget": "checkbox",
+      "required": false,
+      "default": true
+    }
+  ],
+  "interactive": true,
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  }
+}

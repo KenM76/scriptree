@@ -1,5 +1,7 @@
 """Probe an executable for help text and dispatch to the right parser.
 
+## For humans
+
 Workflow::
 
     result = probe(exe_path)
@@ -13,6 +15,38 @@ The probe is best-effort: it tries several common help-flag conventions
 with a short timeout and moves on if nothing works. Tools that crash,
 launch a GUI, or require arguments before showing help will simply fall
 through to the blank-canvas path.
+
+## For maintainers / LLMs
+
+- EDITOR-time only: this discovers a tool's shape; it is not the
+  tool-run path.
+- ``_HELP_ATTEMPTS`` deliberately omits the empty-args probe — a
+  no-arg ``tasklist`` dumps the process table and scores like real
+  help. Do NOT add ``()`` to that tuple.
+- Candidate selection is highest-``_score_help_output`` wins, NOT
+  first-success: a short ``ERROR:``-style rejection scores 0 even
+  past ``MIN_USEFUL_HELP_CHARS``, so a later ``/?`` can beat an
+  earlier ``--help`` rejection. The ``< 500`` length guard means a
+  genuinely long help text containing "Error" later on still
+  counts.
+- Every spawn is ``subprocess.run([exe, *args], shell=False)`` with
+  ``timeout=PROBE_TIMEOUT_SECONDS``; stdout+stderr are concatenated
+  because tools disagree on which stream/return code help uses.
+  Keep ``shell=False`` — it underpins the sanitizer's stance below.
+- ``_sanitize_parsed_tool`` is the codebase's audited security
+  position: shell metacharacters (``$``, ``*``, ``!``, ``<>``,
+  backslashes, braces) are SAFE because every spawn is
+  ``shell=False``, so they are preserved verbatim in defaults /
+  argument templates. ONLY NUL bytes (truncate argv at the OS
+  level) are stripped from templates/defaults, and NUL + other
+  control chars are stripped from cached help text (terminal/log
+  safety). Do not "harden" this by stripping more — it silently
+  corrupts real defaults like ``$HOME/.config`` or ``*.txt``.
+- ``_parse`` cannot return None in practice (the priority-999
+  ``heuristic`` plugin always returns); the explicit stub fallback
+  only triggers if a user override disables/removes it.
+- ``parse_text`` is the no-subprocess entry point (cached-text
+  re-parse, tests). Keep it free of any spawn.
 """
 from __future__ import annotations
 

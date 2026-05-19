@@ -1,12 +1,25 @@
 # ScripTree Help
 
-Welcome to ScripTree — a universal GUI generator for command-line tools. This
-folder contains all the documentation, split into four sections:
+Welcome to ScripTree — a universal GUI generator for command-line tools.
+
+**ScripTree V3 ships with two launchers in one installation:**
+
+- **`run_scriptreering.bat`** — the **cell + ring shell**: floating
+  cell launchers (hexagons or squares) on your desktop. Click a cell
+  to pop up its tool menu, dock two together to form a multi-tool
+  ring, drag-drop catalogs and rings onto cells. See
+  **[The cell + ring shell](cell_shell.md)** for the full UX.
+- **`run_scriptree.bat`** — the classic **V1 editor**: tool runner,
+  configurations, parser, save/load. The cell shell shells out to this
+  whenever you click a tool, so it's the same editor you've always had.
+
+This folder contains all the documentation, split into five sections:
 
 ## Quick start
 
 New here? Start with **[quickstart.md](quickstart.md)** — get a tool running
-in under two minutes.
+in under two minutes. Then read **[cell_shell.md](cell_shell.md)** for the
+cell launcher and how it plugs into the editor.
 
 ## For humans
 
@@ -44,6 +57,11 @@ Read these in order for the full picture:
     into `lib/python/` (Windows / macOS, automated; Linux, manual via
     package manager or python-build-standalone). Tools then reference
     it via `%SCRIPTREE_LIB_PYTHON%`.
+13. **[The cell + ring shell](cell_shell.md)** — V3's cell
+    launcher: gestures, ring docking, drag-drop, cell labels and
+    icons, autostart, the `.scriptreering` file format. The shell
+    calls the editor as a subprocess for every tool launch, so V1
+    stays untouched.
 
 ## For LLMs (and humans using AI to generate tools)
 

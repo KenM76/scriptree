@@ -18,6 +18,8 @@ disagree, the code wins — open an issue and fix the docs.
   "env": { "KEY": "value" },
   "path_prepend": ["directory", "..."],
   "menus": [/* list[MenuItemDef], optional, omitted when empty */],
+  "cell": {/* CellAppearance, optional, see below — v0.2.7+ */},
+  "interactive": "bool, optional, default false — v0.3.0+",
   "source": {
     "mode": "manual | argparse | click | docopt | heuristic | powershell | winhelp",
     "help_text_cached": "string or null"
@@ -77,6 +79,30 @@ disagree, the code wins — open an issue and fix the docs.
 - `env` / `path_prepend` — tool-level environment overrides, applied to
   every run regardless of active configuration. Omitted from the on-disk
   form when empty.
+- **Sibling imports (Python tools).**  If your tool is a Python script
+  laid out as a folder with `_helper.py` / `_common.py` siblings the
+  entry script imports, ScripTree v0.3.12+ makes those imports work
+  reliably across:
+    * the bundled embeddable Python that ships in `lib/python/` (whose
+      `python<ver>._pth` file would otherwise disable script-dir
+      auto-prepending),
+    * system Python with `-P` or `PYTHONSAFEPATH=1` set,
+    * `runpy`-style invocations.
+
+  The runner injects two environment variables before spawn:
+    * `SCRIPTREE_TOOL_DIR` — absolute path of the `.scriptree` file's
+      parent folder.  Read by the bundled Python's `sitecustomize.py`
+      (at `lib/python/Lib/site-packages/sitecustomize.py`) and
+      prepended to `sys.path`.
+    * `PYTHONPATH` — same directory prepended (any pre-existing
+      PYTHONPATH entries are preserved at the tail).
+
+  **You do not need to add any boilerplate** to your tool scripts —
+  `import _helper` from a sibling module simply works.  If you have
+  a wrapper script that needs to set `SCRIPTREE_TOOL_DIR` to a
+  different directory (e.g. a meta-tool that runs sub-tools), the
+  wrapper-set value is preserved (the runner only fills the var
+  when it isn't already set).
 - `source` — provenance. Always present; `help_text_cached` is null for
   manually-built tools.
 
@@ -87,9 +113,9 @@ disagree, the code wins — open an issue and fix the docs.
   "id": "python_identifier, required, unique within params[]",
   "label": "string, required",
   "description": "string, optional, default \"\"",
-  "type": "string|integer|float|bool|path|enum|multiselect",
-  "widget": "text|textarea|number|checkbox|dropdown|file_open|file_save|folder|enum_radio",
-  "required": "bool, default false",
+  "type": "string|integer|number|boolean|path|enum|multiselect",
+  "widget": "text|textarea|number|checkbox|dropdown|file|save_file|folder|radio",
+  "required": "boolean, default false",
   "default": "value of the param's type, or \"\" / null",
   "choices": ["value", "value2"],
   "choice_labels": ["Human label", "Human label 2"],
@@ -98,21 +124,104 @@ disagree, the code wins — open an issue and fix the docs.
 }
 ```
 
+### Conditional visibility — `visible_when` / `required_when` (v0.4.0+)
+
+Optional string fields that let one param show / require itself
+based on another param's value.  Empty (the default) means
+"always visible" / "static `required` field governs".
+
+Use them to slim down multi-mode forms — fields that only matter
+in some modes disappear when irrelevant rather than crowding the
+form.
+
+Tiny declarative grammar (no embedded scripting):
+
+```
+<expr>     := <or_expr>
+<or_expr>  := <and_expr> ( 'OR' <and_expr> )*
+<and_expr> := <unary>    ( 'AND' <unary> )*
+<unary>    := 'NOT' <unary> | '(' <expr> ')' | <comparison>
+<comparison> := <ident> ('==' | '!=') <literal>
+              | <ident> 'in' '(' <literal_list> ')'
+```
+
+Examples:
+
+```json
+{
+  "id": "bom_feature_name",
+  "type": "string",
+  "widget": "text",
+  "visible_when": "bom_source == 'drawing'"
+}
+{
+  "id": "bom_template",
+  "type": "string",
+  "widget": "text",
+  "visible_when": "bom_source in ('insert', 'auto')"
+}
+{
+  "id": "drawing_bom_policy",
+  "type": "enum",
+  "widget": "dropdown",
+  "required_when": "bom_source == 'drawing'"
+}
+```
+
+Rules:
+
+- Comparisons are **string equality** on stringified values.
+  `bom_type == 3` works (a bare-token literal; both sides
+  compared as `"3"`).  For booleans use `"true"` / `"false"`.
+- Identifiers are case-sensitive (match `ParamDef.id`); keywords
+  (`AND` / `OR` / `NOT` / `in`) are case-insensitive.
+- Unknown identifiers evaluate to the empty string — so
+  `foo == 'bar'` is `False` when there's no `foo` param.
+- **Parse errors fail OPEN** — a typo logs to stderr and returns
+  `True` so a broken expression can't make a field permanently
+  invisible.
+
+A field hidden by `visible_when`:
+- Doesn't render in the runner form.
+- Skips the required check (the user couldn't fill it in).
+- Its value is dropped from argv assembly (the `{id?--flag}`
+  conditional emission sees an empty value naturally).
+- **Keeps its in-memory value** across hide/show cycles —
+  toggling `bom_source` between modes repeatedly doesn't clear
+  what the user typed.
+
 ### Type × widget compatibility
 
 | type          | allowed widgets                       |
 |---------------|---------------------------------------|
 | `string`      | `text`, `textarea`                    |
 | `integer`     | `number`, `text`                      |
-| `float`       | `number`, `text`                      |
-| `bool`        | `checkbox`                            |
-| `path`        | `file_open`, `file_save`, `folder`    |
-| `enum`        | `dropdown`, `enum_radio`              |
-| `multiselect` | `dropdown` (multi-select mode)        |
+| `number`      | `number`, `text`                      |
+| `boolean`     | `checkbox`                            |
+| `path`        | `file`, `save_file`, `folder`         |
+| `enum`        | `dropdown`, `radio`                   |
+| `multiselect` | `dropdown`, `checkbox_list`           |
 
 Changing `type` in the editor narrows the `widget` dropdown
 automatically. Hand-edited files with incompatible combinations load
 but the editor snaps the widget back on first save.
+
+### Dynamic providers (v0.6.0) — `choices_provider` / `depends_on` / `select_all`
+
+Three optional `ParamDef` fields make a parameter *dynamic* — its
+choices (enum / multiselect / checkbox_list) or scalar value
+(text / path / number / …) come from running an external command at
+form-open / refresh time instead of a static `choices` list:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `choices_provider` | object \| null | null | `{command:[…], working_directory?, refresh?, timeout_sec?, cache?}`. Mutually exclusive with a non-empty static `choices` (loader rejects both). |
+| `depends_on` | list[str] | `[]` | Upstream param ids sent to the provider on stdin; a change re-runs it when `refresh:"on_change"`. Cycle / unknown id ⇒ load error. |
+| `select_all` | bool | false | Only with `widget:"checkbox_list"` — adds a tri-state select-all/none master. |
+
+All optional and omitted-at-default, so a v3 file without them is
+byte-identical and behaves exactly as before — no `schema_version`
+bump. Full contract: [`LLM/dynamic_providers.md`](LLM/dynamic_providers.md).
 
 ### `choices` and `choice_labels` fields
 
@@ -140,8 +249,8 @@ value as its own label.
 ### `default` semantics
 
 - `string` / `path` — empty string `""` means "no default".
-- `integer` / `float` — `0` is the null default.
-- `bool` — `false` is the null default.
+- `integer` / `number` — `0` is the null default.
+- `boolean` — `false` is the null default.
 - `enum` — must be one of the values in `choices`, or `""` for "no
   selection".
 - `multiselect` — a list of values, may be empty.
@@ -198,6 +307,119 @@ collapsible "Logging" group.
 > loader applies the tool-level default to every section that doesn't
 > declare its own `layout`. New files should use per-section `layout`
 > and omit the tool-level field.
+
+## `cell` sub-object (v0.2.7+, optional)
+
+Controls how the V3 cell shell paints a launcher cell bound to this
+`.scriptree`. **Entirely optional** — when every field sits at its
+default the whole sub-object is omitted from the on-disk JSON, so
+legacy files stay byte-identical.
+
+```json
+"cell": {
+  "icon": "string, optional — path to an icon file",
+  "icon_data": "string, optional — base64-encoded image bytes (embedded)",
+  "icon_format": "string, optional — \"png\" | \"jpg\" | \"jpeg\" | \"svg\" | ... — only meaningful when icon_data is set",
+  "text_label": "string, optional — explicit text override for the cell label",
+  "icon_scale": "number, optional — relative scale, range 0.25–2.00, default 1.00",
+  "label_opacity": "number, optional — alpha multiplier, range 0.20–1.00, default 1.00",
+  "fill_color": "string, optional — \"#RRGGBB\" override for the cell fill (v0.3.6+)",
+  "text_color": "string, optional — \"#RRGGBB\" override for the label text colour (v0.3.8+)"
+}
+```
+
+### Field rules
+
+| Field | Type | Default | Range | Notes |
+|-------|------|---------|-------|-------|
+| `icon` | string | `""` (empty) | — | Path to an icon file. **Forward slashes preferred**, relative resolution: if the icon sits inside the `.scriptree` file's directory tree, the writer normalises to `./...`-style relative-to-catalog. Otherwise an absolute path is stored. Either form loads. Mutually exclusive with `icon_data` (Embed clears `icon`; Unembed clears `icon_data` and writes a fresh relative `icon`). |
+| `icon_data` | string | `""` | — | Base64-encoded image bytes. When non-empty, the cell renders from this in-JSON payload. Set by **Embed** in Settings → Cell label; cleared by **Unembed (Save as…)**. |
+| `icon_format` | string | `""` | — | Image format hint for `icon_data` (`"png"`, `"jpg"`, `"svg"`, etc.). Required only when `icon_data` is set; ignored when `icon` is used. |
+| `text_label` | string | `""` | — | Explicit label text. When non-empty, takes priority over auto-derived letters but loses to icons. |
+| `icon_scale` | float | `1.00` | `[0.25, 2.00]` | Relative — the painter resizes the icon proportionally to the cell's current `size_px`. So a 100 % icon "feels the same size" on a 56-px cell as on a 96-px cell. Out-of-range values are clamped silently at load. |
+| `label_opacity` | float | `1.00` | `[0.20, 1.00]` | Alpha multiplier on the painted label / icon. Out-of-range values are clamped. |
+| `fill_color` | string | `""` | `#RRGGBB` (v0.3.6+) | Override for the cell's fill colour. Empty = use branding default. Alpha is owned by the separate `transparency` slider; this field is RGB only. Invalid hex is silently dropped at load. |
+| `text_color` | string | `""` | `#RRGGBB` (v0.3.8+) | Override for the label text colour (auto-letters or `text_label`; icon labels are not tinted). Empty = follow stroke-derived default. Alpha is computed from `transparency × label_opacity` at paint time. Invalid hex is silently dropped. |
+
+### Label-painting priority (recap)
+
+1. `icon_data` → render embedded image at `icon_scale` × `label_opacity`.
+2. `icon` (file path) → render the file the same way.
+3. `text_label` → render the explicit text at `label_opacity`.
+4. **Auto-derived letters** from `name` (CamelCase precedence, skip-word
+   filter, two-letter fallback). See `help/cell_shell.md` for the full
+   rules.
+5. `?` if all of the above produce nothing.
+
+### Compactness
+
+The whole `cell` sub-object is omitted from the on-disk JSON when
+every field is at its default. Likewise, individual fields with
+default values are omitted. Readers must treat any missing field as
+its default.
+
+### Example with an embedded icon
+
+```json
+"cell": {
+  "icon_data": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAg...",
+  "icon_format": "png",
+  "icon_scale": 1.25,
+  "label_opacity": 0.85
+}
+```
+
+### Example with a relative icon path
+
+```json
+"cell": {
+  "icon": "./icons/dxf-export.svg",
+  "icon_scale": 0.8
+}
+```
+
+## `interactive` flag (v0.3.0+, optional)
+
+Top-level boolean.  When `true`, the runner spawns the child process
+with `stdin=PIPE` and shows a send-line widget below the output
+pane (line edit + `y` / `n` / `!` / `q` quick-response buttons +
+Send + End input).  Lines typed into the widget — or sent via the
+quick buttons — are written to the running tool's stdin, so tools
+can implement query-replace-style prompt loops (Emacs M-%) inside
+the GUI.
+
+```json
+"interactive": true
+```
+
+Field rules:
+
+- **Type** — `boolean`.
+- **Default** — `false`.  Omitted from the JSON when at the default
+  so v0.2.x files round-trip byte-identical.
+- **Permission gate** — the runner ALSO requires the
+  `interactive_stdin` capability to be granted at the app level
+  (file present and writable in the deployed `permissions/`
+  directory).  When the tool opts in but the permission denies,
+  the runner falls back to one-shot mode and prints a one-line
+  warning into the output pane.
+- **Run-as-user incompatibility** — interactive mode is suppressed
+  when a configuration is set to `prompt_credentials: true`.  A
+  warning is emitted on stderr; the run proceeds non-interactively.
+- **Stdout buffering** — tools that read from stdin should
+  `flush=True` after every prompt (`print(..., flush=True)` in
+  Python) so the runner sees each prompt as it's emitted, not all
+  at once after the script exits.
+
+Use `interactive: true` for tools that genuinely benefit from a
+live prompt loop:
+
+- Find / replace with per-match accept / skip (`query-replace`).
+- Confirm-each-file batch operations.
+- REPL-style exploration tools.
+
+Don't use `interactive: true` for tools that just emit progress
+bars or status output — those work fine without stdin.
 
 ## `source` block
 

@@ -158,10 +158,17 @@ using the current defaults, so template bugs are immediately visible.
 
 ## Form preview
 
-The lower-right box shows a live preview of what the runner will display
+The form preview shows a live render of what the runner will display
 when a user opens this tool. Widgets are disabled so you can't
 accidentally type into them — it's purely a visual check that your
 parameters render with the right widgets and labels.
+
+**The preview is a dock (v0.2.9).** It starts on the right side of the
+template editor but you can drag the title bar to detach and float it
+onto a second monitor, re-dock it left / right / top / bottom, or
+close it entirely. The other docks (param list, property panel,
+template) stay where they are. Closing and re-showing the dock keeps
+its last position.
 
 ## Saving
 
@@ -170,3 +177,9 @@ parameters render with the right widgets and labels.
 - **Cancel** — discard edits and return to the previous view.
 
 Edits are held in memory until Save; Cancel discards everything.
+
+The same actions are also reachable from the main window's **File**
+menu: **Save tool** and **Save tool as...** (v0.2.9). Those entries
+are enabled only while the editor is the active view; otherwise the
+menu surfaces **Save tree** / **Save tree as...** for the loaded
+`.scriptreetree` instead.

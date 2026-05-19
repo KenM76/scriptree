@@ -165,7 +165,7 @@ def test_textarea_widget_uses_droppable_plain_text() -> None:
 
 def test_file_open_widget_uses_droppable_line_edit() -> None:
     p = ParamDef(
-        id="x", label="X", type=ParamType.PATH, widget=Widget.FILE_OPEN
+        id="x", label="X", type=ParamType.PATH, widget=Widget.FILE
     )
     w = FileOpenWidget(p)
     assert isinstance(w._edit, _DroppableLineEdit)
@@ -173,7 +173,7 @@ def test_file_open_widget_uses_droppable_line_edit() -> None:
 
 def test_file_save_widget_uses_droppable_line_edit() -> None:
     p = ParamDef(
-        id="x", label="X", type=ParamType.PATH, widget=Widget.FILE_SAVE
+        id="x", label="X", type=ParamType.PATH, widget=Widget.SAVE_FILE
     )
     w = FileSaveWidget(p)
     assert isinstance(w._edit, _DroppableLineEdit)

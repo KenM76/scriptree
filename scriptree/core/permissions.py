@@ -1,5 +1,7 @@
 """File-permission checks and capability-based access control.
 
+## For humans
+
 Two permission layers:
 
 1. **File-access permissions** — ``check_write_access()`` checks whether
@@ -24,15 +26,57 @@ Two permission layers:
    lowest (most restrictive) wins and the conflict is recorded for a
    UI warning.
 
-Security note
--------------
-On Windows, ``os.access(path, os.W_OK)`` checks the **read-only file
-attribute** (``attrib +R``) but does **not** inspect NTFS ACLs.  For
-the initial deployment scenario — admins setting the read-only attribute
-on distributed tool files — this is sufficient.  A future enhancement
-could use ``win32security`` for ACL-level checking if needed.
+Security note: on Windows, ``os.access(path, os.W_OK)`` checks the
+**read-only file attribute** (``attrib +R``) but does **not** inspect
+NTFS ACLs.  For the initial deployment scenario — admins setting the
+read-only attribute on distributed tool files — this is sufficient.
+``_is_writable`` additionally does a non-destructive append-open on
+Windows to catch ACL denies that ``os.access`` misses.  A future
+enhancement could use ``win32security`` for full ACL-level checking.
 
 This module is pure Python, no Qt imports.
+
+## For maintainers / LLMs
+
+* The secure-default asymmetry is the crux: at APP level a MISSING
+  capability file means DENIED (so deleting files from a local copy
+  can't bypass policy); at PER-FILE level a missing file means
+  INHERIT from app level. When NO permissions dir exists at all,
+  EVERYTHING is allowed (developer mode). Do not "simplify" these
+  three cases into one — each is a deliberate security stance.
+* Per-file can only RESTRICT, never grant beyond app level. The
+  merge in ``load_permissions`` enforces this; any refactor must
+  keep "file tries to grant what app denies → denied".
+* ``_read_capability`` uses ``rglob`` (recursive): the same
+  capability filename in multiple subfolders resolves to the MOST
+  RESTRICTIVE (any read-only copy ⇒ denied). Capability identity is
+  the FILENAME, not the path — subfolders are purely organisational.
+* ``PermissionSet.can()`` defaults UNKNOWN capabilities to ``True``
+  (allowed). New capabilities must be registered in ``CAPABILITIES``
+  or they are silently ungated. ``path_env.py``'s scopes and the
+  features here must stay in lockstep with that dict.
+* ``deployed`` set tracks which capabilities had a real file
+  (app or per-file). The granular shared/personal helpers
+  (``can_read_shared`` etc.) use it to fall back to legacy
+  ``read_configurations`` / ``write_configurations`` when the new
+  granular file isn't deployed — removing a capability from
+  ``CAPABILITIES`` silently changes this fallback behaviour.
+* Caching: ``get_app_permissions`` memoises a process-wide
+  ``PermissionSet``; any code that changes the permissions path
+  (Settings dialog) MUST call ``reset_cached_permissions()`` or the
+  change won't take effect until restart. The cache ignores
+  ``custom_permissions_path`` on subsequent calls (first call wins).
+* ``_find_app_permissions_dir``: an explicit ``custom_path`` or
+  ``SCRIPTREE_PERMISSIONS_DIR`` is AUTHORITATIVE — if set but
+  invalid it returns ``None`` (does NOT fall through to the
+  walk-up). A writable env-specified dir is used but logs a
+  security warning (a writable permissions dir defeats the model).
+* ``_can_write_to_directory`` returns ``False`` for a non-existent
+  directory (used for not-yet-created files) — that's intentional;
+  don't flip it to ``True``.
+* Conflict reporting compares the two sources' raw (pre-resolution)
+  values; ``resolved_to`` is always the restrictive result. Keep
+  ``PermissionConflict`` fields in sync with ``conflict_summary``.
 """
 from __future__ import annotations
 
@@ -225,6 +269,52 @@ CAPABILITIES: dict[str, str] = {
         "Access paths outside the tool's working directory "
         "(e.g. system directories, user profile folders)"
     ),
+    # interactive stdin (v0.3.0) — gates the M-%-style live find/replace
+    # mode. When the file is missing or read-only, the runner runs the
+    # tool non-interactively even if the .scriptree declares
+    # ``interactive: true``. IT can lock the file's write-bit to
+    # disable for the whole organisation.
+    "interactive_stdin": (
+        "Allow tools to read user input from stdin while running "
+        "(query-replace style interactive prompt loop)"
+    ),
+    # Sanitization-warning suppression (v0.3.4).  Gates the three
+    # "Don't warn again" checkboxes (per-field / per-tool / global)
+    # in the injection-warning dialog.  When the file is missing
+    # or read-only, the checkboxes don't appear — every flagged Run
+    # forces the user to read and OK the dialog.  When granted, the
+    # user can opt out per-field, per-tool, or globally.  Re-enable
+    # via Edit ▸ Sanitization warnings... in the main window.
+    "suppress_sanitization_warnings": (
+        "Allow the user to dismiss future sanitization warnings "
+        "(per-field / per-tool / global checkboxes in the warning dialog)"
+    ),
+    # Cell click-to-run mode (v0.3.5).  Gates the "Click action"
+    # and "Run mode" dropdowns in the cell Settings dialog so an
+    # admin can prevent users from configuring cells to fire tools
+    # on a single click — the default ``"menu"`` behaviour stays in
+    # force regardless of what the catalog JSON says.  Default
+    # ALLOWED so the feature is usable out of the box.
+    "cell_click_to_run": (
+        "Allow cells to be configured as single-click run buttons "
+        "(catalog cell.click_action = \"run\", with sequential or "
+        "parallel run mode for trees)"
+    ),
+    # Dynamic choice/value providers (v0.6.0).  A tool can declare a
+    # ``choices_provider`` that runs an external command at form-open
+    # time to populate a dropdown / checkbox-list / scalar field.
+    # Running an arbitrary command to *build a form* is a new
+    # capability, gated like ``interactive_stdin`` /
+    # ``load_user_plugins``.  When the file is missing or read-only
+    # the tool still loads, but the dynamic params render disabled
+    # with a one-line "dynamic choices disabled by policy" note (the
+    # tool stays usable if those params aren't required — same
+    # fallback as ``interactive``).  Default ALLOWED so the feature
+    # works out of the box.
+    "dynamic_choices": (
+        "Allow tools to run an external command at form-open time "
+        "to populate parameter choices/values (choices_provider)"
+    ),
 }
 
 
@@ -308,6 +398,27 @@ def _read_capability(perm_dir: Path, capability: str) -> bool | None:
 
     # All copies are writable → allowed.
     return True
+
+
+def _resolved_capability_path(perm_dir: Path, capability: str) -> str:
+    """L3 fix: return the path of the file that actually DECIDED a
+    capability, for accurate conflict reporting.
+
+    ``_read_capability`` searches recursively (``rglob``) so the
+    deciding file may live in an organisational subfolder — but the
+    conflict UI used to show ``perm_dir / capability`` (the
+    top-level path), which often doesn't exist and misleads the
+    admin.  Mirror ``_read_capability``'s "most restrictive wins"
+    rule: prefer the first read-only copy (the one that denied),
+    else the first match, else the nominal top-level path as a
+    last-resort label."""
+    matches = list(perm_dir.rglob(capability))
+    for m in matches:
+        if m.is_file() and not _is_writable(m):
+            return str(m)
+    if matches:
+        return str(matches[0])
+    return str(perm_dir / capability)
 
 
 def _find_app_permissions_dir(
@@ -469,8 +580,14 @@ def load_permissions(
                 app_level_allowed=app_allowed,
                 file_level_allowed=file_val,
                 resolved_to=resolved,
-                app_source=str(app_dir / cap) if app_dir else "",
-                file_source=str(file_dir / cap) if file_dir else "",
+                app_source=(
+                    _resolved_capability_path(app_dir, cap)
+                    if app_dir else ""
+                ),
+                file_source=(
+                    _resolved_capability_path(file_dir, cap)
+                    if file_dir else ""
+                ),
             ))
 
     return result

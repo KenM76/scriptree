@@ -1,5 +1,7 @@
 """A QTabBar that wraps onto additional rows when tabs don't fit.
 
+## For humans
+
 Qt's built-in ``QTabBar`` shows scroll arrows when the total tab
 width exceeds the available horizontal space — there's no native
 way to lay tabs out on multiple rows. This subclass overrides the
@@ -15,6 +17,40 @@ tab bar.
 The helper ``make_wrapping_tab_widget()`` builds a ``QTabWidget`` whose
 tab bar is a ``WrappingTabBar``; use it as a drop-in replacement for
 ``QTabWidget()``.
+
+## For maintainers / LLMs
+
+- ``self._rects`` is the single source of geometry truth: it is
+  computed by ``_recompute`` and consumed by ``tabSizeHint``,
+  ``sizeHint``, ``paintEvent`` and ``mousePressEvent``. Every code
+  path that reads it must keep it in sync with ``self.count()`` —
+  ``paintEvent`` re-runs ``_recompute`` if ``len(self._rects) !=
+  count``, the safety net for tab add/remove/rename between layout
+  events. Don't read ``_rects`` without that staleness check.
+- ``_recompute`` early-outs (empty rects, zero height) when wrap is
+  off; every override therefore branches on ``self._wrap`` and falls
+  back to ``super()`` so disabling wrap fully restores native
+  behaviour. Keep the dual path in any new override.
+- Greedy fill uses ``super().tabSizeHint(i)`` (the NATURAL width) for
+  measurement; ``tabSizeHint`` then returns the cached
+  ``_rects[i].size()`` so Qt's own layout agrees with our paint
+  geometry. The wrap test ``if rects and x + tw > bar_w`` always
+  places ≥1 tab per row (a tab wider than the viewport still renders,
+  no infinite wrap).
+- ``minimumSizeHint`` reports only one row's height so the parent
+  ``QTabWidget`` can shrink the bar; the real multi-row height comes
+  from ``sizeHint``/``_total_height`` after ``_recompute`` runs
+  against the assigned width. ``resizeEvent``/``tabLayoutChange``
+  recompute then call ``updateGeometry()`` so the parent re-queries
+  height — don't drop those notifications or row count goes stale on
+  resize.
+- ``mousePressEvent``: only LeftButton hit-tests ``_rects`` to set
+  the current index; everything else (context-menu signal,
+  middle-click-close) MUST fall through to ``super()`` — preserve
+  that fallthrough.
+- ``make_wrapping_tab_widget`` calls ``setTabBar`` BEFORE any tabs
+  exist (Qt requires the bar be installed before tabs are added).
+  Always construct via the helper, never swap the bar post-hoc.
 """
 from __future__ import annotations
 

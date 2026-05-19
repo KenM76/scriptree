@@ -1,5 +1,7 @@
 """Parser plugin API.
 
+## For humans
+
 A parser plugin is a Python module that exposes three required
 attributes::
 
@@ -29,7 +31,7 @@ whose ``detect`` returns a non-None ``ToolDef`` wins. A built-in
 ``heuristic`` plugin at ``PRIORITY=999`` is the catch-all — it always
 returns a result, so probes never fall through to nothing.
 
-## Writing a new plugin
+### Writing a new plugin
 
 Drop a file like this into any directory on ``SCRIPTREE_PARSERS_DIR``::
 
@@ -48,10 +50,41 @@ Drop a file like this into any directory on ``SCRIPTREE_PARSERS_DIR``::
 
 Restart ScripTree. Done.
 
-## Testing
+### Testing
 
 Tests that want a clean registry should call ``reset_default_registry()``
 between runs. The singleton is lazy so the next access rebuilds it.
+
+## For maintainers / LLMs
+
+- Everything here runs at EDITOR time (help text → ToolDef), not on
+  the tool-run path.
+- ``_plugin_from_module`` is the protocol gate: a module needs a
+  non-None ``NAME`` AND a callable ``detect`` to count; bad
+  ``PRIORITY`` falls back to 100 with a warning. Change the required
+  attribute set => also change ``plugins/__init__`` doc and any
+  bundled plugins.
+- ``PluginRegistry.add`` dedupes by ``name`` (last write wins) then
+  re-sorts by ``(priority, name)``. This is exactly how a user
+  plugin overrides a built-in: reuse the same ``NAME``. Name
+  collisions are silent replacement, not an error.
+- ``parse`` swallows ANY exception from a plugin's ``detect`` (logs
+  + continues) — plugins are untrusted. Don't let the registry
+  itself raise from inside that loop or one bad plugin kills the
+  pipeline.
+- Built-in loading prefers the external ``ScripTree/parsers/`` dir
+  (located by walking up 3 parents from this file); only if that's
+  absent/empty does it fall back to the in-package ``plugins``
+  subpackage. Moving this file changes the parents math in
+  ``_find_parsers_dir``.
+- User-dir loading temporarily prepends the dir to ``sys.path`` and
+  registers modules under ``scriptree_parser_<stem>`` in
+  ``sys.modules`` — two user dirs with same-stem files collide on
+  that synthetic name (last loaded wins).
+- ``get_default_registry`` is a process-global lazy singleton; user
+  plugins load ONLY if ``permissions.can("load_user_plugins")``.
+  Any permission-check failure fails CLOSED (no user plugins).
+  Tests must call ``reset_default_registry()`` to rebuild.
 """
 from __future__ import annotations
 
@@ -239,7 +272,9 @@ def load_plugins_from_dir(registry: PluginRegistry, dir_path: Path) -> int:
     if dir_str not in sys.path:
         sys.path.insert(0, dir_str)
         path_added = True
-    loaded = 0
+    # (L5 fix: removed a dead ``loaded = 0`` here — the real counter
+    # lives in ``_load_plugins_from_dir_inner``; this function only
+    # manages the sys.path lifetime and returns the inner result.)
     try:
         return _load_plugins_from_dir_inner(registry, dir_path)
     finally:

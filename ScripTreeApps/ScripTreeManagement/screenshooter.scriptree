@@ -1,0 +1,149 @@
+{
+  "schema_version": 3,
+  "name": "Screenshot a tool / tree / cell",
+  "description": "Render a ScripTree widget to a PNG file without opening it on the user's desktop. Uses Qt's widget.grab() against an unshown widget \u2014 no flash, no focus theft. Useful for documentation screenshots, visual-regression baselines, catalog thumbnails, or quick sanity checks after a branding tweak.",
+  "executable": "python",
+  "working_directory": "../..",
+  "argument_template": [
+    "screenshooter.py",
+    "{kind}",
+    "{input}",
+    [
+      "--out",
+      "{out}"
+    ],
+    "{batch?--batch}",
+    [
+      "--cell-size",
+      "{cell_size}"
+    ],
+    [
+      "--width",
+      "{width}"
+    ],
+    [
+      "--height",
+      "{height}"
+    ],
+    [
+      "--config",
+      "{config}"
+    ],
+    "{standalone?--standalone}"
+  ],
+  "params": [
+    {
+      "id": "kind",
+      "label": "What to render",
+      "description": "cell = the hexagonal cell widget bound to the catalog. form = the parameter form view of a .scriptree (what the standalone runner shows). tree = the popup-menu view of a .scriptreetree. Leave on auto with --batch to pick per file: .scriptree -> form, .scriptreetree -> tree.",
+      "type": "enum",
+      "widget": "dropdown",
+      "required": false,
+      "default": "form",
+      "choices": [
+        "cell",
+        "form",
+        "tree"
+      ],
+      "choice_labels": [
+        "cell  \u2014 hexagonal cell visual",
+        "form  \u2014 parameter form view",
+        "tree  \u2014 tree-popup view"
+      ]
+    },
+    {
+      "id": "input",
+      "label": "Input catalog (or folder for batch)",
+      "description": "A .scriptree / .scriptreetree file in single mode, or a folder containing those when --batch is on (every catalog inside gets rendered).",
+      "type": "path",
+      "widget": "file",
+      "required": true,
+      "default": "",
+      "file_filter": "ScripTree catalogs (*.scriptree *.scriptreetree);;All files (*)"
+    },
+    {
+      "id": "out",
+      "label": "Output PNG (or output folder for batch)",
+      "description": "Where to write the result. Single mode: a .png path. Batch mode: a folder (one PNG per source catalog, named <stem>_<kind>.png). Leave blank to default to ./<input>.png (single) or ./screenshots/ (batch).",
+      "type": "path",
+      "widget": "save_file",
+      "required": false,
+      "default": "",
+      "file_filter": "PNG image (*.png);;All files (*)"
+    },
+    {
+      "id": "batch",
+      "label": "Batch mode (walk input folder, render every catalog)",
+      "description": "Recurse through the input folder; render every .scriptree / .scriptreetree found.  Useful for re-generating a whole help-docs screenshot set in one shot.",
+      "type": "boolean",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
+      "id": "cell_size",
+      "label": "Cell size (px)",
+      "description": "Pixel size of the hexagonal cell when kind=cell.  Ignored for form/tree.  128 looks clean for documentation thumbnails.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 128
+    },
+    {
+      "id": "width",
+      "label": "Form / tree width (px)",
+      "description": "Width of the captured form or tree widget.  Ignored for cell.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 520
+    },
+    {
+      "id": "height",
+      "label": "Form / tree height (px)",
+      "description": "Height of the captured form or tree widget.  Ignored for cell.",
+      "type": "integer",
+      "widget": "number",
+      "required": false,
+      "default": 640
+    },
+    {
+      "id": "config",
+      "label": "Sidecar configuration name",
+      "description": "Name of a sidecar configuration to activate before capture (form kind only).  The tool's <tool>.configs.json file holds named configurations; this picks which one to apply.  Leave blank to use the sidecar's default-marked configuration (matches the standalone-mode boot pick).  Unknown names fall back to default with a warning.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": ""
+    },
+    {
+      "id": "standalone",
+      "label": "Render in standalone mode",
+      "description": "Apply the active configuration's UIVisibility flags so the captured form matches what the user sees when launching the tool from ScripTreeRing \u2014 hidden command line, no Copy argv / Env buttons, no Tools sidebar, etc., per the config's own settings.  Off by default (renders the full docked view).",
+      "type": "boolean",
+      "widget": "checkbox",
+      "required": false,
+      "default": false
+    }
+  ],
+  "sections": [
+    {
+      "id": "target",
+      "label": "What to capture",
+      "default_collapsed": false
+    },
+    {
+      "id": "output",
+      "label": "Output",
+      "default_collapsed": false
+    },
+    {
+      "id": "geometry",
+      "label": "Geometry",
+      "default_collapsed": true
+    }
+  ],
+  "cell": {
+    "text_label": "\ud83d\udcf8"
+  }
+}

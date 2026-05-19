@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "Disable-LocalUser",
   "description": "Disable a local user account.",
   "executable": "powershell.exe",

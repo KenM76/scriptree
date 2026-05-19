@@ -1,5 +1,7 @@
 """Plugin: click framework detector.
 
+## For humans
+
 Click's shape::
 
     Usage: PROG [OPTIONS] COMMAND [ARGS]...
@@ -13,6 +15,22 @@ Click's shape::
 The heuristic parser handles click's flag lines fine; this plugin
 just recognizes click by its ``Usage:`` / ``Options:`` header casing
 and retags the source accordingly.
+
+## For maintainers / LLMs
+
+- EDITOR-time plugin. ``PRIORITY=20`` — after argparse (10), before
+  powershell (25) / winhelp (30) / heuristic (999).
+- Detection is casing-sensitive: ``_CLICK_USAGE`` matches
+  capital-U ``Usage:`` and ``_CLICK_OPTIONS`` matches capital-O
+  ``Options:`` on its own line. argparse's lowercase
+  ``usage:``/``options:`` is what keeps these two plugins from
+  fighting over the same text — do NOT make these patterns
+  case-insensitive.
+- Body parsing is delegated to ``_core.parse_heuristic``; this
+  plugin only retags ``source.mode = "click"`` and strips the
+  synthetic ``help`` param/template entries. ``_keep_entry`` is
+  byte-identical to the argparse plugin's and shares the same
+  ``id == "help"`` / ``"{help"`` contract with ``parse_heuristic``.
 """
 from __future__ import annotations
 

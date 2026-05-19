@@ -53,6 +53,15 @@ Empty collections (`env: {}`, `path_prepend: []`, `sections: []`) may be
 omitted from the on-disk form to keep files compact. Readers must tolerate
 their absence.
 
+### Optional `cell` sub-object (V3, v0.2.7+)
+
+`.scriptree` files can carry a top-level `"cell"` sub-object that
+controls how the V3 cell shell paints a launcher cell bound to this
+tool — icon, text label, scale, opacity. Entirely optional; omitted
+when every field is at its default, so legacy files stay
+byte-identical. See [`LLM/scriptree_format.md`](LLM/scriptree_format.md)
+for the full schema.
+
 ## `<name>.scriptree.configs.json` — sidecar configurations
 
 Per-tool saved form values. Stored next to the `.scriptree` file as a
@@ -97,14 +106,14 @@ A launcher that groups several `.scriptree` files into folders. Schema v1.
 ```json
 {
   "schema_version": 1,
-  "name": "SolidWorks toolkit",
+  "name": "Demo toolkit",
   "nodes": [
     {
       "type": "folder",
-      "name": "sw_bridge",
+      "name": "file-utils",
       "children": [
-        { "type": "leaf", "path": "./sw_bridge/list-components.scriptree" },
-        { "type": "leaf", "path": "./sw_bridge/compare-hardware.scriptree" }
+        { "type": "leaf", "path": "./file-utils/list-files.scriptree" },
+        { "type": "leaf", "path": "./file-utils/compare-dirs.scriptree" }
       ]
     }
   ]
@@ -113,6 +122,20 @@ A launcher that groups several `.scriptree` files into folders. Schema v1.
 
 Leaf paths can be absolute or relative to the `.scriptreetree` file.
 Optional `display_name` on a leaf overrides the tool's `name` in the tree.
+A `.scriptreetree` may also carry a top-level `"cell"` sub-object
+(same schema as on `.scriptree`) for V3 cell-shell launcher
+appearance.
+
+## `.scriptreering` — V3 cell + ring layout
+
+A `.scriptreering` file captures one or more **cells** (the floating
+desktop launchers spawned by `run_scriptreering.bat`) — their
+positions, sizes, transparency, shape, and which catalog each cell
+points at. The format is layout-only; cell appearance (icon / text /
+scale / opacity) lives in the bound catalog's `cell` sub-object,
+not in the ring file. See [`cell_shell.md`](cell_shell.md) for the
+user-facing UX and [`LLM/scriptreering_format.md`](LLM/scriptreering_format.md)
+for the JSON schema.
 
 ## `<name>.scriptreetree.treeconfigs.json` — tree-level configurations
 

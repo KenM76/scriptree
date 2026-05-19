@@ -125,7 +125,7 @@ Then open ScripTree, do **File → New tool from executable...**, pick
 
 1. `source.mode` in the resulting draft is `"argparse"`.
 2. Every flag from `help.txt` appears in the params list.
-3. Path flags have `file_open` / `file_save` / `folder` widgets.
+3. Path flags have `file` / `save_file` / `folder` widgets.
 4. Enum flags have `dropdown` widget with correct choices.
 5. Bool flags have `checkbox` widget.
 6. Tooltips match the `help=` strings.
@@ -133,3 +133,19 @@ Then open ScripTree, do **File → New tool from executable...**, pick
 If any of these fail, fix the `help=` strings or the argument
 definitions — do not manually edit the resulting `.scriptree` file, or
 you'll lose the fixes the next time the tool is re-parsed.
+
+## Ship a standalone-mode configuration
+
+After the `.scriptree` is generated, also write a sidecar
+`<tool>.scriptree.configs.json` with a `"standalone"` configuration
+marked as `default_name`.  That configuration's `ui_visibility`
+block should turn OFF the developer-facing widgets — `extras_box`,
+`command_line`, `copy_argv`, `env_button`, `tools_sidebar` — and
+turn ON `popup_on_error` and `popup_on_success` so the end user
+gets clear close-the-loop feedback.  Only deviate from that recipe
+when a specific control is genuinely useful for the tool's
+purpose (e.g. a diagnostic tool that needs `command_line` visible).
+
+See `help/LLM/configurations_sidecar.md` → "Standalone-mode recipe"
+for the full JSON shape, the per-element rationale, and the
+exceptions.

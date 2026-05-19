@@ -1,5 +1,7 @@
 """Input sanitization for form values before they reach subprocess argv.
 
+## For humans
+
 ScripTree uses ``subprocess.Popen(argv, shell=False)`` so there is no
 shell interpretation of metacharacters.  However, some attack vectors
 remain:
@@ -15,7 +17,51 @@ remain:
 The command-line editor is exempt from sanitization — if a user has
 access to that, they're trusted to enter arbitrary text.
 
+This module also exposes ``validate_resolved_path`` (symlink /
+out-of-base-dir checks for tree leaf paths) and ``split_command``
+(shell-free argv splitting reused by the runner).
+
 This module is pure Python, no Qt imports.
+
+## For maintainers / LLMs
+
+* ``sanitize_value`` is DETECT-ONLY: it NEVER modifies the value
+  (``SanitizeResult.value`` is the original verbatim) — it only
+  returns human-readable warnings. The CALLER decides whether to
+  block submission. Don't turn this into a mutator; downstream code
+  relies on the value passing through untouched.
+* The actual injection defence is ``shell=False`` in the runner, not
+  this module. These warnings are advisory UX, gated by the
+  ``allow_path_traversal`` / ``access_sensitive_paths`` capabilities
+  (passed in as ``allow_traversal`` / ``allow_sensitive``). Keep the
+  capability wiring at call sites in sync with ``permissions.py``.
+* ``sanitize_all_values`` and ``sanitize_all_values_detailed`` must
+  stay behaviourally identical except the latter also returns the
+  field id per warning (powers the per-field "Don't warn again").
+  Change one ⇒ change the other.
+* ``_looks_sensitive`` is a pure STRING-PREFIX check on the
+  already-resolved path (case-insensitive only on Windows). It does
+  NOT resolve symlinks — a symlink under a sensitive dir is not
+  caught here by design (this is a warning, not a sandbox). The
+  ``_SENSITIVE_DIRS_*`` lists are deliberately short to avoid
+  false-positive fatigue; adding entries widens user-facing noise.
+* ``split_command`` short-circuits empty/whitespace input to ``[]``
+  BEFORE calling ``CommandLineToArgvW`` — the Win32 API returns the
+  host process exe name for an empty string (documented quirk).
+  Never remove that guard. It frees the Win32 array via
+  ``LocalFree`` in a ``finally``; preserve that to avoid a leak.
+* On Windows ``split_command`` uses ``CommandLineToArgvW`` (keeps
+  ``C:\\Users\\Ken`` backslashes intact); POSIX uses
+  ``shlex.split``. The runner's quote-balance validation depends on
+  this exact behaviour — keep them aligned.
+* ``validate_resolved_path``'s symlink walk stops at the filesystem
+  root (``check != check.parent``); ``relative_to`` is the
+  out-of-base test. Both default to permissive (``allow_*=True``);
+  callers must pass the capability-derived values to actually
+  restrict.
+* Regexes are module-level compiled constants; ``_SHELL_META`` is a
+  set for O(1) intersection. Keep these literal and auditable —
+  this file is a security-review focal point.
 """
 from __future__ import annotations
 
@@ -54,11 +100,60 @@ class SanitizeResult:
         return len(self.warnings) == 0
 
 
+# Sensitive system directories (V3 v0.3.3) — when the
+# ``access_sensitive_paths`` capability is denied, tool form values
+# that resolve under any of these get a warning.  Lists are kept
+# small and conservative to avoid false-positive fatigue: each
+# entry is a directory whose contents are dangerous to overwrite
+# or read from a tool's perspective (admin-installed binaries,
+# system config, OS internals).
+_SENSITIVE_DIRS_WIN = (
+    r"c:\windows",
+    r"c:\program files",
+    r"c:\program files (x86)",
+    r"c:\programdata",
+)
+_SENSITIVE_DIRS_POSIX = (
+    "/etc",
+    "/usr/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/boot",
+    "/sys",
+)
+
+
+def _looks_sensitive(path_str: str) -> bool:
+    """True iff ``path_str`` starts with a known-sensitive directory.
+
+    Case-insensitive on Windows (where path comparison is
+    case-insensitive); case-sensitive on POSIX.  Doesn't resolve
+    the path — purely a string-prefix check, so symlinks tucked
+    under a sensitive dir aren't caught here.  That's fine: this
+    is a "warning" guard, not a sandbox.
+    """
+    import sys
+    if not path_str:
+        return False
+    p = path_str.replace("/", "\\") if sys.platform == "win32" else path_str
+    p_cmp = p.lower() if sys.platform == "win32" else p
+    sensitive = (
+        _SENSITIVE_DIRS_WIN if sys.platform == "win32"
+        else _SENSITIVE_DIRS_POSIX
+    )
+    for sd in sensitive:
+        if p_cmp == sd or p_cmp.startswith(sd + ("\\" if sys.platform == "win32" else "/")):
+            return True
+    return False
+
+
 def sanitize_value(
     value: str,
     *,
     is_path: bool = False,
     field_label: str = "",
+    allow_traversal: bool = False,
+    allow_sensitive: bool = False,
 ) -> SanitizeResult:
     """Check a form field value for injection risks.
 
@@ -74,6 +169,14 @@ def sanitize_value(
         additional path-specific checks).
     field_label:
         Human-readable field name for warning messages.
+    allow_traversal:
+        V3 v0.3.3+ — when True, the ``../`` path-traversal warning
+        is suppressed.  Wired to the ``allow_path_traversal``
+        capability at call sites.
+    allow_sensitive:
+        V3 v0.3.3+ — when True, the sensitive-path warning is
+        suppressed.  Wired to the ``access_sensitive_paths``
+        capability.
     """
     if not value:
         return SanitizeResult(value=value, warnings=[])
@@ -99,7 +202,7 @@ def sanitize_value(
 
     # Path-specific checks.
     if is_path:
-        if _PATH_TRAVERSAL.search(value):
+        if _PATH_TRAVERSAL.search(value) and not allow_traversal:
             warnings.append(
                 f"{prefix}Contains path traversal (../) — "
                 "may access files outside the expected directory."
@@ -109,14 +212,67 @@ def sanitize_value(
                 f"{prefix}Contains a UNC path (\\\\server\\share) — "
                 "may expose credentials on the network."
             )
+        # Sensitive-path check (V3 v0.3.3+).  Looks at the resolved
+        # absolute form so a relative path under a sensitive root
+        # is still flagged.  Skipped when ``access_sensitive_paths``
+        # is granted by the caller.
+        if not allow_sensitive:
+            try:
+                from pathlib import Path as _Path
+                resolved = str(_Path(value).expanduser().resolve())
+            except (OSError, RuntimeError, ValueError):
+                resolved = value
+            if _looks_sensitive(resolved):
+                warnings.append(
+                    f"{prefix}Resolves under a sensitive system "
+                    f"directory: {resolved}"
+                )
 
     return SanitizeResult(value=value, warnings=warnings)
+
+
+def sanitize_all_values_detailed(
+    values: dict[str, str],
+    path_fields: set[str] | None = None,
+    labels: dict[str, str] | None = None,
+    *,
+    allow_traversal: bool = False,
+    allow_sensitive: bool = False,
+) -> list[tuple[str, str]]:
+    """Like ``sanitize_all_values`` but returns parallel
+    ``(warning_text, field_id)`` tuples (V3 v0.3.4+).
+
+    Used by the runner's injection-warning dialog to power the
+    per-field "Don't warn again" checkbox: knowing which param
+    each warning came from lets us mute future warnings about that
+    specific field without silencing the whole tool.
+    """
+    out: list[tuple[str, str]] = []
+    path_ids = path_fields or set()
+    label_map = labels or {}
+
+    for pid, val in values.items():
+        if not isinstance(val, str):
+            continue
+        result = sanitize_value(
+            val,
+            is_path=pid in path_ids,
+            field_label=label_map.get(pid, pid),
+            allow_traversal=allow_traversal,
+            allow_sensitive=allow_sensitive,
+        )
+        for w in result.warnings:
+            out.append((w, pid))
+    return out
 
 
 def sanitize_all_values(
     values: dict[str, str],
     path_fields: set[str] | None = None,
     labels: dict[str, str] | None = None,
+    *,
+    allow_traversal: bool = False,
+    allow_sensitive: bool = False,
 ) -> list[str]:
     """Sanitize all form values and return a flat list of warnings.
 
@@ -128,6 +284,11 @@ def sanitize_all_values(
         Set of param IDs that are path-type fields.
     labels:
         ``{param_id: human_label}`` for better warning messages.
+    allow_traversal, allow_sensitive:
+        V3 v0.3.3+ — forwarded to ``sanitize_value`` to suppress
+        the corresponding warnings when the matching capabilities
+        (``allow_path_traversal`` / ``access_sensitive_paths``)
+        are granted by the caller's permission set.
     """
     all_warnings: list[str] = []
     path_ids = path_fields or set()
@@ -140,6 +301,8 @@ def sanitize_all_values(
             val,
             is_path=pid in path_ids,
             field_label=label_map.get(pid, pid),
+            allow_traversal=allow_traversal,
+            allow_sensitive=allow_sensitive,
         )
         all_warnings.extend(result.warnings)
 

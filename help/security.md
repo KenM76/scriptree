@@ -10,6 +10,12 @@ that users and IT should be aware of.
 
 ## Overview of protections
 
+> **v0.3.3 update.** All 35 capability files in the permissions
+> registry are now actually consulted at runtime.  Previous releases
+> declared 21 of them but never enforced them — putting a read-only
+> `run_tools` file did nothing, etc.  v0.3.3 closed every gap (see
+> the wiring map at the bottom of `### All capability files`).
+
 | Layer | What it does |
 |---|---|
 | **Permissions system** | File-based capability control — denies actions by default |
@@ -86,6 +92,10 @@ denied for that user.
 | **Editing** | `edit_tool_definition` | Opening the tool definition editor |
 | | `read_configurations` | Switching between saved configurations (read-only) |
 | | `write_configurations` | Creating, saving, deleting, renaming configurations |
+| | `read_personal_configurations` | Read access to per-user configuration sidecars (V3) |
+| | `write_personal_configurations` | Write access to per-user configuration sidecars (V3) |
+| | `read_shared_configurations` | Read access to shared / committed configuration sidecars (V3) |
+| | `write_shared_configurations` | Write access to shared / committed configuration sidecars (V3) |
 | | `edit_configurations` | Modifying saved configurations |
 | | `edit_environment` | Changing environment variable overrides |
 | | `add_to_scriptree_path_prepend` | Appending to a `.scriptree`'s `path_prepend` via the missing-executable recovery dialog (default-allowed) |
@@ -107,6 +117,10 @@ denied for that user.
 | | `add_to_system_path` | Modifying the system-wide PATH via the registry; requires admin elevation (default-**denied** — admin must opt in) |
 | **Security** | `allow_symlinks` | Allowing symlinks in tool/tree path resolution |
 | | `allow_path_traversal` | Allowing `../` in tree leaf paths |
+| | `interactive_stdin` | Allowing tools to read live input from stdin while running (V3 v0.3.0 — query-replace style send-line widget; **default-denied**, admin must opt in) |
+| | `suppress_sanitization_warnings` | Allowing the user to dismiss sanitization warnings via the three "Don't warn again" checkboxes in the injection popup (per-field / per-tool / global). Re-enable via Edit ▸ Sanitization warnings… (V3 v0.3.4) |
+| | `cell_click_to_run` | Allowing cells to be configured as single-click run buttons (catalog `cell.click_action = "run"` with sequential / parallel run mode for trees). When denied, the dropdowns in cell Settings stay locked at "Show menu" regardless of catalog state (V3 v0.3.5) |
+| | `dynamic_choices` | Allowing a tool to run an external command at form-open time to populate parameter choices/values (`choices_provider`; v0.6.0). Ships **default-allowed** (writable `permissions/running/dynamic_choices`); make it read-only to deny. When denied, a tool with `choices_provider` still loads but the dynamic params render disabled with a one-line note (usable if not required — same fallback as `interactive`). The provider command is a fixed argv list from the `.scriptree` (never user input), spawned `shell=False`; its output is NUL/control-scrubbed exactly like parser output before it can reach argv. See `help/LLM/dynamic_providers.md` |
 
 #### PATH-add scopes — secure-by-default
 

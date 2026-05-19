@@ -20,6 +20,41 @@ All edits go through ``_push_param`` which rewrites the ``ParamDef``
 and rebuilds the affected views. Edits are local until Save is
 clicked — Cancel discards them. The editor returns the final
 ``ToolDef`` via the ``saved`` signal.
+
+## For maintainers / LLMs
+
+- Unsaved-changes guard (v0.6.2): :meth:`is_dirty` compares
+  ``tool_to_dict(self._tool)`` against ``self._baseline`` (a
+  ``tool_to_dict`` snapshot taken at construction AND re-taken after
+  every successful save). It deliberately serialises rather than
+  tracking a flag, because the property-panel handlers mutate
+  ``self._tool`` in place — a boolean dirty flag would miss those.
+  Keep ``_baseline`` resynced on every save path or false-positive
+  prompts return.
+- :meth:`is_dirty` fails *safe*: if ``tool_to_dict`` ever raises it
+  returns ``True`` (warn rather than silently lose work). Do not
+  "fix" this to return ``False`` on exception.
+- :meth:`_confirm_leave` is the single guard shared by Close and
+  Cancel. Save branch returns ``False`` on purpose: the real save
+  path (``_on_save``) emits ``saved`` and the main window navigates
+  back itself, so this handler must NOT also emit ``cancelled``
+  (double-navigation / double-emit). Save-blocked (validation,
+  read-only, dialog-cancelled) correctly stays in the editor.
+- ``_on_close`` and ``_on_cancel`` both gate on ``_confirm_leave``
+  before emitting ``cancelled`` — a stray click must never silently
+  discard unsaved work. Any new exit path must route through
+  ``_confirm_leave`` too.
+- Edits are in-place mutations of ``self._tool`` via ``_push_param``;
+  there is no working copy. "Cancel discards" relies entirely on the
+  caller throwing away this editor instance and reloading from disk —
+  do not assume ``self._tool`` is pristine after a cancelled edit.
+- Save is permission-gated upstream (``save_scriptree`` /
+  ``save_as_scriptree`` checked in :mod:`main_window`); this view's
+  Save button does not re-check capability, so do not invoke
+  ``_on_save`` from a path that bypasses that gate.
+- ``saved`` carries the final ``ToolDef``; the main window owns
+  swapping back to the runner. The editor does not manage its own
+  lifetime.
 """
 from __future__ import annotations
 
@@ -33,6 +68,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -42,17 +78,19 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from ..core.io import save_tool
+from ..core.io import save_tool, tool_to_dict
 from ..core.model import (
     VALID_WIDGETS,
     ParamDef,
@@ -98,6 +136,14 @@ class ToolEditorView(QWidget):
         self._refresh_param_list()
         if self._tool.params:
             self._param_list.setCurrentRow(0)
+
+        # v0.6.2 — unsaved-changes detection.  Snapshot the tool's
+        # serialised form right after construction; ``is_dirty()``
+        # compares the live tool against it.  Serialised comparison
+        # (not object identity) is robust to the in-place mutation
+        # the property-panel handlers do, and ignores incidental
+        # object churn.  Refreshed after every successful save.
+        self._baseline = tool_to_dict(self._tool)
 
     # --- UI construction -------------------------------------------------
 
@@ -149,6 +195,27 @@ class ToolEditorView(QWidget):
         env_wrapper = QWidget()
         env_wrapper.setLayout(env_row)
         top_form.addRow("Environment:", env_wrapper)
+
+        # Interactive stdin (V3 v0.3.0) — opt-in flag that tells the
+        # runner to spawn the child with ``stdin=PIPE`` and surface a
+        # send-line widget below the output pane.  Off by default;
+        # use it for tools that implement query-replace-style prompt
+        # loops (Emacs M-%) — pick a match, type ``y``/``n``/``!``/``q``,
+        # hit Enter.  The runner ALSO requires the ``interactive_stdin``
+        # capability to be granted; when missing the row is hidden and
+        # the tool runs non-interactively.
+        self._interactive_check = QCheckBox(
+            "Allow this tool to read live input from stdin while running"
+        )
+        self._interactive_check.setToolTip(
+            "When checked, the runner shows a send-line widget below "
+            "the output pane so you can type responses (y / n / ! / q) "
+            "to a running tool's prompt loop, Emacs M-% style.  Also "
+            "requires the 'interactive_stdin' permission to be granted."
+        )
+        self._interactive_check.setChecked(bool(self._tool.interactive))
+        self._interactive_check.toggled.connect(self._on_interactive_toggled)
+        top_form.addRow("Interactive:", self._interactive_check)
 
         # Custom menus — tool.menus. Rendered as a QMenuBar above the
         # form by ToolRunnerView when the tool is run.
@@ -326,33 +393,161 @@ class ToolEditorView(QWidget):
         self._prop_section.currentIndexChanged.connect(
             self._on_prop_section_changed
         )
+        # v0.6.0 — dynamic provider editor.  The button text reflects
+        # whether the selected param currently has a provider so the
+        # author can see at a glance which params are dynamic.
+        self._prop_provider_btn = QPushButton("Provider…")
+        self._prop_provider_btn.setToolTip(
+            "Configure a dynamic choices/value provider: run an "
+            "external command at form-open time to populate this "
+            "field, optionally cascading from other params."
+        )
+        self._prop_provider_btn.clicked.connect(self._on_edit_provider)
 
-        self._prop_layout.addRow("ID:", self._prop_id)
-        self._prop_layout.addRow("Label:", self._prop_label)
-        self._prop_layout.addRow("Description:", self._prop_desc)
-        self._prop_layout.addRow("Type:", self._prop_type)
-        self._prop_layout.addRow("Widget:", self._prop_widget)
-        self._prop_layout.addRow("Required:", self._prop_required)
-        self._prop_layout.addRow("Do not save value:", self._prop_no_persist)
-        self._prop_layout.addRow("Do not auto-split:", self._prop_no_split)
-        self._prop_layout.addRow("Default:", self._prop_default)
-        self._prop_layout.addRow("Choices:", self._prop_choices)
-        self._prop_layout.addRow("File filter:", self._prop_filter)
-        self._prop_layout.addRow("Section:", self._prop_section)
+        # v0.4.0 — every property row gets a hover tooltip on BOTH
+        # the label and the input.  Previously the only tooltips on
+        # the property panel were the ones manually wired above
+        # (no_persist, no_split, choices, section); the rest of the
+        # fields had no inline help at all, which made the editor
+        # hostile to first-time tool authors.
+        #
+        # ``_add_prop_row`` is a tiny wrapper that calls
+        # ``QFormLayout.addRow(label_widget, input)`` AFTER setting
+        # the same tooltip on both so the user gets help whether
+        # they hover the field name or the field itself.
+        self._add_prop_row(
+            "ID:", self._prop_id,
+            "Internal identifier for this parameter.  Used inside "
+            "the argument template (e.g. <code>{my_id}</code>) and "
+            "in saved configurations.  Must be a valid Python "
+            "identifier — letters, digits, underscores; can't "
+            "start with a digit.  Renaming an ID rewrites every "
+            "reference in the argument template.",
+        )
+        self._add_prop_row(
+            "Label:", self._prop_label,
+            "Human-readable name shown next to the field in the "
+            "form.  Keep it short — under 30 characters typically "
+            "fits the available space without truncation.",
+        )
+        self._add_prop_row(
+            "Description:", self._prop_desc,
+            "Longer help text that appears as a placeholder inside "
+            "the field AND as a hover tooltip in the runner form. "
+            "First few words show as placeholder; full text shows on "
+            "hover.  This is the user's primary in-app help — write "
+            "it as if the reader has never seen the tool before.",
+        )
+        self._add_prop_row(
+            "Type:", self._prop_type,
+            "Data type the field collects.  Limits which widgets "
+            "are available (e.g. <code>bool</code> requires "
+            "<code>checkbox</code>; <code>path</code> requires one "
+            "of the file/folder pickers).  Type drives validation, "
+            "default coercion, and how the value is rendered into "
+            "the argument template.",
+        )
+        self._add_prop_row(
+            "Widget:", self._prop_widget,
+            "Visual control used to collect the value.  Filtered by "
+            "the chosen Type — only compatible widgets appear in "
+            "the dropdown.",
+        )
+        self._add_prop_row(
+            "Required:", self._prop_required,
+            "When checked, the user can't click Run until this "
+            "field has a non-empty value.  An empty required field "
+            "shows a red outline and disables the Run button.",
+        )
+        self._add_prop_row(
+            "Do not save value:", self._prop_no_persist,
+            "When checked, the parameter's value is never written "
+            "into any saved configuration.  Useful for passwords, "
+            "tokens, and other sensitive or scratch values.  The "
+            "user's most recent entry is kept during the session "
+            "but is lost when the tool is reloaded.",
+        )
+        self._add_prop_row(
+            "Do not auto-split:", self._prop_no_split,
+            "Opt out of the auto-split rule for this parameter.  "
+            "By default, when a string param's placeholder is the "
+            "entire template token (e.g. "
+            "<code>argument_template=[\"{flags}\"]</code>) and the "
+            "value contains whitespace, ScripTree splits it into "
+            "multiple argv tokens — perfect for typing repeatable "
+            "flags.  Check this box to disable that for this param: "
+            "the value emits as a single argv token even with "
+            "embedded spaces.",
+        )
+        self._add_prop_row(
+            "Default:", self._prop_default,
+            "Pre-filled value shown when the user first opens the "
+            "form.  Should be the most useful starting point for "
+            "the typical run — not an example.  For "
+            "<code>bool</code> use <code>true</code> / "
+            "<code>false</code>; for <code>enum</code> use one of "
+            "the declared choices.",
+        )
+        self._add_prop_row(
+            "Choices:", self._prop_choices,
+            "Dropdown choices.  Each entry is either a bare value "
+            "(used both in argv and as the visible label) or "
+            "<code>value=label</code> to show a descriptive label "
+            "while sending the value to the command.  Comma-"
+            "separated.  Only meaningful for <code>enum</code> / "
+            "<code>multiselect</code> types.",
+        )
+        self._add_prop_row(
+            "File filter:", self._prop_filter,
+            "Qt file-dialog filter applied to "
+            "<code>file_open</code> / <code>file_save</code> "
+            "pickers.  Format: "
+            "<code>&lt;name&gt; (*.ext1 *.ext2);;...</code> — e.g. "
+            "<code>Text (*.txt);;All files (*)</code>.  Only "
+            "meaningful for path-type / file-picker widgets.",
+        )
+        self._add_prop_row(
+            "Section:", self._prop_section,
+            "Which section this param belongs to.  The list tracks "
+            "the tool's declared sections — use the +§ / ✎§ / −§ "
+            "buttons above the param list to manage them.  Empty "
+            "section falls into a synthetic 'Other' bucket at the "
+            "end of the form.",
+        )
+        self._add_prop_row(
+            "Provider:", self._prop_provider_btn,
+            "Dynamic choices/value provider (v0.6.0).  Runs an "
+            "external command at form-open time to populate this "
+            "field — live dropdowns, dependent checkbox lists, "
+            "auto-detected paths.  Click to configure.",
+        )
         middle.addWidget(right_box)
         middle.setStretchFactor(0, 1)
         middle.setStretchFactor(1, 2)
 
         # Argument template + live preview + form preview.
         #
-        # The lower half of the editor is a horizontal splitter with
-        # the template editor on the left and a live form preview on
-        # the right. The preview renders exactly what a ``ToolRunnerView``
-        # would show at runtime for the tool *as currently edited*,
-        # with all input widgets disabled so the user can't type into
-        # them by mistake. Every param mutation path calls
+        # The lower half of the editor is a small internal QMainWindow
+        # whose central widget is the template editor and whose right
+        # dock holds the form preview.  Wrapping in a QMainWindow gives
+        # the preview a real ``QDockWidget`` — users can detach it,
+        # float it onto a second monitor, re-dock it left/right/top/
+        # bottom, or hide it via the editor's View menu.  When docked
+        # the resize behaviour is identical to the prior splitter.
+        #
+        # The preview renders exactly what a ``ToolRunnerView`` would
+        # show at runtime for the tool *as currently edited*, with all
+        # input widgets disabled so the user can't type into them by
+        # mistake.  Every param mutation path calls
         # ``_rebuild_form_preview`` to keep it in sync.
-        lower_split = QSplitter(Qt.Orientation.Horizontal)
+        self._preview_host = QMainWindow()
+        # ``Qt.Widget`` strips the QMainWindow's window-flag bits so it
+        # behaves as a normal child widget inside our outer layout.
+        self._preview_host.setWindowFlags(Qt.WindowType.Widget)
+        # Allow the host to expand into available space.
+        self._preview_host.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         tmpl_box = QGroupBox("Argument template")
         tmpl_outer = QVBoxLayout(tmpl_box)
@@ -447,37 +642,63 @@ class ToolEditorView(QWidget):
         self._preview.setReadOnly(True)
         tmpl_outer.addWidget(QLabel("Live preview:"))
         tmpl_outer.addWidget(self._preview)
-        lower_split.addWidget(tmpl_box)
+
+        # Template box becomes the central widget of the internal host.
+        self._preview_host.setCentralWidget(tmpl_box)
 
         # Populate the visual list from the initial template.
         self._sync_visual_from_model()
 
-        # Form preview panel.
-        preview_box = QGroupBox("Form preview (what the user will see)")
-        preview_outer = QVBoxLayout(preview_box)
-        preview_outer.setContentsMargins(6, 6, 6, 6)
+        # Form preview — wrapped in a QDockWidget so the user can
+        # detach / float / re-dock it independently.
         self._form_preview_container = QWidget()
         self._form_preview_layout = QVBoxLayout(self._form_preview_container)
         self._form_preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_scroll = QScrollArea()
         preview_scroll.setWidgetResizable(True)
         preview_scroll.setWidget(self._form_preview_container)
-        preview_outer.addWidget(preview_scroll)
-        lower_split.addWidget(preview_box)
-        lower_split.setStretchFactor(0, 1)
-        lower_split.setStretchFactor(1, 1)
-        outer.addWidget(lower_split)
+
+        self._preview_dock = QDockWidget(
+            "Form preview (what the user will see)", self._preview_host
+        )
+        self._preview_dock.setObjectName("FormPreviewDock")
+        self._preview_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._preview_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self._preview_dock.setWidget(preview_scroll)
+        self._preview_host.addDockWidget(
+            Qt.DockWidgetArea.RightDockWidgetArea, self._preview_dock
+        )
+
+        outer.addWidget(self._preview_host, stretch=1)
 
         # Buttons.
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
+        # v0.6.2 — "Close" returns to the form (runner) window, with
+        # an unsaved-changes guard.  "Cancel" is the explicit
+        # discard-and-leave action; it carries the same guard so no
+        # exit path can silently drop edits.
+        self._btn_close = QPushButton("Close")
+        self._btn_close.setToolTip(
+            "Return to the tool's form. Prompts to save if there "
+            "are unsaved changes."
+        )
+        self._btn_close.clicked.connect(self._on_close)
         self._btn_cancel = QPushButton("Cancel")
+        self._btn_cancel.setToolTip(
+            "Discard edits and return to the tool's form."
+        )
         self._btn_cancel.clicked.connect(self._on_cancel)
         self._btn_save = QPushButton("Save")
         self._btn_save.setDefault(True)
         self._btn_save.clicked.connect(self._on_save)
         self._btn_save_as = QPushButton("Save as...")
         self._btn_save_as.clicked.connect(self._on_save_as)
+        btn_row.addWidget(self._btn_close)
         btn_row.addWidget(self._btn_cancel)
         btn_row.addWidget(self._btn_save_as)
         btn_row.addWidget(self._btn_save)
@@ -489,6 +710,13 @@ class ToolEditorView(QWidget):
             self._btn_save.setToolTip("File is read-only.")
             self._btn_save_as.setEnabled(False)
             self._btn_save_as.setToolTip("File is read-only.")
+        # Capability gates (V3 v0.3.3) — independent of read-only:
+        # an admin can deny save / save-as without making files
+        # actually read-only on disk.  ``apply_widget_perm`` is a
+        # no-op when the capability is granted.
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(self._btn_save, "save_scriptree")
+        apply_widget_perm(self._btn_save_as, "save_as_scriptree")
 
         self._update_preview()
 
@@ -511,6 +739,14 @@ class ToolEditorView(QWidget):
 
     def _on_desc_changed(self, text: str) -> None:
         self._tool.description = text
+
+    def _on_interactive_toggled(self, checked: bool) -> None:
+        """Mirror the checkbox state into ``ToolDef.interactive``.
+
+        The runner re-evaluates this flag at run time; a Save is
+        still required to persist the change to disk.
+        """
+        self._tool.interactive = bool(checked)
 
     # --- tool-level environment -----------------------------------------
 
@@ -548,6 +784,85 @@ class ToolEditorView(QWidget):
             return
         self._tool.menus = dlg.menus
         self._menus_status.setText(_menus_summary(self._tool))
+
+    # --- property-row tooltip helper (v0.4.0+) ---------------------------
+
+    def _add_prop_row(
+        self,
+        label: str,
+        widget: QWidget,
+        tooltip_html: str,
+    ) -> None:
+        """Add a row to the property panel with the same hover
+        tooltip on both the label and the input.
+
+        Also stashes the row's label widget on a dict keyed by the
+        input widget so ``_refresh_prop_visibility`` can hide /
+        show the whole row (label + input) based on the param's
+        type — keeps the panel uncluttered for types that don't
+        need a given field.
+        """
+        from PySide6.QtWidgets import QLabel
+        label_widget = QLabel(label)
+        label_widget.setToolTip(tooltip_html)
+        if not widget.toolTip():
+            widget.setToolTip(tooltip_html)
+        if not hasattr(self, "_prop_row_labels"):
+            self._prop_row_labels: dict[QWidget, QLabel] = {}
+        self._prop_row_labels[widget] = label_widget
+        self._prop_layout.addRow(label_widget, widget)
+
+    def _set_prop_row_visible(self, widget: QWidget, visible: bool) -> None:
+        """Show / hide both the label and the input of the row
+        owned by ``widget``.  Used by
+        ``_refresh_prop_visibility``."""
+        label = self._prop_row_labels.get(widget) if hasattr(
+            self, "_prop_row_labels"
+        ) else None
+        if label is not None:
+            label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _refresh_prop_visibility(self) -> None:
+        """Hide property rows that aren't relevant to the currently
+        selected param's type / widget combo.
+
+        v0.4.0 — concrete de-busy step.  Previously the property
+        panel showed every field for every param, including:
+
+          * ``Choices:`` for a string field (meaningless).
+          * ``File filter:`` for an integer field (meaningless).
+          * ``Do not auto-split:`` for a checkbox (meaningless).
+
+        Now we only show fields that affect the current param.
+        The panel collapses to the minimum useful set per type.
+        """
+        if self._current_param_index is None:
+            return
+        if not (0 <= self._current_param_index < len(self._tool.params)):
+            return
+        param = self._tool.params[self._current_param_index]
+        from ..core.model import ParamType, Widget as W
+        is_enum = param.type in (ParamType.ENUM, ParamType.MULTISELECT)
+        is_path = param.type is ParamType.PATH
+        is_file_widget = param.widget in (W.FILE, W.SAVE_FILE)
+        is_string = param.type is ParamType.STRING
+
+        # Always-visible: ID, Label, Description, Type, Widget,
+        # Required, Default, Section.  Conditional:
+        self._set_prop_row_visible(self._prop_choices, is_enum)
+        self._set_prop_row_visible(self._prop_filter, is_path and is_file_widget)
+        self._set_prop_row_visible(self._prop_no_split, is_string)
+        # "Do not save value" makes sense for any field that holds
+        # a typed secret — keep visible for all string / path types
+        # but hide for booleans (no secret bools).
+        self._set_prop_row_visible(
+            self._prop_no_persist,
+            param.type in (
+                ParamType.STRING, ParamType.PATH, ParamType.INTEGER,
+                ParamType.NUMBER,
+            ),
+        )
 
     # --- param list ------------------------------------------------------
 
@@ -637,6 +952,13 @@ class ToolEditorView(QWidget):
             self._populate_widget_combo(ParamType.STRING)
             if self._prop_section.count() > 0:
                 self._prop_section.setCurrentIndex(0)
+            # When no param is selected, hide all conditional rows
+            # so the panel reads as obviously empty rather than a
+            # field-by-field "0 / 0 / 0" form.
+            self._set_prop_row_visible(self._prop_choices, False)
+            self._set_prop_row_visible(self._prop_filter, False)
+            self._set_prop_row_visible(self._prop_no_split, False)
+            self._set_prop_row_visible(self._prop_no_persist, False)
         finally:
             self._building_panel = False
 
@@ -667,6 +989,16 @@ class ToolEditorView(QWidget):
             if sec_idx < 0:
                 sec_idx = 0
             self._prop_section.setCurrentIndex(sec_idx)
+            # v0.6.0 — surface whether this param is dynamic right on
+            # the button so the author doesn't have to open it to
+            # find out.
+            if param.choices_provider is not None:
+                self._prop_provider_btn.setText("Provider ✓")
+            else:
+                self._prop_provider_btn.setText("Provider…")
+            # v0.4.0 — hide rows that don't apply to this param's
+            # type / widget combo to keep the panel uncluttered.
+            self._refresh_prop_visibility()
         finally:
             self._building_panel = False
 
@@ -784,6 +1116,25 @@ class ToolEditorView(QWidget):
             values, labels = _parse_choices(text)
             param.choices = values
             param.choice_labels = labels
+            self._update_preview()
+
+    def _on_edit_provider(self) -> None:
+        """Open the dynamic-provider editor for the selected param."""
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param is None:
+            return
+        from .provider_editor import ProviderEditorDialog, apply_to_param
+        other_ids = [
+            p.id for p in self._tool.params if p.id != param.id
+        ]
+        dlg = ProviderEditorDialog(param, other_ids, parent=self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            apply_to_param(dlg, param)
+            # Refresh the panel (Choices row may now be irrelevant,
+            # button label flips to "Provider ✓") and the preview.
+            self._load_param_into_panel(param)
             self._update_preview()
 
     def _on_prop_filter_changed(self, text: str) -> None:
@@ -1219,6 +1570,30 @@ class ToolEditorView(QWidget):
 
     # --- save / cancel --------------------------------------------------
 
+    def save(self) -> None:
+        """Public entry point — same as clicking the Save button.
+
+        Invoked by the main window's File → Save tool action so the
+        same code path runs for both keyboard / menu shortcuts and the
+        editor's own button row.
+        """
+        self._on_save()
+
+    def save_as(self) -> None:
+        """Public entry point — same as clicking the Save as... button."""
+        self._on_save_as()
+
+    def file_path(self) -> str | None:
+        """Return the on-disk path the editor is currently bound to,
+        or ``None`` for an unsaved tool."""
+        return self._file_path
+
+    def preview_dock(self) -> QDockWidget:
+        """Return the form-preview QDockWidget — used by the main window
+        to wire its View menu's Show/Hide form preview toggle to the
+        same dock the user can also drag/float directly."""
+        return self._preview_dock
+
     def _on_save(self) -> None:
         if self._read_only and self._file_path is not None:
             QMessageBox.warning(
@@ -1238,6 +1613,9 @@ class ToolEditorView(QWidget):
         self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
+        # Edits are now persisted — reset the dirty baseline so a
+        # subsequent Close doesn't re-warn about already-saved work.
+        self._baseline = tool_to_dict(self._tool)
         self.saved.emit(self._tool, path)
 
     def _on_save_as(self) -> None:
@@ -1257,6 +1635,9 @@ class ToolEditorView(QWidget):
         self._maybe_relativize_paths(path)
         save_tool(self._tool, path)
         self._file_path = path
+        # Edits are now persisted — reset the dirty baseline so a
+        # subsequent Close doesn't re-warn about already-saved work.
+        self._baseline = tool_to_dict(self._tool)
         self.saved.emit(self._tool, path)
 
     def _maybe_relativize_paths(self, save_path: str) -> None:
@@ -1315,8 +1696,73 @@ class ToolEditorView(QWidget):
         )
         return path or None
 
+    def is_dirty(self) -> bool:
+        """True iff the tool has unsaved edits.
+
+        Serialised comparison against the post-construction (or
+        post-save) baseline — robust to the in-place mutation the
+        property-panel handlers do."""
+        try:
+            return tool_to_dict(self._tool) != self._baseline
+        except Exception:  # noqa: BLE001
+            # If serialisation ever throws, fail safe: assume dirty
+            # so the user is warned rather than silently losing work.
+            return True
+
+    def _confirm_leave(self) -> bool:
+        """Guard shared by Close / Cancel.  Returns True if it's OK
+        to leave the editor now (caller then emits ``cancelled`` /
+        navigates away), False to stay.
+
+        Clean (not dirty) → leave silently.  Dirty → Save / Discard /
+        Cancel.  Save runs the normal save path (which emits
+        ``saved`` and navigates back to the form itself), so on the
+        Save branch we return False and let that flow take over."""
+        if not self.is_dirty():
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Unsaved changes")
+        box.setText(
+            "This tool has unsaved changes.\n\n"
+            "Save them before returning to the form?"
+        )
+        save_b = box.addButton(
+            "Save", QMessageBox.ButtonRole.AcceptRole
+        )
+        discard_b = box.addButton(
+            "Discard", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_b = box.addButton(
+            "Cancel", QMessageBox.ButtonRole.RejectRole
+        )
+        box.setDefaultButton(save_b)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is cancel_b:
+            return False  # stay in the editor
+        if clicked is discard_b:
+            return True  # leave, dropping edits
+        # Save: run the real save path.  If it actually persisted
+        # (file no longer dirty), it already emitted ``saved`` →
+        # the main window returns to the form.  We return False so
+        # this handler doesn't ALSO emit ``cancelled``.  If the save
+        # was blocked (validation error / read-only / cancelled save
+        # dialog), staying in the editor is the right outcome.
+        self._on_save()
+        return False
+
+    def _on_close(self) -> None:
+        """Return to the form (runner) window, warning first if
+        there are unsaved changes."""
+        if self._confirm_leave():
+            self.cancelled.emit()
+
     def _on_cancel(self) -> None:
-        self.cancelled.emit()
+        # Cancel = discard-and-leave, but still guard so a stray
+        # click can't silently destroy unsaved work.
+        if self._confirm_leave():
+            self.cancelled.emit()
 
 
 # --- environment summary ---------------------------------------------------

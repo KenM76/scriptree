@@ -113,7 +113,7 @@ class TestTasklistParse:
 
     def test_svc_is_checkbox_bool(self) -> None:
         p = self.tool.param_by_id("svc")
-        assert p.type is ParamType.BOOL
+        assert p.type is ParamType.BOOLEAN
         assert p.widget is Widget.CHECKBOX
 
     def test_format_is_enum_dropdown(self) -> None:

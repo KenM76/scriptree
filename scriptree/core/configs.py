@@ -1,5 +1,7 @@
 """Saved configurations for tool runs (sidecar file).
 
+## For humans
+
 Every .scriptree file may have a sidecar ``<tool>.scriptree.configs.json``
 holding one or more **configurations** — named snapshots of form values
 plus any extra tokens the user typed into the command preview. The
@@ -23,8 +25,61 @@ the runner view then falls back to a single in-memory "default"
 configuration built from the ParamDef defaults. As soon as the user
 saves/renames/edits a configuration the sidecar is created.
 
+There is also a tree-level sidecar (``.treeconfigs.json``) mapping
+tool-relative paths to config names, and a "personal" sidecar scheme
+for per-user (vs shared) configs that lives in the user_configs/
+directory under a ``<stem>.NNN-scriptree.configs.json`` name.
+
 Pure-Python, no Qt imports — lives in ``core`` so it's unit-testable
 without a QApplication.
+
+## For maintainers / LLMs
+
+* Qt-purity: this module must stay Qt-free. The ONLY tie to
+  ``app_settings`` (which carries QSettings) is a function-local
+  ``from .app_settings import get_personal_configs_dir`` inside
+  ``personal_configs_path`` / ``find_personal_config_candidates``,
+  taken only when the caller passes ``personal_dir=None``. Callers
+  on the headless path should pass an explicit ``personal_dir`` to
+  avoid pulling that import.
+* Serialization is asymmetric on purpose: ``*_to_dict`` emits
+  optional keys (``default_name``, ``env``, ``path_prepend``,
+  ``ui_visibility``, ``hidden_params``, ``prompt_credentials``,
+  ``storage``, ``source_*``) ONLY when non-default/non-empty so
+  legacy sidecars stay byte-identical. If you add a field, follow
+  the same "emit only when set" rule or you will churn every
+  existing sidecar.
+* ``configs_from_dict`` raises ``ValueError`` when
+  ``schema_version`` exceeds ``CONFIGS_SCHEMA_VERSION`` (forward-
+  incompat guard). Bumping the schema means bumping that constant
+  AND keeping the reader tolerant of older files.
+* ``UIVisibility.config_bar`` is a tri-state STRING
+  ("hidden"/"read"/"readwrite") with legacy-bool migration in
+  ``_vis_from_dict`` (True→"readwrite", False→"hidden"); every
+  other ``_VIS_FIELDS`` member is a bool. Adding a visibility flag
+  means updating ``_VIS_FIELDS``, ``UIVisibility``, ``_vis_from_dict``
+  and ``_config_to_dict`` together.
+* ``safetree`` is a reserved config name (``SAFETREE_CONFIG_NAME``):
+  ``is_reserved_config_name`` blocks users from creating/renaming
+  to it; ``ensure_safetree_config`` always OVERWRITES any existing
+  safetree entry with the canonical hidden-chrome version. Don't
+  let user edits to it persist.
+* Personal-sidecar matching is two-stage: filename-stem regex match
+  (``_PERSONAL_TOOL_RE`` / ``_PERSONAL_TREE_RE``), THEN an internal
+  ``source_filename`` + ``source_locations`` check — two different
+  tools can share a stem, so the regex alone is never authoritative
+  (see ``load_personal_configs_for``'s tri-state return).
+* ``active`` / ``default_name`` are self-healing: ``configs_from_dict``
+  drops an ``active``/``default_name`` that names a missing config;
+  ``active_config`` repairs a stale pointer in place. ``default_config``
+  prefers ``default_name`` then falls back to ``active``.
+* Tree-stem stripping order matters: ``_tool_stem`` strips
+  ``.scriptreetree`` before ``.scriptree`` because the shorter
+  suffix is a prefix of the longer one.
+* All sidecar reads/writes are UTF-8 explicit; raw ``json.loads``
+  in ``load_configs`` / ``add_location_to_personal`` is NOT guarded
+  (a corrupt shared sidecar raises). Only the personal-candidate
+  scan in ``load_personal_configs_for`` tolerates bad JSON.
 """
 from __future__ import annotations
 
@@ -127,10 +182,18 @@ class Configuration:
 class ConfigurationSet:
     """The ordered list of configurations for a single tool.
 
-    ``active`` is the name of the currently-selected configuration; it
-    must match one of the ``configurations`` entries. An empty list is
-    not a valid state — callers should guarantee at least one entry
-    (use :func:`default_configuration_set`).
+    ``active`` is the name of the currently-selected configuration in
+    the editor's combo box (the "last-used" pointer).  ``default_name``
+    is the name of the configuration the user has explicitly marked as
+    *the default* via the editor's "Default" checkbox; standalone-mode
+    launches with no ``-configuration`` flag pick this one up.
+
+    Resolution order when no ``-configuration`` is supplied:
+      1. If ``default_name`` is non-empty AND names a real
+         configuration in the set, use that.
+      2. Otherwise fall back to ``active`` (the last-used).
+      3. If neither resolves, the runner builds a one-shot in-memory
+         ``"default"`` from ParamDef defaults (legacy behaviour).
 
     ``source_filename`` and ``source_locations`` are only populated for
     personal sidecars. They record the tool filename and the parent
@@ -140,6 +203,7 @@ class ConfigurationSet:
     """
 
     active: str = "default"
+    default_name: str = ""
     configurations: list[Configuration] = field(default_factory=list)
     source_filename: str = ""
     source_locations: list[str] = field(default_factory=list)
@@ -159,6 +223,20 @@ class ConfigurationSet:
             self.active = self.configurations[0].name
             return self.configurations[0]
         raise ValueError("ConfigurationSet has no configurations")
+
+    def default_config(self) -> Configuration:
+        """Return the configuration to use when no explicit
+        ``-configuration`` flag was supplied.
+
+        Prefers ``default_name`` if set and resolvable; otherwise
+        falls back to ``active``.  Always returns a real Configuration
+        (or raises if the set is empty).
+        """
+        if self.default_name:
+            c = self.find(self.default_name)
+            if c is not None:
+                return c
+        return self.active_config()
 
     def names(self) -> list[str]:
         return [c.name for c in self.configurations]
@@ -207,6 +285,10 @@ def configs_to_dict(cfg_set: ConfigurationSet) -> dict[str, Any]:
         "active": cfg_set.active,
         "configurations": [_config_to_dict(c) for c in cfg_set.configurations],
     }
+    # Default-config pointer is only emitted when explicitly set so
+    # legacy sidecars stay byte-identical.
+    if cfg_set.default_name:
+        d["default_name"] = cfg_set.default_name
     # Source info is only populated for personal sidecars. Emit only
     # when non-empty to keep shared sidecars compact.
     if cfg_set.source_filename:
@@ -301,12 +383,19 @@ def configs_from_dict(data: dict[str, Any]) -> ConfigurationSet:
     active = str(data.get("active", configs[0].name))
     if not any(c.name == active for c in configs):
         active = configs[0].name
+    # default_name pointer.  Empty when not in the file (legacy sidecar)
+    # OR when the named config no longer exists (renamed / deleted).
+    raw_default = data.get("default_name", "")
+    default_name = str(raw_default) if raw_default else ""
+    if default_name and not any(c.name == default_name for c in configs):
+        default_name = ""
     source_filename = str(data.get("source_filename", ""))
     source_locations = [
         str(loc) for loc in (data.get("source_locations") or [])
     ]
     return ConfigurationSet(
         active=active,
+        default_name=default_name,
         configurations=configs,
         source_filename=source_filename,
         source_locations=source_locations,

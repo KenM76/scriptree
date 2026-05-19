@@ -1,71 +1,40 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# IDE
+*.pyc
+*.pyo
+.pytest_cache/
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
+*.zip
+*.bak
+*.bak-*
+*.log
+*.tmp
 
-# OS
-Thumbs.db
-.DS_Store
-Desktop.ini
+# Vendored / portable Python and pinned wheels are COMMITTED to the
+# repo (v0.3.10+) so a fresh ``git clone`` Just Works on a clean
+# machine — no system Python, no internet, no ``pip install`` step.
+# Total cost: ~93 MB (Python embed + PySide6 wheels), regeneratable
+# by ``lib/install_python.ps1`` and ``lib/update_lib.py --trim``
+# whenever the bundled versions need to roll forward.
+#
+# We still ignore compiled bytecode under those trees — it gets
+# regenerated on first run and doesn't round-trip cleanly through
+# git (mtime-sensitive, OS-specific paths in some headers).
+lib/python/**/__pycache__/
+lib/pypi/**/__pycache__/
 
-# Testing
-.pytest_cache/
-htmlcov/
-.coverage
-
-# Transient — smoke-test output captures (`run_scriptree.bat > out.txt 2>&1`)
-out.txt
-
-# ScripTree runtime
-scriptree.ini
-
-# Dev-only folders that previously lived under ScripTree/. After the
-# repo flatten in v0.1.2 they sit at the root; keep them gitignored
-# so dev artifacts don't sneak into the source tree.
-docs/
-scripts/
+# Per-user state
+*.configs.json
+*.treeconfigs.json
 user_configs/
+scriptree.ini.bak
 
-# User tools (local, not shared) — ignore everything under ScripTreeApps/
-# except the canonical management tools + audit script that ship with
-# ScripTree itself. (Note: must use ScripTreeApps/* + negations, not
-# ScripTreeApps/ + negations — git can't re-include files under an
-# ignored DIRECTORY, only under an ignored file pattern.)
-ScripTreeApps/*
-!ScripTreeApps/ScripTreeManagement/
-!ScripTreeApps/audit_vendored.py
-# Within ScripTreeManagement, track everything (the .scriptree files,
-# the .scriptreetree, any README). No build artifacts should live there.
-ScripTreeApps/ScripTreeManagement/__pycache__/
-ScripTreeApps/ScripTreeManagement/*.pyc
-
-# Vendored dependency binaries — populated by lib/update_lib.py,
-# platform-specific and large (PySide6 alone is ~300 MB). Not
-# appropriate for git. Directory structure, .gitkeep files,
-# README.md, requirements.txt, and update_lib.py are tracked;
-# actual installed contents and auto-generated manifests are not.
-# (Manifests carry install timestamps that would churn every
-# refresh — the source of truth for WHAT is requirements.txt.)
-lib/pypi/*
-!lib/pypi/.gitkeep
-lib/_manifests/*
-!lib/_manifests/.gitkeep
-
-# Claude Code
-.claude/
+# OneDrive cruft
+desktop.ini
+# Ignore .claude/ generally (session metadata, worktrees, settings) but
+# track the project-specific agent definition so future sessions inherit
+# the working style captured during the V3 build-out.
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+Untitled tree.scriptreetree

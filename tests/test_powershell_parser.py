@@ -278,7 +278,7 @@ class TestTypeMapping:
 
     def test_empty_is_switch(self) -> None:
         from scriptree.core.model import ParamType, Widget
-        assert _map_type("") == (ParamType.BOOL, Widget.CHECKBOX)
+        assert _map_type("") == (ParamType.BOOLEAN, Widget.CHECKBOX)
 
     def test_securestring_skipped(self) -> None:
         assert _map_type("securestring") is None
@@ -289,7 +289,7 @@ class TestTypeMapping:
 
     def test_bool_maps_to_checkbox(self) -> None:
         from scriptree.core.model import ParamType, Widget
-        assert _map_type("bool") == (ParamType.BOOL, Widget.CHECKBOX)
+        assert _map_type("bool") == (ParamType.BOOLEAN, Widget.CHECKBOX)
 
 
 # --- ID / label synthesis ---------------------------------------------------

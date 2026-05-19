@@ -1,8 +1,10 @@
 """Editable tree-view launcher for .scriptreetree files.
 
+## For humans
+
 Responsibilities:
 
-- **Launch**: double-clicking a leaf loads the referenced .scriptree
+- **Launch**: single-clicking a leaf loads the referenced .scriptree
   file and emits ``toolSelected``; the main window swaps to a
   ``ToolRunnerView`` for that tool.
 - **Edit**: the tree is a first-class editor. Drag-drop reorders
@@ -17,7 +19,7 @@ Dirty-state handling: any edit sets ``_dirty=True`` and appends ``*``
 to the title. ``treeModified`` is emitted so the main window can
 reflect the state in its own title / save action.
 
-## Qt drag-drop model
+### Qt drag-drop model
 
 Qt's ``InternalMove`` mode handles folder/leaf reparenting natively
 when items have the right flags set — folders get
@@ -27,6 +29,48 @@ Explorer) are accepted by overriding ``dragEnterEvent``,
 subclass below; the override only intercepts drops that carry URLs
 and passes everything else through to Qt's internal handling so
 reordering still works.
+
+## For maintainers / LLMs
+
+- Activation is ``itemClicked`` (single click on a leaf), NOT
+  ``itemDoubleClicked`` — the human summary line above is kept
+  authoritative. Double-click is intentionally NOT the launch
+  gesture; do not rewire ``_on_item_activated`` to double-click or
+  single-click leaf launching breaks.
+- Right-click context menu targets the item *under the cursor*, not
+  the prior selection: ``_show_context_menu`` calls
+  ``setCurrentItem(item)`` first so selection-based actions (Remove,
+  Edit) act on the hovered row. Preserve that select-then-build order.
+- The context menu is debounced ~220 ms via ``_ctx_timer`` so a
+  double-right-click (→ ``standaloneRequested``) does not first flash
+  the menu. ``_on_right_double_click`` must ``stop()`` the timer and
+  clear ``_pending_ctx_pos`` before emitting, or a stale menu fires
+  after the standalone window opens.
+- Double-right-click is delivered by ``_EditableTreeWidget``'s
+  ``mouseDoubleClickEvent`` filtering ``Qt.RightButton`` →
+  ``rightDoubleClicked`` signal; the left-button path still calls
+  ``super()`` so Qt expand/collapse is intact. Keep the
+  ``RightButton`` guard and the ``super()`` fall-through.
+- ``_standalone_descriptor`` returns ``None`` for a missing/unloadable
+  leaf path (file gone, or ``load_tool`` raised). Callers must treat
+  ``None`` as "nothing to open" — emitting ``standaloneRequested``
+  with it would crash the consumer.
+- ``InternalMove`` correctness depends on the drop-enabled flags:
+  folders get ``ItemIsDropEnabled``, leaves do NOT. Any new item
+  factory must set these or leaves become illegal drop containers.
+- ``dropEvent``/``dragMoveEvent`` overrides MUST pass non-URL events
+  through to ``super()`` — short-circuiting them silently kills
+  internal reorder. Only URL-bearing (external-file) drops are ours.
+- ``rowsMoved`` → ``_on_rows_moved`` is the only dirty hook for
+  drag-reorder; explicit add/remove/rename set ``_dirty`` directly.
+  Any new mutation path must mark dirty + emit ``treeModified`` or
+  the main window's save state goes stale (silent data loss).
+- Path serialization is relative-when-possible, absolute-fallback,
+  computed against the .scriptreetree's directory; do not switch to
+  CWD-relative or saved trees become non-portable.
+- Adding a subtree checks for cycles (``collect_scriptreetree_refs``)
+  and refuses self/ancestor references; keep that guard before any
+  new subtree-insert path.
 """
 from __future__ import annotations
 
@@ -123,6 +167,13 @@ class _EditableTreeWidget(QTreeWidget):
     itemReordered = Signal()
     """Emitted after an internal drag-drop reparents or reorders an item."""
 
+    rightDoubleClicked = Signal(object)
+    """Emitted on a double **right**-click. Arg: viewport QPoint.
+
+    Used to open the item under the cursor in standalone mode. A
+    single right-click still raises the context menu (the launcher
+    debounces the menu so a double-right doesn't flash it)."""
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
@@ -133,6 +184,17 @@ class _EditableTreeWidget(QTreeWidget):
             QAbstractItemView.EditTrigger.EditKeyPressed
             | QAbstractItemView.EditTrigger.DoubleClicked
         )
+
+    # --- right double-click → standalone --------------------------------
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.RightButton:
+            # Don't let the base class also treat this as an edit /
+            # expand trigger; it's our "open standalone" gesture.
+            self.rightDoubleClicked.emit(event.pos())
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     # --- drag/drop overrides ---
 
@@ -197,7 +259,23 @@ class TreeLauncherView(QWidget):
     """Editable .scriptreetree launcher with drag-drop and save."""
 
     toolSelected = Signal(object, str)
-    """Emitted when the user double-clicks a leaf. Args: (ToolDef, path)."""
+    """Emitted when the user clicks a leaf. Args: (ToolDef, path).
+
+    v0.6.1 — single click (was double-click).  Switching tools in
+    the tree is a navigation action; a double-click requirement just
+    added friction."""
+
+    editRequested = Signal(object, str)
+    """Emitted when the user picks Edit from a leaf's right-click
+    menu. Args: (ToolDef, path).  The main window opens the tool
+    editor bound to ``path`` so Save writes back to the file."""
+
+    standaloneRequested = Signal(object)
+    """Emitted on a double-right-click. Arg: a descriptor dict —
+    ``{"kind": "tool", "tool": ToolDef, "path": str}`` for a leaf,
+    ``{"kind": "tree", "path": str}`` for a subtree reference, or
+    ``{"kind": "folder"}`` for an in-memory folder (the main window
+    falls back to the whole loaded tree for a bare folder)."""
 
     treeModified = Signal(bool)
     """Emitted when dirty state changes. Arg: new dirty flag."""
@@ -255,16 +333,28 @@ class TreeLauncherView(QWidget):
         # Editable tree widget.
         self._tree_widget = _EditableTreeWidget()
         self._tree_widget.setHeaderLabel("Tools")
-        self._tree_widget.itemDoubleClicked.connect(self._on_item_activated)
+        # v0.6.1 — single click activates a leaf (was double-click).
+        self._tree_widget.itemClicked.connect(self._on_item_activated)
         self._tree_widget.fileDropped.connect(self._on_file_dropped)
         self._tree_widget.itemReordered.connect(self._mark_dirty)
         self._tree_widget.itemChanged.connect(self._on_item_changed)
         self._tree_widget.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
         )
+        # The context menu is debounced (~220 ms) so a double-right-
+        # click (open standalone) doesn't first flash the menu.
         self._tree_widget.customContextMenuRequested.connect(
-            self._show_context_menu
+            self._schedule_context_menu
         )
+        self._tree_widget.rightDoubleClicked.connect(
+            self._on_right_double_click
+        )
+        from PySide6.QtCore import QTimer
+        self._ctx_timer = QTimer(self)
+        self._ctx_timer.setSingleShot(True)
+        self._ctx_timer.setInterval(220)
+        self._ctx_timer.timeout.connect(self._fire_context_menu)
+        self._pending_ctx_pos = None
         layout.addWidget(self._tree_widget, stretch=1)
 
         self._update_title()
@@ -316,8 +406,52 @@ class TreeLauncherView(QWidget):
     def tree_file(self) -> Path | None:
         return self._tree_file
 
+    def tree_path_prepend(self) -> list[str]:
+        """Return the loaded tree's ``path_prepend`` list (V3 v0.3.2+).
+
+        Empty list when no tree is loaded or when the tree carries
+        no path_prepend entries.  The runner forwards these to
+        ``build_full_argv`` so they reach the child's PATH at run
+        time — closes the dead-code gap pinned by
+        ``test_global_env_layering.TestTreePathPrependDeadCodeGap``
+        in v0.3.1.
+        """
+        if self._tree is None:
+            return []
+        return list(self._tree.path_prepend or [])
+
     def save(self) -> bool:
         """Write the tree to disk. Returns True on success."""
+        return self._save_tree()
+
+    def save_as(self) -> bool:
+        """Prompt for a new ``.scriptreetree`` path, then save there.
+
+        Returns True on success.  Always opens the Save-As dialog,
+        even when the tree was previously bound to a file — the new
+        path becomes the tree's path on success (subsequent ``save()``
+        calls write to it).
+        """
+        if self._tree is None:
+            return False
+        if getattr(self, "_tree_read_only", False):
+            QMessageBox.warning(
+                self, "Read-only",
+                "This tree file is read-only and cannot be saved.",
+            )
+            return False
+        path = self._ask_save_path()
+        if not path:
+            return False
+        # Re-bind to the new path before delegating to ``_save_tree``,
+        # which writes to ``self._tree_file``.
+        self._tree_file = Path(path).resolve()
+        # The new file may live on a different filesystem with its own
+        # permissions; refresh the read-only flag so subsequent edits
+        # are gated correctly.
+        from ..core.permissions import check_write_access
+        access = check_write_access(self._tree_file)
+        self._tree_read_only = not access.fully_writable
         return self._save_tree()
 
     def mark_running(self, path: str, running: bool) -> None:
@@ -825,8 +959,55 @@ class TreeLauncherView(QWidget):
 
     # --- context menu ----------------------------------------------------
 
+    def _schedule_context_menu(self, pos) -> None:
+        """Debounce the context menu so a double-right-click (open
+        standalone) doesn't first flash it."""
+        self._pending_ctx_pos = pos
+        self._ctx_timer.start()
+
+    def _fire_context_menu(self) -> None:
+        if self._pending_ctx_pos is not None:
+            self._show_context_menu(self._pending_ctx_pos)
+
+    def _on_right_double_click(self, pos) -> None:
+        """Double-right-click → open the item under the cursor in
+        standalone mode.  Cancels the pending context menu."""
+        self._ctx_timer.stop()
+        self._pending_ctx_pos = None
+        item = self._tree_widget.itemAt(pos)
+        desc = self._standalone_descriptor(item)
+        if desc is not None:
+            self.standaloneRequested.emit(desc)
+
+    def _standalone_descriptor(self, item) -> dict | None:
+        """Build the payload for ``standaloneRequested`` from an
+        item (or None for empty space → whole tree)."""
+        if item is None:
+            return {"kind": "folder"}  # whole loaded tree
+        if _is_subtree(item):
+            return {"kind": "tree",
+                    "path": item.data(0, _ROLE_SUBTREE)}
+        if _is_leaf(item):
+            path = item.data(0, _ROLE_PATH)
+            if not path or not Path(path).exists():
+                return None
+            try:
+                tool = load_tool(path)
+            except Exception:  # noqa: BLE001
+                return None
+            return {"kind": "tool", "tool": tool, "path": path}
+        # Plain in-memory folder — no own file; the main window
+        # opens the whole loaded tree standalone as the closest
+        # existing capability.
+        return {"kind": "folder"}
+
     def _show_context_menu(self, pos) -> None:
         item = self._tree_widget.itemAt(pos)
+        # v0.6.1 — operate on whatever the mouse is over, not the
+        # prior selection.  Select it first so selection-based
+        # actions (Remove) target the hovered row.
+        if item is not None:
+            self._tree_widget.setCurrentItem(item)
         menu = QMenu(self)
         if item is not None:
             if _is_leaf(item):
@@ -835,12 +1016,27 @@ class TreeLauncherView(QWidget):
                     lambda _=False, it=item: self._on_item_activated(it, 0)
                 )
                 menu.addAction(act_open)
+                # v0.6.1 — Edit the tool the mouse is over.  Emits
+                # editRequested so the main window opens the tool
+                # editor bound to this file (Save writes back here).
+                act_edit = QAction("Edit", self)
+                act_edit.triggered.connect(
+                    lambda _=False, it=item: self._emit_edit_for(it)
+                )
+                menu.addAction(act_edit)
             if _is_subtree(item):
                 act_refresh = QAction("Refresh subtree", self)
                 act_refresh.triggered.connect(
                     lambda _=False, it=item: self._expand_subtree(it)
                 )
                 menu.addAction(act_refresh)
+            # Open standalone — same gesture as double-right-click,
+            # also reachable from the menu.
+            act_standalone = QAction("Open standalone", self)
+            act_standalone.triggered.connect(
+                lambda _=False, it=item: self._emit_standalone_for(it)
+            )
+            menu.addAction(act_standalone)
             act_remove = QAction("Remove", self)
             act_remove.triggered.connect(self._remove_selected)
             menu.addAction(act_remove)
@@ -859,7 +1055,26 @@ class TreeLauncherView(QWidget):
         menu.addAction(act_add_tool)
         menu.exec(self._tree_widget.viewport().mapToGlobal(pos))
 
-    # --- launch (double-click) ------------------------------------------
+    def _emit_edit_for(self, item) -> None:
+        path = item.data(0, _ROLE_PATH)
+        if not path:
+            return
+        if not Path(path).exists():
+            self._offer_missing_tool_recovery(item, path)
+            return
+        try:
+            tool = load_tool(path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Load error", str(e))
+            return
+        self.editRequested.emit(tool, path)
+
+    def _emit_standalone_for(self, item) -> None:
+        desc = self._standalone_descriptor(item)
+        if desc is not None:
+            self.standaloneRequested.emit(desc)
+
+    # --- launch (single-click) ------------------------------------------
 
     def _on_item_activated(self, item: QTreeWidgetItem, _col: int) -> None:
         # Subtree items: double-click refreshes their children.

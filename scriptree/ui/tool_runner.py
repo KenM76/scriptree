@@ -1,12 +1,14 @@
 """Runtime view of a tool: form on top, extras + output below, Run button.
 
+## For humans
+
 This is what the user interacts with day-to-day. Given a ``ToolDef``
 (loaded from a ``.scriptree`` file), it renders a form using the
 widgets module, and when the user clicks Run it dispatches to
 ``core.runner.spawn_streaming`` in a worker thread and streams the
 child process output to a text pane.
 
-## Editable command preview
+### Editable command preview
 
 The button row carries a "Show full path" checkbox, a "Word wrap"
 checkbox, and an editable ``QPlainTextEdit`` that always shows the
@@ -17,7 +19,7 @@ tokens that don't fit any template entry. Extras are also displayed
 in a small box above the output pane, where they can be edited
 directly.
 
-## Loop guard
+### Loop guard
 
 Two code paths update the same widgets and the same preview field:
 the user typing into a form widget (``valueChanged`` -> preview
@@ -25,6 +27,61 @@ rebuild) and the user typing into the preview (``textEdited`` ->
 widget rebuild). A ``_updating`` flag guards against re-entry so
 setting widget values programmatically doesn't fire another
 reconcile pass.
+
+## For maintainers / LLMs
+
+- ``build_full_argv`` is pure and deterministic and is called on
+  every value change inside ``_update_live_cmd``. Providers must
+  NEVER run during it — dynamic providers only run during
+  form-population/refresh (``_init_providers`` / ``_run_provider`` /
+  Refresh-all). Do not move any provider call into the argv path or
+  the preview becomes non-deterministic and can block on subprocesses.
+- ``_update_live_cmd`` no-ops twice on purpose: (1) when
+  ``self._updating`` (loop guard re-entry) and (2) ``if not
+  hasattr(self, "_live_cmd")`` — provider on_open population fires
+  ``valueChanged`` *before* the preview widget is constructed.
+  ``__init__`` does one definitive ``_update_live_cmd()`` after the
+  view is built. Removing the ``hasattr`` guard crashes on load.
+- The loop guard is the bare ``self._updating`` flag set/cleared in
+  try/finally around every programmatic ``set_value``/``set_choices``
+  and preview ``setPlainText``. New widget-mutating code must wrap
+  itself in the same flag or it self-triggers a reconcile storm.
+- Preview text is replaced via ``_set_live_cmd_preserving_cursor``,
+  which captures + clamps cursor/selection across ``setPlainText``
+  (Qt resets the cursor to 0). Identical-text writes are skipped
+  entirely. Keep the no-op-skip and clamp when editing preview I/O.
+- Provider orchestration: ``_init_providers`` topo-sorts via
+  ``provider_run_order`` (``depends_on`` must be acyclic) and runs
+  ``on_open``/``on_change`` immediately; ``on_change`` cascades are
+  debounced ~250 ms through per-param ``QTimer``s; Refresh-all and
+  per-field ⟳ buttons bypass cache. Providers fail SOFT: error
+  tooltip + "(no items)" for choice widgets, form stays usable, Run
+  blocked only if the param is required.
+- ``_populate_form_rows`` (hence ``_init_providers``) can re-run on a
+  config change that alters ``hidden_params`` in standalone mode. It
+  rebuilds widgets (old ones ``deleteLater``) and reassigns
+  ``_provider_debounce`` fresh; old QTimers parented to ``self``
+  outlive their dead dep widgets (benign, never re-fire). Per-param
+  ``_provider_debounce[p.id]`` keeps only the last dep's timer though
+  every dep is wired to its own timer — see the bug audit.
+- Run lifecycle: ``_start_run`` early-returns if ``self._thread is
+  not None`` (single concurrent run). Worker lives in ``QThread`` via
+  ``moveToThread``; ``finished`` is a queued signal so
+  ``_on_finished`` runs on the GUI thread and may safely
+  ``thread.quit(); thread.wait(2000)``. ``_stop_run`` escalates
+  terminate→kill across two presses (level 1/2). Always clear
+  ``_thread``/``_worker`` to ``None`` in ``_on_finished`` or the next
+  Run is blocked forever.
+- ``_start_run`` re-checks the ``run_tools`` capability at call time
+  (keyboard/programmatic invocations bypass the greyed button).
+  Sanitization always runs on form values; extras + command-editor
+  text are only sanitized when ``injection_protection_on_editor`` is
+  granted. Keep capability checks call-time, not construction-time.
+- Missing-executable recovery (``_offer_missing_executable_recovery``
+  / ``_apply_path_scope_choice``) may rewrite the .scriptree and
+  PATH/registry; save failures are collected and surfaced in a
+  warning box — never swallow them. ``_recovery_argv0_override`` pins
+  argv[0] for the current run only to dodge propagation races.
 """
 from __future__ import annotations
 
@@ -187,8 +244,15 @@ class ReorderableParamForm(QListWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        # ``reorder_parameters`` capability gate (V3 v0.3.3) — when
+        # denied, the form list disables drag-drop entirely so users
+        # see-but-can't-rearrange parameters.  Default-allowed.
+        from .permission_guards import perm_check
+        if perm_check("reorder_parameters"):
+            self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+            self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        else:
+            self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -307,6 +371,21 @@ class ReorderableParamForm(QListWidget):
             self.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self.count())
         ]
+
+    def set_row_hidden(self, param_id: str, hidden: bool) -> None:
+        """Hide / show the row owned by ``param_id`` (v0.4.0+).
+
+        Used by ``ToolRunnerView`` to honour ``ParamDef.visible_when``
+        — when an expression like ``"bom_source == 'drawing'"`` is
+        currently False, the row for ``bom_feature_name`` disappears
+        from the form so the user only sees fields relevant to the
+        mode they've picked.
+        """
+        for i in range(self.count()):
+            item = self.item(i)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == param_id:
+                item.setHidden(hidden)
+                return
 
     def _on_rows_moved(self, *_args: Any) -> None:
         self.orderChanged.emit(self.current_order())
@@ -679,15 +758,21 @@ class _RunWorker(QObject):
         command: ResolvedCommand,
         *,
         credentials: tuple[str, str, str] | None = None,
+        interactive: bool = False,
     ) -> None:
         super().__init__()
         self._command = command
         # (username, password, domain) or None for normal spawn.
         self._credentials = credentials
+        # When True, the child is spawned with ``stdin=PIPE`` so the
+        # UI can call ``send_line()`` to push answers (e.g. y/n/!/q
+        # for query-replace) into the running process.
+        self._interactive = interactive
         # Set from the worker thread in ``_on_process_start``; read
-        # from the UI thread in ``stop``. A plain attribute assignment
-        # is atomic in CPython and the Stop button races are benign —
-        # worst case we call terminate on an already-exited process.
+        # from the UI thread in ``stop`` / ``send_line``. A plain
+        # attribute assignment is atomic in CPython and the Stop /
+        # Send button races are benign — worst case we call terminate
+        # / write to an already-exited process and catch BrokenPipeError.
         self._proc: subprocess.Popen | None = None
         self._stop_level = 0  # 0=running, 1=terminate sent, 2=kill sent
 
@@ -695,6 +780,17 @@ class _RunWorker(QObject):
         try:
             if self._credentials is not None:
                 username, password, domain = self._credentials
+                # Run-as-user does NOT support interactive stdin —
+                # CreateProcessWithLogonW + interactive pipes would
+                # require additional plumbing (proper handle
+                # inheritance through impersonation).  Fall back to
+                # non-interactive spawn and surface the limitation.
+                if self._interactive:
+                    self.stderrLine.emit(
+                        "[warning] Interactive stdin is not supported "
+                        "with run-as-different-user; running non-"
+                        "interactively.",
+                    )
                 result = spawn_streaming_as_user(
                     self._command,
                     username,
@@ -710,6 +806,7 @@ class _RunWorker(QObject):
                     self.stdoutLine.emit,
                     self.stderrLine.emit,
                     on_start=self._on_process_start,
+                    interactive=self._interactive,
                 )
         except Exception as e:  # noqa: BLE001 - surface to UI
             self.stderrLine.emit(f"[runner error] {e}")
@@ -719,6 +816,46 @@ class _RunWorker(QObject):
 
     def _on_process_start(self, proc: subprocess.Popen) -> None:
         self._proc = proc
+
+    def send_line(self, text: str) -> bool:
+        """Write ``text + '\\n'`` to the child's stdin.
+
+        Called from the UI thread when the user clicks Send (or hits
+        Enter in the interactive input box).  Returns True on success,
+        False if the pipe is missing, closed, or the write failed —
+        in which case the caller should surface the error in the
+        output pane and disable the input box.
+
+        Safe to call from any thread; ``Popen.stdin`` writes are
+        protected by Python's GIL and the underlying pipe handle is
+        independent of the stdout / stderr pump threads.
+        """
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            return False
+        if proc.poll() is not None:
+            return False
+        try:
+            proc.stdin.write(text + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+        return True
+
+    def close_stdin(self) -> None:
+        """Close the child's stdin pipe to signal EOF.
+
+        Some interactive tools watch for stdin EOF as a clean-exit
+        signal (``read EOF`` → break out of the prompt loop and
+        finalise).  The output pane's "End input" button calls this.
+        """
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            return
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
 
     def stop(self) -> int:
         """Ask the child process to stop.
@@ -780,6 +917,13 @@ class ToolRunnerView(QWidget):
         self._widgets: dict[str, ParamWidget] = {}
         self._thread: QThread | None = None
         self._worker: _RunWorker | None = None
+        # Parent-tree path_prepend (V3 v0.3.2+).  Empty list when this
+        # tool was not opened through a loaded ``.scriptreetree``.
+        # Updated by ``MainWindow._show_runner`` every time the runner
+        # surfaces, so a runner cached in ``MainWindow._runners`` picks
+        # up tree-level path edits across re-opens.  See
+        # ``set_tree_path_prepend``.
+        self._tree_path_prepend: list[str] = []
 
         # Editable-preview state.
         self._extras: list[str] = []
@@ -871,8 +1015,46 @@ class ToolRunnerView(QWidget):
         """
         return self._bottom_pane
 
+    def set_tree_path_prepend(self, paths: list[str] | None) -> None:
+        """Set the parent-tree ``path_prepend`` list for this runner.
+
+        Called by ``MainWindow._show_runner`` whenever it surfaces a
+        tool that was opened through a loaded ``.scriptreetree``.
+        Pass ``None`` or ``[]`` to clear (e.g. when the same runner
+        is later reused for a tool opened directly without a tree).
+
+        The value is consumed at run time inside ``_start_run`` and
+        forwarded to ``build_full_argv`` as ``tree_path_prepend=``,
+        so changes take effect on the next Run click.  Doesn't
+        affect the editable live-preview text box (the preview only
+        renders argv, not env).
+        """
+        self._tree_path_prepend = list(paths or [])
+
+    def tree_path_prepend(self) -> list[str]:
+        """Return the runner's current parent-tree path_prepend list."""
+        return list(self._tree_path_prepend)
+
     def _build_output_panel(self) -> QWidget:
-        """Build the output pane as a standalone widget."""
+        """Build the output pane as a standalone widget.
+
+        For interactive tools (``tool.interactive == True`` AND the
+        ``interactive_stdin`` capability is granted), an extra input
+        row is appended below the output text:
+
+          ┌──────────────────────────────────────┐
+          │ Output text (read-only)              │
+          ├──────────────────────────────────────┤
+          │ Send: [_____________] [y][n][!][q] [Send] [End input]
+          └──────────────────────────────────────┘
+
+        Pressing Enter in the line edit, or clicking one of the
+        quick-response buttons, writes the line to the running
+        process's stdin via the worker's ``send_line``.  When the
+        permission is missing or the tool isn't declared interactive,
+        the row is hidden and the runner runs in pre-v0.3 one-shot
+        mode (matches every existing .scriptree).
+        """
         output_box = QGroupBox("Output")
         out_layout = QVBoxLayout(output_box)
         mono = QFont()
@@ -882,7 +1064,103 @@ class ToolRunnerView(QWidget):
         self._output.setReadOnly(True)
         self._output.setFont(mono)
         out_layout.addWidget(self._output)
+
+        # Interactive input row — built unconditionally so tests can
+        # access it, but visibility is toggled by
+        # ``_refresh_interactive_visibility`` based on
+        # ``tool.interactive`` AND the runtime permission.
+        self._interactive_row = self._build_interactive_input_row()
+        out_layout.addWidget(self._interactive_row)
+        self._refresh_interactive_visibility()
+
         return output_box
+
+    def _build_interactive_input_row(self) -> QWidget:
+        """Construct the send-line widget shown for interactive tools."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 4, 0, 0)
+
+        prompt_label = QLabel("Send:")
+        prompt_label.setToolTip(
+            "Type a line and press Enter (or click Send) to write it "
+            "to the running tool's stdin."
+        )
+        row_layout.addWidget(prompt_label)
+
+        self._send_line_edit = QLineEdit()
+        self._send_line_edit.setPlaceholderText(
+            "Type response, then Enter to send..."
+        )
+        self._send_line_edit.returnPressed.connect(self._on_send_line)
+        row_layout.addWidget(self._send_line_edit, stretch=1)
+
+        # Quick-response buttons.  Order matches Emacs query-replace's
+        # most-used answers; ``!`` accepts all remaining matches, ``q``
+        # quits the prompt loop.  Tools that don't use the y/n/!/q
+        # vocabulary just ignore unrelated input — these are safe
+        # convenience shortcuts, not protocol.
+        for label, tip in (
+            ("y", "Send 'y' (yes — accept this match)"),
+            ("n", "Send 'n' (no — skip this match)"),
+            ("!", "Send '!' (accept all remaining matches)"),
+            ("q", "Send 'q' (quit the prompt loop)"),
+        ):
+            btn = QPushButton(label)
+            btn.setFixedWidth(28)
+            btn.setToolTip(tip)
+            btn.clicked.connect(
+                lambda checked=False, t=label: self._send_quick_response(t)
+            )
+            row_layout.addWidget(btn)
+
+        self._btn_send = QPushButton("Send")
+        self._btn_send.setToolTip("Send the typed line to the tool's stdin.")
+        self._btn_send.clicked.connect(self._on_send_line)
+        row_layout.addWidget(self._btn_send)
+
+        self._btn_end_input = QPushButton("End input")
+        self._btn_end_input.setToolTip(
+            "Close the tool's stdin pipe.  Some interactive tools treat "
+            "this as a clean-exit signal.",
+        )
+        self._btn_end_input.clicked.connect(self._on_end_input)
+        row_layout.addWidget(self._btn_end_input)
+
+        return row
+
+    def _refresh_interactive_visibility(self) -> None:
+        """Show / hide the interactive input row based on tool flag +
+        permission state.
+
+        Both must be true:
+
+        * ``self._tool.interactive`` — the .scriptree opted in.
+        * ``interactive_stdin`` permission — the org allowed it.
+
+        When either is False the row is hidden and the runner falls
+        back to pre-v0.3 one-shot behaviour.
+        """
+        from ..core.permissions import get_app_permissions
+
+        if not getattr(self, "_interactive_row", None):
+            return
+        tool_opted_in = bool(getattr(self._tool, "interactive", False))
+        if tool_opted_in:
+            try:
+                perms = get_app_permissions()
+                permission_granted = perms.can("interactive_stdin")
+            except Exception:  # noqa: BLE001
+                permission_granted = False
+        else:
+            permission_granted = False
+
+        show_row = tool_opted_in and permission_granted
+        self._interactive_row.setVisible(show_row)
+        self._interactive_enabled = show_row
+        self._interactive_permission_denied = (
+            tool_opted_in and not permission_granted
+        )
 
     def _build_form_panel(self, tool: ToolDef) -> QWidget:
         """Build the form panel as a standalone widget."""
@@ -1080,6 +1358,13 @@ class ToolRunnerView(QWidget):
         self._live_cmd.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._live_cmd.textChanged.connect(self._on_live_cmd_text_changed)
         cmd_layout.addWidget(self._live_cmd)
+        # ``command_line_editor`` capability gate (V3 v0.3.3) — when
+        # denied, the live command box becomes read-only so the user
+        # can still see what's about to run but can't override.  No
+        # behavioural change on Run (validation still runs against
+        # the form-derived argv).
+        from .permission_guards import apply_text_readonly
+        apply_text_readonly(self._live_cmd, "command_line_editor")
         cmd_box.toggled.connect(
             lambda checked, opts=cmd_opts_wrapper, edit=self._live_cmd:
                 (opts.setVisible(checked), edit.setVisible(checked))
@@ -1141,12 +1426,40 @@ class ToolRunnerView(QWidget):
         # sits at its preferred width and the row wraps when crowded.
         cfg_layout.addWidget(self._cfg_combo)
 
+        # "Default" checkbox — when checked, the selected configuration
+        # becomes the default that standalone-mode launches use when no
+        # ``-configuration`` CLI arg is supplied.  When unchecked,
+        # standalone falls back to whichever configuration was last
+        # active.  Only one configuration can be the default at a
+        # time; checking it on a different config clears the previous
+        # one.  Persists via ConfigurationSet.default_name in the
+        # sidecar JSON.
+        self._cfg_default_check = QCheckBox("Default")
+        self._cfg_default_check.setToolTip(
+            "Mark this configuration as the default used by standalone "
+            "launches (e.g. clicking a tool in a cell-shell menu).\n\n"
+            "If no default is set, standalone falls back to the "
+            "last-used configuration. Only one configuration can be "
+            "the default at a time."
+        )
+        self._cfg_default_check.toggled.connect(
+            self._on_cfg_default_toggled
+        )
+        cfg_layout.addWidget(self._cfg_default_check)
+
+        # Configuration write buttons (V3 v0.3.3 capability gates):
+        # ``write_configurations`` (legacy umbrella) gates Save / Save
+        # As / Delete.  Per-scope gates layer on top — see
+        # ``_refresh_cfg_button_perms`` for the scope-aware logic
+        # that handles personal vs. shared sidecars.
+        from .permission_guards import apply_widget_perm
         self._btn_cfg_save = QPushButton("Save")
         self._btn_cfg_save.setToolTip(
             "Save the current form values into the selected configuration."
         )
         self._btn_cfg_save.clicked.connect(self._cfg_save)
         cfg_layout.addWidget(self._btn_cfg_save)
+        apply_widget_perm(self._btn_cfg_save, "write_configurations")
 
         self._btn_cfg_save_as = QPushButton("Save as...")
         self._btn_cfg_save_as.setToolTip(
@@ -1154,11 +1467,13 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_save_as.clicked.connect(self._cfg_save_as)
         cfg_layout.addWidget(self._btn_cfg_save_as)
+        apply_widget_perm(self._btn_cfg_save_as, "write_configurations")
 
         self._btn_cfg_delete = QPushButton("Delete")
         self._btn_cfg_delete.setToolTip("Delete the selected configuration.")
         self._btn_cfg_delete.clicked.connect(self._cfg_delete)
         cfg_layout.addWidget(self._btn_cfg_delete)
+        apply_widget_perm(self._btn_cfg_delete, "write_configurations")
 
         self._btn_cfg_edit = QPushButton("Edit...")
         self._btn_cfg_edit.setToolTip(
@@ -1166,6 +1481,10 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_edit.clicked.connect(self._cfg_edit)
         cfg_layout.addWidget(self._btn_cfg_edit)
+        # ``edit_configurations`` capability gate (V3 v0.3.3) — opens
+        # the rename / reorder popup; distinct from write
+        # (write = save values, edit = rearrange).
+        apply_widget_perm(self._btn_cfg_edit, "edit_configurations")
 
         self._btn_cfg_env = QPushButton("Env...")
         self._btn_cfg_env.setToolTip(
@@ -1175,6 +1494,9 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_env.clicked.connect(self._cfg_edit_env)
         cfg_layout.addWidget(self._btn_cfg_env)
+        # ``edit_environment`` capability gate (V3 v0.3.3).
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(self._btn_cfg_env, "edit_environment")
 
         self._btn_cfg_visibility = QPushButton("Visibility...")
         self._btn_cfg_visibility.setToolTip(
@@ -1184,6 +1506,8 @@ class ToolRunnerView(QWidget):
         )
         self._btn_cfg_visibility.clicked.connect(self._cfg_edit_visibility)
         cfg_layout.addWidget(self._btn_cfg_visibility)
+        # ``edit_visibility`` capability gate (V3 v0.3.3).
+        apply_widget_perm(self._btn_cfg_visibility, "edit_visibility")
 
         self._chk_prompt_creds = QCheckBox("Prompt for alternate credentials")
         self._chk_prompt_creds.setToolTip(
@@ -1193,6 +1517,10 @@ class ToolRunnerView(QWidget):
         )
         self._chk_prompt_creds.toggled.connect(self._on_prompt_creds_toggled)
         cfg_layout.addWidget(self._chk_prompt_creds)
+        # ``run_as_different_user`` capability gate (V3 v0.3.3) — when
+        # denied, the user can't even tick the box.  Enforced at run
+        # time in ``_start_run`` too for keyboard / programmatic.
+        apply_widget_perm(self._chk_prompt_creds, "run_as_different_user")
 
         layout.addWidget(self._cfg_widget)
 
@@ -1201,12 +1529,49 @@ class ToolRunnerView(QWidget):
         # window is narrow, instead of causing a horizontal scroll bar.
         action_row = FlowLayout(hspacing=4, vspacing=4)
 
+        # v0.6.1 — Run is green, Stop is red (universal go/stop
+        # affordance).  The :disabled rules keep the dimmed state
+        # legible instead of a flat saturated block when the button
+        # is inactive (Run while running, Stop while idle).
+        _RUN_QSS = (
+            "QPushButton { background:#2e7d32; color:#fff; "
+            "border:1px solid #1b5e20; border-radius:4px; "
+            "padding:4px 14px; font-weight:600; } "
+            "QPushButton:hover:!disabled { background:#388e3c; } "
+            "QPushButton:pressed { background:#1b5e20; } "
+            "QPushButton:disabled { background:#c8e6c9; color:#7d7d7d; "
+            "border-color:#a5d6a7; }"
+        )
+        _STOP_QSS = (
+            "QPushButton { background:#c62828; color:#fff; "
+            "border:1px solid #8e0000; border-radius:4px; "
+            "padding:4px 14px; font-weight:600; } "
+            "QPushButton:hover:!disabled { background:#d32f2f; } "
+            "QPushButton:pressed { background:#8e0000; } "
+            "QPushButton:disabled { background:#ffcdd2; color:#7d7d7d; "
+            "border-color:#ef9a9a; }"
+        )
+
         self._btn_run = QPushButton("Run")
         self._btn_run.setDefault(True)
+        self._btn_run.setStyleSheet(_RUN_QSS)
         self._btn_run.clicked.connect(self._start_run)
+        # ``run_tools`` capability gate (V3 v0.3.3): when denied, the
+        # Run button stays disabled.  ``_start_run`` ALSO checks at
+        # call time so other entry points (keyboard shortcut, custom
+        # menu actions wired to "Run") are gated too.
+        from .permission_guards import apply_widget_perm
+        apply_widget_perm(
+            self._btn_run, "run_tools",
+            tooltip_when_denied=(
+                "Disabled by IT — running tools is not permitted "
+                "(capability: run_tools)."
+            ),
+        )
         action_row.addWidget(self._btn_run)
 
         self._btn_stop = QPushButton("Stop")
+        self._btn_stop.setStyleSheet(_STOP_QSS)
         self._btn_stop.setToolTip(
             "Terminate the running child process. First press sends "
             "terminate; a second press sends kill."
@@ -1373,10 +1738,19 @@ class ToolRunnerView(QWidget):
                 widget = build_widget_for(param)
                 self._widgets[param.id] = widget
                 label_text = param.label + (" *" if param.required else "")
+                # v0.6.0 — a param with a choices_provider gets a small
+                # per-param Refresh button beside it (the user may
+                # open another drawing / container after the form is
+                # up).  The ParamWidget itself stays the entry in
+                # ``self._widgets`` so get/set_value is unchanged; we
+                # wrap it + the button in a thin container row.
+                row_widget: QWidget = widget
+                if getattr(param, "choices_provider", None) is not None:
+                    row_widget = self._wrap_with_refresh(param.id, widget)
                 form.add_param_row(
                     param.id,
                     label_text,
-                    widget,
+                    row_widget,
                     tooltip=param.description,
                 )
                 widget.valueChanged.connect(self._update_live_cmd)
@@ -1430,6 +1804,285 @@ class ToolRunnerView(QWidget):
 
         # Flush any trailing tab widget.
         _flush_tab_widget()
+
+        # v0.6.0 — dynamic choice/value providers.  Runs AFTER every
+        # widget exists so upstream lookups + topo population work.
+        self._init_providers()
+
+    # ==================================================================
+    # v0.6.0 — dynamic provider orchestration
+    # ==================================================================
+    #
+    # Design notes:
+    #  * Providers run **synchronously**, bounded by
+    #    ``ProviderSpec.timeout_sec``.  An async/threaded variant with
+    #    a live spinner is a future refinement; synchronous keeps the
+    #    integration into this 4k-line view deterministic + testable
+    #    and the timeout caps the worst-case stall.
+    #  * ``build_full_argv`` purity is untouched — providers only run
+    #    in this form-population phase, never during argv assembly.
+    #  * Failures fail **soft** per the contract: the param shows an
+    #    error tooltip + (for choice widgets) a "(no items)" body,
+    #    the rest of the form stays usable, Run is blocked only if
+    #    the param is required (the existing required-check already
+    #    treats an empty value as missing).
+
+    def _wrap_with_refresh(
+        self, param_id: str, widget: QWidget,
+    ) -> QWidget:
+        """Return a container = [widget(stretch), ⟳ refresh button].
+
+        The ParamWidget remains the ``self._widgets`` entry; only the
+        visual row is wrapped.  The button is disabled later if the
+        ``dynamic_choices`` capability is denied.
+        """
+        from PySide6.QtWidgets import QHBoxLayout, QToolButton, QWidget
+        container = QWidget()
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lay.addWidget(widget, stretch=1)
+        btn = QToolButton()
+        btn.setText("⟳")  # ⟳ clockwise open circle arrow
+        btn.setToolTip("Refresh this field from its provider")
+        btn.setAutoRaise(True)
+        btn.clicked.connect(
+            lambda _=False, pid=param_id: self._refresh_provider(
+                pid, bypass_cache=True,
+            )
+        )
+        lay.addWidget(btn)
+        if not hasattr(self, "_provider_refresh_btns"):
+            self._provider_refresh_btns = {}
+        self._provider_refresh_btns[param_id] = btn
+        return container
+
+    def _provider_params(self) -> list[Any]:
+        return [
+            p for p in self._tool.params
+            if getattr(p, "choices_provider", None) is not None
+        ]
+
+    def _init_providers(self) -> None:
+        prov_params = self._provider_params()
+        # L16 fix: a config change that alters hidden params re-runs
+        # this method, which reassigned ``_provider_debounce`` to a
+        # fresh dict and leaked the prior QTimers (parented to
+        # ``self``, never stopped/deleted — they accumulate across
+        # every config switch in a long-lived runner).  Tear the old
+        # ones down before rebuilding.
+        for _t in getattr(self, "_provider_debounce", {}).values():
+            try:
+                _t.stop()
+                _t.deleteLater()
+            except Exception:  # noqa: BLE001
+                pass
+        # Per-rebuild state.
+        self._provider_cache: dict[str, Any] = {}
+        self._provider_errors: dict[str, str] = {}
+        self._provider_debounce: dict[str, Any] = {}
+        if not prov_params:
+            return
+
+        from .permission_guards import perm_check
+        self._providers_allowed = bool(perm_check("dynamic_choices"))
+
+        if not self._providers_allowed:
+            note = (
+                "Dynamic choices disabled by policy "
+                "(capability: dynamic_choices)."
+            )
+            for p in prov_params:
+                w = self._widgets.get(p.id)
+                if w is not None:
+                    w.setEnabled(False)
+                    w.setToolTip(note)
+                btn = getattr(self, "_provider_refresh_btns", {}).get(p.id)
+                if btn is not None:
+                    btn.setEnabled(False)
+                    btn.setToolTip(note)
+            return
+
+        # Form-level "Refresh all" — the driving use case (the user
+        # opened another drawing/container after the form was up).
+        self._add_refresh_all_button()
+
+        # Initial population in dependency order.  on_open + on_change
+        # both populate now; manual waits for a click.
+        from scriptree.core.providers import provider_run_order
+        try:
+            order = provider_run_order(self._tool.params)
+        except ValueError:
+            # Structural errors are caught at load; defensive only.
+            order = [p.id for p in prov_params]
+        by_id = {p.id: p for p in self._tool.params}
+        for pid in order:
+            p = by_id.get(pid)
+            if p is None or getattr(p, "choices_provider", None) is None:
+                continue
+            if p.choices_provider.refresh in ("on_open", "on_change"):
+                self._run_provider(p)
+
+        # Wire on_change cascades: when any upstream value changes,
+        # debounce ~250 ms then re-run this provider.
+        #
+        # L15 fix: debounce is conceptually PER-PROVIDER, not
+        # per-dependency.  The old code created one QTimer per
+        # ``depends_on`` entry inside the inner loop and overwrote
+        # ``_provider_debounce[p.id]`` each iteration — so a
+        # multi-dep provider's earlier timers were orphaned
+        # (untracked, un-stoppable, leaked on rebuild).  Create ONE
+        # timer per provider and start() it from every dependency's
+        # ``valueChanged``; ``_provider_debounce[p.id]`` is then the
+        # single correct timer (and the only one to clean up).
+        from PySide6.QtCore import QTimer
+        for p in prov_params:
+            if p.choices_provider.refresh != "on_change":
+                continue
+            dep_widgets = [
+                self._widgets.get(dep) for dep in p.depends_on
+            ]
+            dep_widgets = [w for w in dep_widgets if w is not None]
+            if not dep_widgets:
+                continue
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(250)
+            timer.timeout.connect(
+                lambda pid=p.id: self._refresh_provider(
+                    pid, bypass_cache=False,
+                )
+            )
+            self._provider_debounce[p.id] = timer
+            for dep_w in dep_widgets:
+                dep_w.valueChanged.connect(
+                    lambda _v=None, t=timer: t.start()
+                )
+
+    def _add_refresh_all_button(self) -> None:
+        if getattr(self, "_refresh_all_added", False):
+            return
+        from PySide6.QtWidgets import QPushButton
+        btn = QPushButton("⟳  Refresh dynamic fields")
+        btn.setToolTip(
+            "Re-run every dynamic field's provider (e.g. after you "
+            "open another document in the external app)."
+        )
+        btn.clicked.connect(self._refresh_all_providers)
+        # Top of the form area (index 0; the trailing stretch keeps
+        # the rest below).
+        self._form_outer_layout.insertWidget(0, btn)
+        self._refresh_all_added = True
+
+    def _upstream_values(self, param: Any) -> dict[str, str]:
+        """Current values of ``param.depends_on``, coerced to strings
+        (a list value is comma-joined — same shape the runner emits)."""
+        out: dict[str, str] = {}
+        for dep in getattr(param, "depends_on", []) or []:
+            w = self._widgets.get(dep)
+            if w is None:
+                continue
+            v = w.get_value()
+            if isinstance(v, (list, tuple)):
+                out[dep] = ",".join(str(x) for x in v)
+            else:
+                out[dep] = "" if v is None else str(v)
+        return out
+
+    def _run_provider(
+        self, param: Any, *, bypass_cache: bool = False,
+    ) -> None:
+        from scriptree.core.providers import resolve_provider
+        spec = param.choices_provider
+        upstream = self._upstream_values(param)
+        cache_key = (
+            tuple(spec.command),
+            tuple(sorted(upstream.items())),
+        )
+        use_cache = (
+            spec.cache == "form_session" and not bypass_cache
+        )
+        if use_cache and param.id in self._provider_cache:
+            cached_key, cached_res = self._provider_cache[param.id]
+            if cached_key == cache_key:
+                self._apply_provider_result(param, cached_res)
+                return
+
+        result = resolve_provider(
+            spec,
+            param_id=param.id,
+            param_type=param.type,
+            upstream_values=upstream,
+            tool_file=getattr(self._tool, "loaded_from", None),
+            env=None,  # inherit process env (PATH-prepend parity is
+                       # a documented v1 limitation — see the
+                       # dynamic_providers doc)
+        )
+        if spec.cache == "form_session":
+            self._provider_cache[param.id] = (cache_key, result)
+        self._apply_provider_result(param, result)
+
+    def _apply_provider_result(self, param: Any, result: Any) -> None:
+        w = self._widgets.get(param.id)
+        if w is None:
+            return
+        if not result.ok:
+            self._provider_errors[param.id] = result.error
+            tip = result.error
+            if result.detail:
+                tip += "\n\n" + result.detail
+            w.setToolTip(tip)
+            # Choice widgets: empty the list so it visibly reads
+            # "(no items)"; scalar widgets keep whatever they had.
+            if hasattr(w, "set_choices"):
+                try:
+                    w.set_choices([], [], None)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._update_live_cmd()
+            return
+        self._provider_errors.pop(param.id, None)
+        if result.is_scalar:
+            w.set_value(result.value)
+        elif hasattr(w, "set_choices"):
+            w.set_choices(
+                result.choices, result.choice_labels, result.default,
+            )
+        # Restore the description tooltip on success.
+        if getattr(param, "description", ""):
+            w.setToolTip(param.description)
+        self._update_live_cmd()
+
+    def _refresh_provider(
+        self, param_id: str, *, bypass_cache: bool = True,
+    ) -> None:
+        if not getattr(self, "_providers_allowed", True):
+            return
+        by_id = {p.id: p for p in self._tool.params}
+        p = by_id.get(param_id)
+        if p is None or getattr(p, "choices_provider", None) is None:
+            return
+        self._run_provider(p, bypass_cache=bypass_cache)
+        # A refreshed upstream may feed dependents — re-run any
+        # on_change provider that depends on this one.
+        for other in self._provider_params():
+            if (other.choices_provider.refresh == "on_change"
+                    and param_id in (other.depends_on or [])):
+                self._run_provider(other, bypass_cache=bypass_cache)
+
+    def _refresh_all_providers(self) -> None:
+        if not getattr(self, "_providers_allowed", True):
+            return
+        from scriptree.core.providers import provider_run_order
+        try:
+            order = provider_run_order(self._tool.params)
+        except ValueError:
+            order = [p.id for p in self._provider_params()]
+        by_id = {p.id: p for p in self._tool.params}
+        for pid in order:
+            p = by_id.get(pid)
+            if p is not None and getattr(p, "choices_provider", None):
+                self._run_provider(p, bypass_cache=True)
 
     def _install_tab_context_menu(self, tab_widget: QTabWidget) -> None:
         """Wire a right-click context menu onto ``tab_widget``'s tab bar.
@@ -1553,6 +2206,14 @@ class ToolRunnerView(QWidget):
 
         Hidden params are not rendered in the form, so their values come
         from the active configuration's stored ``values`` dict instead.
+
+        v0.4.0 — also treats params hidden by ``visible_when`` as
+        empty for argv purposes: their stored value is dropped from
+        the returned dict so the argument-template
+        conditional-emission rules (``{id?--flag}`` etc.) skip them
+        naturally.  The widget's actual value PERSISTS in memory
+        for re-show — only its contribution to the current argv is
+        suppressed.
         """
         values = {pid: w.get_value() for pid, w in self._widgets.items()}
         # Merge in hidden param values from the active configuration.
@@ -1563,7 +2224,52 @@ class ToolRunnerView(QWidget):
                 for pid in hidden:
                     if pid not in values and pid in cfg.values:
                         values[pid] = cfg.values[pid]
+        # Drop visible_when-hidden params for argv assembly.  See
+        # ``_visible_when_hidden_ids`` for the source of truth.
+        for pid in self._visible_when_hidden_ids():
+            values.pop(pid, None)
         return values
+
+    def _visible_when_hidden_ids(self) -> set[str]:
+        """Return the set of param IDs currently hidden by
+        ``visible_when``.  Computed by evaluating each param's
+        expression against the current widget values (BEFORE this
+        method's filtering — we want a snapshot of all entries,
+        including the hidden ones, when deciding what's visible).
+        """
+        from scriptree.core.visible_when import evaluate as _evaluate
+        # Raw values BEFORE filtering (so an expression like
+        # ``"a == 'x'"`` can see ``a`` even when ``a`` is itself
+        # currently hidden).
+        raw = {pid: w.get_value() for pid, w in self._widgets.items()}
+        hidden_ids: set[str] = set()
+        for param in self._tool.params:
+            expr = (getattr(param, "visible_when", "") or "").strip()
+            if not expr:
+                continue
+            if not _evaluate(expr, raw):
+                hidden_ids.add(param.id)
+        return hidden_ids
+
+    def _refresh_visible_when(self) -> None:
+        """Apply ``visible_when`` to the form: hide/show rows.
+
+        Called from ``_update_live_cmd`` so every value change
+        re-evaluates visibility.  Cheap — the evaluator is a
+        single-pass parser, run once per param with a
+        ``visible_when`` expression (usually a handful per tool).
+        """
+        if not self._widgets:
+            return
+        hidden = self._visible_when_hidden_ids()
+        for form in self._section_forms.values():
+            for param in self._tool.params:
+                # Only call set_row_hidden when the param actually
+                # has a row in this form — set_row_hidden is a
+                # find-and-no-op otherwise but skipping the call
+                # avoids burning cycles on every section x every
+                # param on every keystroke.
+                form.set_row_hidden(param.id, param.id in hidden)
 
     def _resolve_for_preview(self) -> ResolvedCommand | None:
         try:
@@ -1618,6 +2324,20 @@ class ToolRunnerView(QWidget):
         """
         if self._updating:
             return
+        # v0.6.0 — provider on_open population runs inside
+        # ``_populate_form_rows`` (form-build phase), which finishes
+        # *before* the live-command widget is created.  set_choices /
+        # set_value emit ``valueChanged`` during that population, so
+        # this can be called early.  No-op until the preview widget
+        # exists; __init__ does a definitive _update_live_cmd() once
+        # the whole view is constructed.
+        if not hasattr(self, "_live_cmd"):
+            return
+        # v0.4.0 — refresh visible_when-driven row visibility before
+        # collecting values, so the argv preview matches what the
+        # user actually sees.  Cheap (recursive-descent parser over
+        # a handful of expressions); safe to run on every change.
+        self._refresh_visible_when()
         try:
             cmd = build_full_argv(
                 self._tool,
@@ -1774,6 +2494,17 @@ class ToolRunnerView(QWidget):
         return self._thread is not None
 
     def _start_run(self) -> None:
+        # ``run_tools`` capability gate (V3 v0.3.3) — call-time check
+        # so keyboard shortcuts and programmatic invocations are gated
+        # in addition to the already-greyed-out Run button.
+        from .permission_guards import perm_check
+        if not perm_check("run_tools"):
+            QMessageBox.warning(
+                self, "Run not permitted",
+                "Running tools is disabled by your administrator "
+                "(capability: run_tools).",
+            )
+            return
         if self._thread is not None:
             return  # run already in progress
 
@@ -1790,17 +2521,58 @@ class ToolRunnerView(QWidget):
             if p.type is ParamType.PATH
         }
         labels = {p.id: p.label for p in self._tool.params}
-        warnings = sanitize_all_values(
-            {k: str(v) for k, v in values.items() if v},
-            path_fields=path_ids,
-            labels=labels,
-        )
-
-        # Check if editor injection protection is enabled.
+        # Capability lookup BEFORE sanitization so the path-security
+        # trio (allow_path_traversal / access_sensitive_paths /
+        # allow_symlinks) can suppress their respective warnings
+        # when the admin has granted them.  Default deny → strict.
         perms = get_app_permissions()
         if self._file_path:
             from ..core.permissions import load_permissions
             perms = load_permissions(file_path=self._file_path)
+        # Use the detailed sanitizer so each warning carries the
+        # source field id — needed for the v0.3.4 per-field
+        # suppression feature.
+        from ..core.sanitize import sanitize_all_values_detailed
+        detailed_warnings: list[tuple[str, str]] = sanitize_all_values_detailed(
+            {k: str(v) for k, v in values.items() if v},
+            path_fields=path_ids,
+            labels=labels,
+            allow_traversal=perms.can("allow_path_traversal"),
+            allow_sensitive=perms.can("access_sensitive_paths"),
+        )
+        warnings = [w for w, _fid in detailed_warnings]
+
+        # ``allow_symlinks`` capability gate (V3 v0.3.3): when DENIED,
+        # check the resolved executable path for symlink components
+        # and surface a warning to the same dialog.  Symlink resolution
+        # requires disk I/O so we limit it to the executable here
+        # (not every form-value path), keeping the run-start fast.
+        if not perms.can("allow_symlinks"):
+            from ..core.sanitize import validate_resolved_path
+            from pathlib import Path as _Path
+            try:
+                exe_path = self._tool.executable or ""
+                if exe_path:
+                    resolved = _Path(exe_path).expanduser().resolve()
+                    base = (
+                        _Path(self._tool.loaded_from).parent
+                        if self._tool.loaded_from else resolved.parent
+                    )
+                    sym_warnings = validate_resolved_path(
+                        resolved, base,
+                        allow_symlinks=False,
+                        allow_traversal=True,  # already checked above
+                    )
+                    # Symlink warnings are tagged with the synthetic
+                    # field id ``__exe__`` so per-field mute can target
+                    # them.
+                    for w in sym_warnings:
+                        detailed_warnings.append((w, "__exe__"))
+            except (OSError, RuntimeError, ValueError):
+                # Resolution failed (broken symlink, network drive
+                # offline, etc.) — skip silently rather than block.
+                pass
+
         editor_protection = perms.can(
             "injection_protection_on_editor"
         )
@@ -1810,16 +2582,47 @@ class ToolRunnerView(QWidget):
             from ..core.sanitize import sanitize_value
             for token in self._extras:
                 r = sanitize_value(token, field_label="Extra arguments")
-                warnings.extend(r.warnings)
+                for w in r.warnings:
+                    detailed_warnings.append((w, "__extras__"))
             cmd_text = self._live_cmd.toPlainText().strip()
             if cmd_text:
                 r = sanitize_value(cmd_text, field_label="Command line")
-                warnings.extend(r.warnings)
+                for w in r.warnings:
+                    detailed_warnings.append((w, "__cmdline__"))
 
-        if warnings:
+        # ``suppress_sanitization_warnings`` filtering (V3 v0.3.4).
+        # Three suppression scopes:
+        #   1. Globally muted    -> skip dialog entirely.
+        #   2. This tool muted   -> skip dialog entirely.
+        #   3. Per-field muted   -> drop those warnings; if none
+        #                           remain after the drop, also skip.
+        from ..core import sanitize_suppression as _supp
+        if detailed_warnings:
+            if _supp.should_skip_dialog(self._file_path):
+                detailed_warnings = []
+            else:
+                texts = [w for w, _f in detailed_warnings]
+                fids = [f for _w, f in detailed_warnings]
+                kept_texts = _supp.filter_warnings(
+                    self._file_path, texts, fids,
+                )
+                if len(kept_texts) != len(detailed_warnings):
+                    kept_q: list[str] = list(kept_texts)
+                    new_pairs: list[tuple[str, str]] = []
+                    for text, fid in detailed_warnings:
+                        if kept_q and kept_q[0] == text:
+                            new_pairs.append((text, fid))
+                            kept_q.pop(0)
+                    detailed_warnings = new_pairs
+
+        warnings = [w for w, _f in detailed_warnings]
+
+        if detailed_warnings:
+            warning_fids = [f for _w, f in detailed_warnings]
             detail = "\n".join(f"\u2022 {w}" for w in warnings)
             if not self._show_injection_warning(
-                detail, editor_protection, perms
+                detail, editor_protection, perms,
+                warning_fids=warning_fids,
             ):
                 return
 
@@ -1849,6 +2652,7 @@ class ToolRunnerView(QWidget):
                 global_env_overrides=_g_env_override,
                 global_path_prepend=_g_path or None,
                 global_path_overrides=_g_path_override,
+                tree_path_prepend=self._tree_path_prepend or None,
             )
         except RunnerError as e:
             QMessageBox.warning(self, "Validation error", str(e))
@@ -1880,10 +2684,23 @@ class ToolRunnerView(QWidget):
         # --- credential prompt (run-as-different-user) ---
         credentials: tuple[str, str, str] | None = None
         if cfg is not None and cfg.prompt_credentials:
-            credentials = self._obtain_credentials(cfg)
-            if credentials is None:
-                # User cancelled the credential dialog.
-                return
+            # ``run_as_different_user`` gate (V3 v0.3.3): when denied,
+            # the configuration's prompt_credentials flag is ignored
+            # and the tool runs under the current user's context.  We
+            # surface a one-line warning to the output pane so the
+            # discrepancy is visible.
+            if not perm_check("run_as_different_user"):
+                self._append_line(
+                    "[run_as_different_user disabled] This configuration "
+                    "requested credentials but the capability is not "
+                    "granted.  Running under the current user.",
+                    color=QColor("#b8860b"),
+                )
+            else:
+                credentials = self._obtain_credentials(cfg)
+                if credentials is None:
+                    # User cancelled the credential dialog.
+                    return
 
         if credentials is not None:
             user_display = credentials[0]
@@ -1893,13 +2710,38 @@ class ToolRunnerView(QWidget):
         else:
             self._append_line(f"$ {cmd.display()}\n")
 
+        # Interactive-stdin gating: tool must have ``interactive=True``
+        # AND the ``interactive_stdin`` capability must be granted.
+        # When the tool opted in but the permission denies, surface a
+        # one-line warning before the run so the user knows why the
+        # send-line widget didn't appear.
+        tool_opted_in = bool(getattr(self._tool, "interactive", False))
+        run_interactive = False
+        if tool_opted_in:
+            if perms.can("interactive_stdin"):
+                run_interactive = True
+            else:
+                self._append_line(
+                    "[interactive disabled] This tool requested "
+                    "interactive stdin, but the 'interactive_stdin' "
+                    "permission is not granted.  Running non-"
+                    "interactively.",
+                    color=QColor("#b8860b"),  # dark goldenrod
+                )
+        # Refresh visibility now in case the user toggled the
+        # permission between sessions; an inactive run keeps the
+        # row hidden until permission and tool flag agree.
+        self._refresh_interactive_visibility()
+
         self._btn_run.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._btn_stop.setText("Stop")
         self._status.setText("Running…")
 
         self._thread = QThread(self)
-        self._worker = _RunWorker(cmd, credentials=credentials)
+        self._worker = _RunWorker(
+            cmd, credentials=credentials, interactive=run_interactive,
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.stdoutLine.connect(self._on_stdout)
@@ -2383,6 +3225,67 @@ class ToolRunnerView(QWidget):
             )
         self._stderr_buffer.clear()
 
+    # --- interactive stdin (v0.3.0) -------------------------------------
+
+    def _on_send_line(self) -> None:
+        """User clicked Send (or hit Enter in the input box).
+
+        Pull the typed text, route through the worker's
+        ``send_line``, then clear the box and refocus it for the
+        next response.  Echo the sent line into the output pane in
+        a dim colour so the conversation is self-documenting.
+        """
+        edit = getattr(self, "_send_line_edit", None)
+        if edit is None:
+            return
+        text = edit.text()
+        edit.clear()
+        edit.setFocus()
+        self._send_text_to_worker(text)
+
+    def _send_quick_response(self, text: str) -> None:
+        """User clicked one of the y/n/!/q quick-response buttons.
+
+        Sends ``text`` immediately without consulting the line edit.
+        Refocuses the line edit so the next typed key keeps flowing.
+        """
+        self._send_text_to_worker(text)
+        edit = getattr(self, "_send_line_edit", None)
+        if edit is not None:
+            edit.setFocus()
+
+    def _send_text_to_worker(self, text: str) -> None:
+        """Common dispatch for both Send button and quick-response."""
+        worker = self._worker
+        if worker is None:
+            self._append_line(
+                "[send] No process is running.",
+                color=QColor("#666666"),
+            )
+            return
+        ok = worker.send_line(text)
+        if not ok:
+            self._append_line(
+                "[send] Could not write to the tool's stdin "
+                "(pipe closed or process exited).",
+                color=QColor("#b00020"),
+            )
+            return
+        # Echo the line we just sent.  Use the same colour as the
+        # ``$ <command>`` echo so the user can scan the conversation.
+        self._append_line(
+            f"> {text}",
+            color=QColor("#1976d2"),
+        )
+
+    def _on_end_input(self) -> None:
+        """User clicked End input — close the child's stdin pipe."""
+        worker = self._worker
+        if worker is None:
+            return
+        worker.close_stdin()
+        self._append_line("[stdin closed]", color=QColor("#666666"))
+
     # --- helpers ---------------------------------------------------------
 
     def _append_line(self, line: str, *, color: QColor | None = None) -> None:
@@ -2405,28 +3308,36 @@ class ToolRunnerView(QWidget):
         detail: str,
         editor_protection: bool,
         perms: Any,
+        *,
+        warning_fids: list[str] | None = None,
     ) -> bool:
-        """Show the injection warning dialog. Returns True to proceed."""
-        from PySide6.QtWidgets import QApplication
+        """Show the injection warning dialog. Returns True to proceed.
 
-        if editor_protection:
-            # Permission file present — simple warning.
-            reply = QMessageBox.warning(
-                self,
-                "Suspicious input detected",
-                "The following inputs contain potentially unsafe "
-                "characters:\n\n" + detail + "\n\n"
-                "Do you want to continue anyway?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            return reply == QMessageBox.StandardButton.Yes
+        v0.3.4+ — when the ``suppress_sanitization_warnings``
+        capability is granted, three "Don't warn again" checkboxes
+        appear at the bottom of the dialog:
 
-        # Permission file missing — show instructions with path and copy button.
-        perm_dir = perms.app_permissions_dir or "(permissions folder not found)"
-        filename = "injection_protection_on_editor"
+        * **For these field(s)** — silence further warnings whose
+          source field is in ``warning_fids`` (in this same tool).
+        * **For this tool** — silence every warning from this tool.
+        * **For all tools** — global mute.
 
+        On Yes / Proceed the chosen scopes are written to QSettings
+        via the ``sanitize_suppression`` module.  Re-enable later
+        via Edit -> Sanitization warnings... in the main window.
+        """
+        from PySide6.QtWidgets import (
+            QApplication,
+            QCheckBox,
+            QDialogButtonBox,
+        )
+        from .permission_guards import perm_check
+        from ..core import sanitize_suppression as _supp
+
+        # Build a custom dialog so we can append the suppression
+        # checkboxes regardless of editor_protection mode.  The
+        # editor-protection-missing branch's permission-file
+        # instructions get folded in conditionally.
         dlg = QDialog(self)
         dlg.setWindowTitle("Suspicious input detected")
         dlg.setMinimumWidth(480)
@@ -2439,39 +3350,105 @@ class ToolRunnerView(QWidget):
         detail_label.setWordWrap(True)
         lay.addWidget(detail_label)
 
-        lay.addWidget(QLabel(
-            "\nTo enable injection protection on the command line "
-            "editor and extra arguments (blocking these at the "
-            "source), add this file to your permissions folder:"
-        ))
+        if not editor_protection:
+            # Permission file missing — show instructions with path
+            # and copy button so the IT admin can opt in to editor
+            # protection.
+            perm_dir = perms.app_permissions_dir or "(permissions folder not found)"
+            filename = "injection_protection_on_editor"
 
-        # Copyable filename.
-        file_row = QHBoxLayout()
-        file_field = QLineEdit(filename)
-        file_field.setReadOnly(True)
-        file_row.addWidget(file_field, stretch=1)
-        btn_copy_name = QPushButton("Copy name")
-        btn_copy_name.clicked.connect(
-            lambda: QApplication.clipboard().setText(filename)
-        )
-        file_row.addWidget(btn_copy_name)
-        lay.addLayout(file_row)
+            lay.addWidget(QLabel(
+                "\nTo enable injection protection on the command line "
+                "editor and extra arguments (blocking these at the "
+                "source), add this file to your permissions folder:"
+            ))
 
-        # Permissions path with open-folder button.
-        path_row = QHBoxLayout()
-        path_field = QLineEdit(perm_dir)
-        path_field.setReadOnly(True)
-        path_row.addWidget(path_field, stretch=1)
-        btn_open_folder = QPushButton("Open folder")
-        btn_open_folder.clicked.connect(
-            lambda: self._open_folder_in_explorer(perm_dir)
-        )
-        path_row.addWidget(btn_open_folder)
-        lay.addLayout(path_row)
+            file_row = QHBoxLayout()
+            file_field = QLineEdit(filename)
+            file_field.setReadOnly(True)
+            file_row.addWidget(file_field, stretch=1)
+            btn_copy_name = QPushButton("Copy name")
+            btn_copy_name.clicked.connect(
+                lambda: QApplication.clipboard().setText(filename)
+            )
+            file_row.addWidget(btn_copy_name)
+            lay.addLayout(file_row)
+
+            path_row = QHBoxLayout()
+            path_field = QLineEdit(perm_dir)
+            path_field.setReadOnly(True)
+            path_row.addWidget(path_field, stretch=1)
+            btn_open_folder = QPushButton("Open folder")
+            btn_open_folder.clicked.connect(
+                lambda: self._open_folder_in_explorer(perm_dir)
+            )
+            path_row.addWidget(btn_open_folder)
+            lay.addLayout(path_row)
+
+        # ── v0.3.4 suppression checkboxes ─────────────────────────
+        # Three "Don't warn again" scopes.  Each only appears when
+        # the suppress_sanitization_warnings capability is granted.
+        # The per-field box is also gated on having ``warning_fids``
+        # data — without it we have nothing to silence at the field
+        # granularity.
+        chk_field: QCheckBox | None = None
+        chk_tool: QCheckBox | None = None
+        chk_global: QCheckBox | None = None
+        if perm_check("suppress_sanitization_warnings"):
+            unique_fids = sorted({
+                f for f in (warning_fids or [])
+                if f and not f.startswith("__")
+            }) if warning_fids else []
+            other_fid_count = sum(
+                1 for f in (warning_fids or [])
+                if f and f.startswith("__")
+            )
+
+            lay.addWidget(QLabel(
+                "\n<b>Don't warn me again</b> "
+                "(applies on Proceed):"
+            ))
+            if unique_fids:
+                if len(unique_fids) == 1:
+                    field_label = f"For field '{unique_fids[0]}'"
+                else:
+                    field_label = (
+                        f"For these {len(unique_fids)} field(s)"
+                    )
+                if other_fid_count:
+                    field_label += (
+                        f" (warnings from extras / cmd-line / "
+                        f"executable will keep showing)"
+                    )
+                chk_field = QCheckBox(field_label)
+                chk_field.setToolTip(
+                    "Silence further warnings about these specific "
+                    "fields in this tool only.  Re-enable via "
+                    "Edit -> Sanitization warnings..."
+                )
+                lay.addWidget(chk_field)
+            chk_tool = QCheckBox("For this tool (every field)")
+            chk_tool.setToolTip(
+                "Silence every sanitization warning from this tool. "
+                "Re-enable via Edit -> Sanitization warnings..."
+            )
+            chk_tool.setEnabled(bool(self._file_path))
+            if not self._file_path:
+                chk_tool.setToolTip(
+                    chk_tool.toolTip()
+                    + "\n(Disabled: this tool has no on-disk path.)"
+                )
+            lay.addWidget(chk_tool)
+            chk_global = QCheckBox("For all tools, everywhere")
+            chk_global.setToolTip(
+                "Silence every sanitization warning across the whole "
+                "ScripTree install.  Re-enable via "
+                "Edit -> Sanitization warnings..."
+            )
+            lay.addWidget(chk_global)
 
         lay.addWidget(QLabel("\nDo you want to continue anyway?"))
 
-        from PySide6.QtWidgets import QDialogButtonBox
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Yes
             | QDialogButtonBox.StandardButton.No
@@ -2480,7 +3457,34 @@ class ToolRunnerView(QWidget):
         btns.rejected.connect(dlg.reject)
         lay.addWidget(btns)
 
-        return dlg.exec() == QDialog.DialogCode.Accepted
+        proceed = dlg.exec() == QDialog.DialogCode.Accepted
+
+        if proceed:
+            # Apply the user's choices BEFORE returning so the next
+            # Run picks them up.  Only persist on Yes — Cancel / No
+            # leaves the suppression state unchanged.
+            if chk_global is not None and chk_global.isChecked():
+                _supp.set_globally_muted(True)
+            if (
+                chk_tool is not None
+                and chk_tool.isChecked()
+                and self._file_path
+            ):
+                _supp.mute_tool(self._file_path)
+            if (
+                chk_field is not None
+                and chk_field.isChecked()
+                and self._file_path
+                and warning_fids
+            ):
+                # Mute every concrete (non-synthetic) field id that
+                # tripped this dialog.
+                concrete = {
+                    f for f in warning_fids
+                    if f and not f.startswith("__")
+                }
+                _supp.mute_fields_for_tool(self._file_path, concrete)
+        return proceed
 
     @staticmethod
     def _open_folder_in_explorer(path: str) -> None:
@@ -2744,6 +3748,9 @@ class ToolRunnerView(QWidget):
         handlers can route to the correct ConfigurationSet. Personal
         entries are prefixed with a lock glyph to distinguish them
         visually.
+
+        Also syncs the "Default" checkbox to whichever configuration's
+        ``default_name`` matches the now-selected entry.
         """
         self._cfg_loading = True
         try:
@@ -2764,6 +3771,64 @@ class ToolRunnerView(QWidget):
                     break
         finally:
             self._cfg_loading = False
+        self._sync_cfg_default_check()
+
+    def _sync_cfg_default_check(self) -> None:
+        """Sync the "Default" checkbox state to the currently-selected
+        configuration's status as the set's ``default_name``."""
+        if not hasattr(self, "_cfg_default_check"):
+            return  # called before construction completes
+        storage, name = self._active_selection
+        target_set = (
+            self._cfg_set if storage == "shared"
+            else self._personal_cfg_set
+        )
+        is_default = bool(
+            target_set is not None and target_set.default_name == name
+        )
+        # blockSignals so toggling state doesn't fire _on_cfg_default_toggled.
+        self._cfg_default_check.blockSignals(True)
+        self._cfg_default_check.setChecked(is_default)
+        self._cfg_default_check.blockSignals(False)
+
+    def _on_cfg_default_toggled(self, checked: bool) -> None:
+        """User toggled the "Default" checkbox.  Update the active
+        configuration set's ``default_name`` and persist the sidecar.
+
+        Checking on a different config implicitly clears the previous
+        default — only one configuration can be the default at a time
+        per (shared / personal) set.
+        """
+        if self._cfg_loading:
+            return
+        storage, name = self._active_selection
+        target_set = (
+            self._cfg_set if storage == "shared"
+            else self._personal_cfg_set
+        )
+        if target_set is None:
+            return
+        new_default = name if checked else ""
+        if target_set.default_name == new_default:
+            return
+        target_set.default_name = new_default
+        # Persist immediately — the user expects this checkbox to
+        # behave like the rest of the configuration bar (auto-save
+        # on change).
+        try:
+            self._save_cfg_sidecar()
+            verb = (
+                f"set '{name}' as default"
+                if checked
+                else f"cleared default (was '{name}')"
+            )
+            if hasattr(self, "_status") and self._status is not None:
+                self._status.setText(f"✓ {verb}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Save failed",
+                f"Could not persist the default-config change:\n\n{exc}",
+            )
 
     def _refresh_cfg_buttons(self) -> None:
         """Enable/disable configuration buttons based on state.
@@ -2966,6 +4031,9 @@ class ToolRunnerView(QWidget):
         self._history_index = -1
         self._push_history_snapshot()
         self._refresh_edit_buttons()
+        # Update the "Default" checkbox to reflect whether the
+        # newly-selected config is the default for its set.
+        self._sync_cfg_default_check()
         label = f"\U0001f512 {name}" if storage == "personal" else name
         self._status.setText(f"Loaded configuration '{label}'.")
 
