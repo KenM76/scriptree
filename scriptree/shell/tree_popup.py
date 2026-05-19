@@ -60,14 +60,49 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QLineEdit, QMenu, QWidgetAction,
+    QApplication, QLineEdit, QMenu, QStyle, QWidgetAction,
 )
 
 
 def _log(msg: str) -> None:
     print(f"[tree_popup] {msg}", file=sys.stderr)
+
+
+# --- icons (v0.6.5) --------------------------------------------------------
+#
+# A tool/app row shows its catalog's configured ``cell`` icon; tools
+# with none, and folder submenus, fall back to the OS-native standard
+# file/folder icons so every row is iconned "like they should".
+
+def _std_icon(which) -> QIcon:  # noqa: ANN001
+    app = QApplication.instance()
+    if app is None:
+        return QIcon()
+    return app.style().standardIcon(which)
+
+
+def _file_icon() -> QIcon:
+    return _std_icon(QStyle.StandardPixmap.SP_FileIcon)
+
+
+def _folder_icon() -> QIcon:
+    return _std_icon(QStyle.StandardPixmap.SP_DirIcon)
+
+
+def _catalog_icon(path) -> QIcon:  # noqa: ANN001
+    """The catalog's own icon, or the generic file icon as a
+    fallback so a menu never has a ragged mix of iconned and
+    icon-less tool rows."""
+    try:
+        from scriptree.core.cell_metadata import qicon_for_catalog
+        ic = qicon_for_catalog(path)
+        if ic is not None and not ic.isNull():
+            return ic
+    except Exception:  # noqa: BLE001
+        pass
+    return _file_icon()
 
 
 # Don't paint a flat result list longer than this — a launcher menu
@@ -111,6 +146,7 @@ def _add_node_to_menu(  # noqa: ANN001
     if node.type == "folder":
         label = node.display_name or node.name or "(unnamed)"
         sub = menu.addMenu(label)
+        sub.setIcon(_folder_icon())
         # ASCII '/' breadcrumb (not a unicode arrow): this string can
         # reach cp1252 logs / serialisation, and this codebase has
         # been bitten by mojibake before — keep it 7-bit.
@@ -131,6 +167,8 @@ def _add_node_to_menu(  # noqa: ANN001
     label = node.display_name or node.name or p.stem or "(unnamed)"
     cfg = node.configuration  # may be None
     act = menu.addAction(label)
+    leaf_icon = _catalog_icon(p)
+    act.setIcon(leaf_icon)
     # Capture p, cfg in default args so the closure doesn't bind to
     # the loop variable.
     def _on_trigger(_checked=False, leaf=str(p), config=cfg):  # noqa: ANN001
@@ -140,10 +178,11 @@ def _add_node_to_menu(  # noqa: ANN001
             _log(f"launch_tool({leaf!r}) failed: {exc!r}")
     act.triggered.connect(_on_trigger)
     if collector is not None:
-        # 4-tuple: (display = breadcrumbed label for the result row,
+        # 5-tuple: (display = breadcrumbed label for the result row,
         # name = the bare leaf label that ranking prefixes against,
         # search_text = full lowercased haystack incl. folder path +
-        # filename for the weakest "matches anywhere" tier, trigger).
+        # filename for the weakest "matches anywhere" tier, trigger,
+        # icon = the leaf's QIcon so flat results stay iconned).
         # Ranking on the bare name (not the breadcrumbed display) is
         # what makes typing "a" surface tools NAMED a*, like the
         # Start menu / Spotlight.
@@ -153,6 +192,7 @@ def _add_node_to_menu(  # noqa: ANN001
             label,
             search_text,
             _on_trigger,
+            leaf_icon,
         ))
 
 
@@ -205,6 +245,8 @@ def _build_menu_for_catalog(  # noqa: ANN001
             label = p.stem
         from scriptree.shell.v1_launcher import launch_tool
         act = menu.addAction(label)
+        leaf_icon = _catalog_icon(p)
+        act.setIcon(leaf_icon)
 
         def _on_trigger(_c=False, leaf=str(p)):  # noqa: ANN001
             launch_tool(leaf)
@@ -215,6 +257,7 @@ def _build_menu_for_catalog(  # noqa: ANN001
                 label,
                 f"{path_prefix}{label} {p.stem}".lower(),
                 _on_trigger,
+                leaf_icon,
             ))
         return True
 
@@ -329,18 +372,19 @@ def _install_live_search(menu: QMenu, leaves: list) -> QLineEdit:
         for act in structural:
             act.setVisible(False)
         scored = []
-        for display, name, search_text, trig in leaves:
+        for display, name, search_text, trig, icon in leaves:
             s = _rank(q, name, search_text)
             if s is not None:
                 # Tie-break within a score tier by the bare name so
                 # the order is stable + name-alphabetical.
-                scored.append((s, name.lower(), display, trig))
+                scored.append((s, name.lower(), display, trig, icon))
         scored.sort(key=lambda t: (t[0], t[1]))
         shown = scored[:pool_size]
         for i, a in enumerate(pool):
             if i < len(shown):
-                _, _, display, trig = shown[i]
+                _, _, display, trig, icon = shown[i]
                 a.setText(display)
+                a.setIcon(icon if icon is not None else QIcon())
                 current[a] = trig
                 a.setVisible(True)
             else:
@@ -432,6 +476,7 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
                 except Exception:  # noqa: BLE001
                     pass
                 sub = menu.addMenu(top_label)
+                sub.setIcon(_catalog_icon(src))
                 if _build_menu_for_catalog(
                     sub, src,
                     collector=leaves,

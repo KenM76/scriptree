@@ -4261,6 +4261,24 @@ class CellWindow(QMainWindow):
         # inheriting the CellWindow's translucent/dark palette.
         menu = QMenu(None)
 
+        # v0.6.5 — OS standard icons on the program/context-menu items
+        # (the user: "menu items both for the program and apps").
+        from PySide6.QtWidgets import QStyle as _QStyle
+        _SP = _QStyle.StandardPixmap
+
+        def _ic(which):  # noqa: ANN001, ANN202
+            _a = QApplication.instance()
+            return _a.style().standardIcon(which) if _a else None
+
+        def _seticon(obj, which) -> None:  # noqa: ANN001
+            """Set a standard icon on a QAction or QMenu, no-op-safe."""
+            try:
+                ic = _ic(which)
+                if ic is not None:
+                    obj.setIcon(ic)
+            except Exception:  # noqa: BLE001
+                pass
+
         # ---- File type display (read-only, at top) ----
         # Show "ScripTree: <name>" or "ScripTreeTree: <name>" based on the
         # extension of the currently-loaded file.  If nothing is loaded,
@@ -4299,8 +4317,11 @@ class CellWindow(QMainWindow):
         # Open recent sub-sub-menu.  Per user direction (2026-05-07):
         # "Catalogue should say ScripTree instead."
         catalog_menu = QMenu("ScripTree", menu)
+        _seticon(catalog_menu, _SP.SP_DirIcon)
         load_scriptree_action = catalog_menu.addAction("Load ScripTree…")
+        _seticon(load_scriptree_action, _SP.SP_DialogOpenButton)
         load_scriptreetree_action = catalog_menu.addAction("Load ScripTreeTree…")
+        _seticon(load_scriptreetree_action, _SP.SP_DialogOpenButton)
 
         # "Open recent" submenu — last 10 entries per type, merged and
         # sorted most-recent first.  Each entry shows filename + full path.
@@ -4326,6 +4347,7 @@ class CellWindow(QMainWindow):
                 break
 
         recent_menu = QMenu("Open recent", catalog_menu)
+        _seticon(recent_menu, _SP.SP_FileDialogDetailedView)
         recent_actions: dict = {}  # action → path
         if all_recent:
             for _rp in all_recent:
@@ -4346,11 +4368,13 @@ class CellWindow(QMainWindow):
         # "Save as…" — save the currently-loaded catalog file under a new name.
         # Only enabled when a file is loaded.
         save_as_action = catalog_menu.addAction("Save ScripTree as…")
+        _seticon(save_as_action, _SP.SP_DialogSaveButton)
         save_as_action.setEnabled(self._catalog_path is not None)
 
         clear_catalog_action = None
         if self._catalog_path is not None:
             clear_catalog_action = catalog_menu.addAction("Clear loaded ScripTree")
+            _seticon(clear_catalog_action, _SP.SP_DialogResetButton)
 
         menu.addMenu(catalog_menu)
 
@@ -4361,6 +4385,7 @@ class CellWindow(QMainWindow):
         # (fork to a new file).  Otherwise only "Save as…" — there's
         # no remembered path to overwrite.
         ring_menu = QMenu("Tree Ring", menu)
+        _seticon(ring_menu, _SP.SP_DriveNetIcon)
         already_saved = getattr(self, "_saved_ring_path", None) is not None
 
         save_ring_action = None
@@ -4370,6 +4395,7 @@ class CellWindow(QMainWindow):
                 else "Save group as Tree Ring"
             )
             save_ring_action = ring_menu.addAction(label)
+            _seticon(save_ring_action, _SP.SP_DialogSaveButton)
 
         if self.role == "master":
             save_ring_as_action = ring_menu.addAction(
@@ -4379,10 +4405,13 @@ class CellWindow(QMainWindow):
             save_ring_as_action = ring_menu.addAction(
                 "Save as Tree Ring…"
             )
+        _seticon(save_ring_as_action, _SP.SP_DialogSaveButton)
         load_ring_action = ring_menu.addAction("Load Tree Ring…")
+        _seticon(load_ring_action, _SP.SP_DialogOpenButton)
 
         # "Auto-load on startup" sub-sub-menu.
         autoload_menu = QMenu("Auto-load on startup", ring_menu)
+        _seticon(autoload_menu, _SP.SP_BrowserReload)
         autoload_disabled_action = autoload_menu.addAction("Disabled")
         autoload_disabled_action.setCheckable(True)
         autoload_user_action = autoload_menu.addAction("For current user only")
@@ -4416,7 +4445,9 @@ class CellWindow(QMainWindow):
         # ── Cell submenu ──────────────────────────────────────────
         # Multi-instance actions + group membership controls.
         cell_menu = QMenu("Cell", menu)
+        _seticon(cell_menu, _SP.SP_ComputerIcon)
         spawn_action = cell_menu.addAction("Spawn another cell")
+        _seticon(spawn_action, _SP.SP_FileDialogNewFolder)
 
         # Group membership actions.  Three possible entries:
         #   * Leave forest  — when this cell is grouped under the
@@ -4474,8 +4505,11 @@ class CellWindow(QMainWindow):
 
         # ── Top-level: about / settings / preferences ────────────
         about_action = menu.addAction(f"About {brand}")
+        _seticon(about_action, _SP.SP_MessageBoxInformation)
         settings_action = menu.addAction("Settings…")
+        _seticon(settings_action, _SP.SP_FileDialogDetailedView)
         preferences_action = menu.addAction("Preferences…")
+        _seticon(preferences_action, _SP.SP_FileDialogDetailedView)
         menu.addSeparator()
 
         # ---- Close / exit actions — role-aware ----
@@ -4491,12 +4525,16 @@ class CellWindow(QMainWindow):
             close_ring_action = menu.addAction(
                 "Close ring (undock all members)"
             )
+            _seticon(close_ring_action, _SP.SP_DialogCloseButton)
             close_all_related_action = menu.addAction(
                 "Close all related (master + members)"
             )
+            _seticon(close_all_related_action, _SP.SP_DialogCloseButton)
         else:
             close_cell_action = menu.addAction("Close this cell")
+            _seticon(close_cell_action, _SP.SP_DialogCloseButton)
         exit_all_action = menu.addAction("Exit all")
+        _seticon(exit_all_action, _SP.SP_BrowserStop)
 
         chosen = menu.exec(pos)
 

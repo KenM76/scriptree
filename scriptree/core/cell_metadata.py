@@ -401,3 +401,51 @@ def make_pixmap_from_metadata(md: CellMetadata):  # noqa: ANN201
             return pix
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# QIcon helper (menus + tree view)  — v0.6.5
+# ---------------------------------------------------------------------------
+#
+# Menus / the tree view ask for a catalog's icon repeatedly (every
+# popup rebuild, every tree reload).  ``read_for`` does a full
+# load_tool / load_tree + JSON parse and the embedded-icon path
+# base64-decodes — too costly to redo per row.  Cache the resulting
+# QIcon keyed by (resolved path, mtime) so an edited catalog still
+# refreshes but an unchanged one is ~free.  A ``None`` result is
+# cached too (most tools have no custom icon — don't re-parse them
+# on every keystroke of the live menu search).
+
+_ICON_CACHE: dict[tuple[str, float], object] = {}
+_ICON_CACHE_MAX = 512
+
+
+def qicon_for_catalog(catalog_path: str | Path):  # noqa: ANN201
+    """Return a ``QIcon`` for the .scriptree/.scriptreetree at
+    ``catalog_path`` (its configured ``cell`` icon), or ``None`` when
+    the file is missing or carries no icon.
+
+    Cached by path+mtime.  Qt is imported lazily (this stays a
+    no-module-level-Qt core module per ``test_core_purity``)."""
+    p = Path(catalog_path)
+    try:
+        key = (str(p.resolve()), p.stat().st_mtime)
+    except OSError:
+        return None
+    if key in _ICON_CACHE:
+        return _ICON_CACHE[key]
+
+    icon = None
+    md = read_for(p)
+    if md.has_icon():
+        pix = make_pixmap_from_metadata(md)
+        if pix is not None and not pix.isNull():
+            from PySide6.QtGui import QIcon
+            icon = QIcon(pix)
+
+    # Crude bound: a launcher will never realistically exceed this;
+    # if it does, drop the whole cache rather than implement LRU.
+    if len(_ICON_CACHE) >= _ICON_CACHE_MAX:
+        _ICON_CACHE.clear()
+    _ICON_CACHE[key] = icon
+    return icon
