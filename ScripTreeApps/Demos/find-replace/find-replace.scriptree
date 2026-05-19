@@ -69,9 +69,13 @@
       "default": true
     }
   ],
-  "interactive": true,
   "source": {
     "mode": "manual",
     "help_text_cached": null
-  }
+  },
+  "cell": {
+    "icon_data": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgYXJpYS1oaWRkZW49InRydWUiPg0KICA8IS0tIEdlbmVyaWMgbWFnbmlmaWVyIHNoYXBlIOKAlCBnZW5lcmljLCBubyB0cmFkZW1hcmsgcmlzayAtLT4NCiAgPGNpcmNsZSBjeD0iMjEiIGN5PSIyMSIgcj0iMTMiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2Utd2lkdGg9IjIuNSIvPg0KICA8cGF0aCBkPSJNMzAgMzBsOSA5IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPg0KPC9zdmc+DQo=",
+    "icon_format": "svg"
+  },
+  "interactive": true
 }

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic database-cylinder shape — generic, no trademark risk -->
+  <path d="M12 13a12 5 0 1 0 24 0a12 5 0 1 0-24 0" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M12 13v22a12 5 0 0 0 24 0V13" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M12 24a12 5 0 0 0 24 0" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

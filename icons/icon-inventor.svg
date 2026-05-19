@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic 3D box shape — placeholder, not the Inventor trademark logo -->
+  <path d="M24 6L42 16v16L24 42 6 32V16L24 6z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M24 6v36M6 16l18 10 18-10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

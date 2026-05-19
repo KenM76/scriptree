@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic picture shape — generic, no trademark risk -->
+  <rect x="6" y="8" width="36" height="32" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="16" cy="18" r="3" stroke="currentColor" stroke-width="2.5"/>
+  <path d="M9 38l11-12 7 7 6-6 7 8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

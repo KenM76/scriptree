@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic document-with-fold shape — placeholder, not the Adobe PDF trademark logo -->
+  <path d="M14 4h14l8 8v32H14z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M28 4v8h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M19 28h10M19 35h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

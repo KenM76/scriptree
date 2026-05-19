@@ -104,18 +104,19 @@
   "sections": [
     {
       "name": "Identity",
-      "collapsed": false,
-      "layout": "collapse"
+      "collapsed": false
     },
     {
       "name": "Password Options",
-      "collapsed": true,
-      "layout": "collapse"
+      "collapsed": true
     },
     {
       "name": "Account Options",
-      "collapsed": true,
-      "layout": "collapse"
+      "collapsed": true
     }
-  ]
+  ],
+  "cell": {
+    "icon_data": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgYXJpYS1oaWRkZW49InRydWUiPg0KICA8IS0tIEdlbmVyaWMgc2xpZGVycy9zZXR0aW5ncyBzaGFwZSDigJQgZ2VuZXJpYywgbm8gdHJhZGVtYXJrIHJpc2sgLS0+DQogIDxwYXRoIGQ9Ik04IDE0aDMyTTggMjRoMzJNOCAzNGgzMiIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4NCiAgPGNpcmNsZSBjeD0iMTgiIGN5PSIxNCIgcj0iMy41IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyLjUiLz4NCiAgPGNpcmNsZSBjeD0iMzAiIGN5PSIyNCIgcj0iMy41IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyLjUiLz4NCiAgPGNpcmNsZSBjeD0iMTYiIGN5PSIzNCIgcj0iMy41IiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyLjUiLz4NCjwvc3ZnPg0K",
+    "icon_format": "svg"
+  }
 }

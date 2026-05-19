@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic slide/presentation shape — placeholder, not the Microsoft PowerPoint trademark logo -->
+  <rect x="6" y="8" width="36" height="26" rx="2" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M14 26l7-8 5 5 8-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M24 34v8M16 42h16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
