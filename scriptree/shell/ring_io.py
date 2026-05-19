@@ -207,6 +207,15 @@ def _hex_to_dict(hex_win: "CellWindow", include_member_fields: bool = False) -> 
     icon_path = getattr(hex_win, "_icon_path", None)
     if icon_path:
         d["icon_path"] = icon_path
+    # v0.6.7 — embedded icon (additive; emitted ONLY when set so
+    # legacy rings with no embedded icon stay byte-identical, per
+    # this module's byte-stability contract).
+    icon_data = getattr(hex_win, "_icon_data_b64", "")
+    if icon_data:
+        d["icon_data"] = icon_data
+        icon_fmt = getattr(hex_win, "_icon_data_format", "")
+        if icon_fmt:
+            d["icon_format"] = icon_fmt
     text_label = getattr(hex_win, "_text_label", None)
     if text_label:
         d["text_label"] = text_label
@@ -436,6 +445,16 @@ def load_ring(
         # derived letters from the catalog.
         if isinstance(master_raw.get("icon_path"), str) and master_raw["icon_path"]:
             master_win._icon_path = master_raw["icon_path"]
+        # v0.6.7 — embedded icon for the master/hub (additive; the
+        # paint code already prefers _icon_data_b64 over _icon_path).
+        # Lets a bare ring hub carry an icon that travels with the
+        # .scriptreering instead of a fragile path.
+        if (isinstance(master_raw.get("icon_data"), str)
+                and master_raw["icon_data"]):
+            master_win._icon_data_b64 = master_raw["icon_data"]
+            master_win._icon_data_format = str(
+                master_raw.get("icon_format", "") or ""
+            )
         if isinstance(master_raw.get("text_label"), str) and master_raw["text_label"]:
             master_win._text_label = master_raw["text_label"]
         # Icon scale + label opacity (v0.2.6+).  Clamp to legal range.
@@ -507,6 +526,12 @@ def load_ring(
         # semantics as the master/standalone branch above.
         if isinstance(m_raw.get("icon_path"), str) and m_raw["icon_path"]:
             member_win._icon_path = m_raw["icon_path"]
+        if (isinstance(m_raw.get("icon_data"), str)
+                and m_raw["icon_data"]):
+            member_win._icon_data_b64 = m_raw["icon_data"]
+            member_win._icon_data_format = str(
+                m_raw.get("icon_format", "") or ""
+            )
         if isinstance(m_raw.get("text_label"), str) and m_raw["text_label"]:
             member_win._text_label = m_raw["text_label"]
         # Icon scale + label opacity (v0.2.6+).
@@ -601,6 +626,28 @@ def load_ring(
     # transient dirty state; reset here so a fresh load doesn't
     # immediately prompt to save on close.
     master_win._ring_dirty = False
+
+    # v0.6.7 — a bare ring hub (no bound catalog, no explicit icon,
+    # no text label) used to render as derived letters.  Give it the
+    # bundled "container" glyph (a grouped-cells archetype) so the
+    # hub reads as an icon like everything else.  Only when truly
+    # bare — never override a catalog icon, an embedded/path icon,
+    # or a user text label.
+    try:
+        bare = (
+            not getattr(master_win, "_catalog_path", None)
+            and not getattr(master_win, "_icon_data_b64", "")
+            and not getattr(master_win, "_icon_path", None)
+            and not getattr(master_win, "_text_label", None)
+        )
+        if bare:
+            from scriptree.shell.icon_assets import bundled_icon_b64
+            b64 = bundled_icon_b64("container")
+            if b64:
+                master_win._icon_data_b64 = b64
+                master_win._icon_data_format = "svg"
+    except Exception as _hubexc:  # noqa: BLE001
+        _log(f"load_ring: hub default-icon failed: {_hubexc!r}")
 
     _log(
         f"load_ring: complete - master {master_win._id[:8]} "

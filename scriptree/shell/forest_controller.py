@@ -285,6 +285,26 @@ class ForestController(QObject):
         except Exception:  # noqa: BLE001
             self.forest_window._text_label = _derive_label(self.forest.name)
 
+        # v0.6.7 — give the bare forest hub an icon (was letters
+        # only).  Prefer the forest's own embedded icon; otherwise
+        # fall back to the bundled "folder" workspace glyph so a
+        # fresh / legacy forest still shows a real icon.  Paint code
+        # prefers _icon_data_b64 over the text label, so the glyph
+        # wins while the label survives as a fallback.
+        try:
+            ic_data = self.forest.icon_data
+            ic_fmt = self.forest.icon_format or "svg"
+            if not ic_data:
+                from scriptree.shell.icon_assets import bundled_icon_b64
+                ic_data = bundled_icon_b64("folder")
+                ic_fmt = "svg"
+            if ic_data:
+                self.forest_window._icon_data_b64 = ic_data
+                self.forest_window._icon_data_format = ic_fmt
+                self.forest_window.update()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"forest hub icon apply failed: {exc!r}")
+
         # The forest is a master, but we DO want it to participate in
         # the snap engine for hover/preview behaviour — same as a
         # ring master.  ``_wire_hex_to_snap`` is the canonical wire-

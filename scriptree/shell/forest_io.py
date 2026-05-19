@@ -231,6 +231,13 @@ class ForestDef:
     items: list[ForestItem] = field(default_factory=list)
     excluded: list[str] = field(default_factory=list)
     auto_discover: AutoDiscoverConfig = field(default_factory=AutoDiscoverConfig)
+    # v0.6.7 — optional icon for the forest *hub* cell (the bare
+    # master that owns the workspace).  Base64 SVG/PNG + format, same
+    # convention as a catalog's cell.icon_data.  Empty by default;
+    # serialised only when set so legacy .scriptreeforest files stay
+    # byte-identical.
+    icon_data: str = ""
+    icon_format: str = ""
     schema_version: int = _VERSION
     """Path of the .scriptreeforest the forest was loaded from.  Set
     by ``load_forest``; ``None`` for forests created in memory."""
@@ -369,6 +376,12 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
         "excluded": excluded_d,
         "auto_discover": auto_d,
     }
+    # v0.6.7 — emit the hub icon only when set so legacy files
+    # round-trip byte-identical.
+    if forest.icon_data:
+        blob["icon_data"] = forest.icon_data
+        if forest.icon_format:
+            blob["icon_format"] = forest.icon_format
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
     forest.loaded_from = str(path.resolve())
@@ -455,6 +468,8 @@ def load_forest(path: str | Path) -> ForestDef:
         items=items,
         excluded=excluded,
         auto_discover=auto,
+        icon_data=str(raw.get("icon_data", "") or ""),
+        icon_format=str(raw.get("icon_format", "") or ""),
         schema_version=ver,
         loaded_from=str(path.resolve()),
     )
