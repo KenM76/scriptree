@@ -4158,6 +4158,10 @@ class CellWindow(QMainWindow):
             _log(f"  could not wire new cell to snap engine: {exc!r}")
         new_cell.show()
         new_cell._fade_in()
+        try:
+            new_cell._settle_no_overlap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_settle_no_overlap (drop-join) raised {exc!r}")
         _rf.add(str(path.resolve()))
 
         # Wire ring membership.  Mirrors ``_try_spawn_master`` Case 2
@@ -4398,6 +4402,18 @@ class CellWindow(QMainWindow):
             and self._members
         ):
             self._reflow_members_after_master_move()
+
+        # v0.6.12 — drag-end settle: glide the just-released cell (or
+        # the whole master group) to a non-overlapping, fully-on-screen
+        # resting position.  No-op if already free.  This is the
+        # ultimate guarantor of the user's "never overlap, never
+        # off-screen" invariant — every other code path relies on
+        # this safety net at rest.
+        if event.button() == Qt.LeftButton and was_dragging:
+            try:
+                self._settle_no_overlap()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_settle_no_overlap (drag-end) raised {exc!r}")
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -5295,6 +5311,10 @@ class CellWindow(QMainWindow):
 
         new_cell.show()
         new_cell._fade_in()
+        try:
+            new_cell._settle_no_overlap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_settle_no_overlap (sibling) raised {exc!r}")
         _rf.add(catalog_path)
         _log(
             f"Spawned sibling cell {new_cell._id[:8]} bound to "
@@ -5584,6 +5604,10 @@ class CellWindow(QMainWindow):
             new_hex._fade_in()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            new_hex._settle_no_overlap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_settle_no_overlap (_spawn_another) raised {exc!r}")
         _log(
             f"Spawned new hex {new_hex._id} at ({new_x},{new_y}) "
             f"catalog={self._catalog_path!r}"
@@ -5906,6 +5930,64 @@ class CellWindow(QMainWindow):
     # Edge-fold: auto-hide positioned members that go off-screen
     # ------------------------------------------------------------------
 
+    def _resolve_member_stacking(self) -> None:
+        """v0.6.12 — surgical-repack any of *this master's* members
+        whose centres land on (or very near) a peer's centre.
+
+        Mirror of ``ForestController._resolve_member_overlap`` but
+        on the CellWindow so plain ring-masters benefit too (load_ring
+        calls it after spawning members, the forest controller now
+        delegates to it).  Centre-distance test (< size_px / 2)
+        avoids flagging legitimate honeycomb-adjacent peers — only
+        catches the "stacked on the same pixel" case from stale
+        saved positions.
+        """
+        if self.role != "master" or not self._members:
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        centres: list[tuple[str, int, int, int]] = []  # id, cx, cy, sz
+        for mid in self._members.keys():
+            m = registry.get(mid)
+            if m is None:
+                continue
+            sz = m._size_px
+            centres.append((
+                mid,
+                m.pos().x() + sz // 2,
+                m.pos().y() + sz // 2,
+                sz,
+            ))
+        if len(centres) < 2:
+            return
+
+        colliders: set[str] = set()
+        for i, (id_a, cx_a, cy_a, sz_a) in enumerate(centres):
+            for id_b, cx_b, cy_b, sz_b in centres[i + 1:]:
+                threshold = min(sz_a, sz_b) * 0.5
+                if (
+                    abs(cx_a - cx_b) < threshold
+                    and abs(cy_a - cy_b) < threshold
+                ):
+                    colliders.add(id_a)
+                    colliders.add(id_b)
+        if not colliders:
+            return
+
+        non_colliding = {
+            mid for mid in self._members.keys() if mid not in colliders
+        }
+        _log(
+            f"_resolve_member_stacking ({self._id[:8]}): "
+            f"{len(colliders)} of {len(self._members)} member(s) stack; "
+            f"surgical repack"
+        )
+        try:
+            self._repack_members(fixed=non_colliding)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_resolve_member_stacking: repack failed: {exc!r}")
+
     def _live_edge_reflow_or_fold(self) -> None:
         """v0.6.11 — during a group drag, *relocate* off-screen members
         to free on-screen honeycomb slots so they stay bonded to the
@@ -6164,6 +6246,160 @@ class CellWindow(QMainWindow):
             )
 
         return QPoint(clamped_x, clamped_y)
+
+    # ------------------------------------------------------------------
+    # v0.6.12 — universal "never overlap, never off-screen" invariant.
+    #
+    # Per user spec: "cells/rings/forest should never overlap except
+    # (obviously) when collapsed."  Called from every settle point
+    # (drag-end, spawn, ring load, forest load) so a freshly placed
+    # subject can never come to rest stacked on another or hanging
+    # off the screen.  Live drag-frames keep using ``_clamp_to_screen``
+    # for the active cell and the live edge reflow for masters;
+    # this helper handles the resting state.
+    # ------------------------------------------------------------------
+
+    def _settle_no_overlap(self) -> None:
+        """Slide self (and, for masters, every positioned member) by
+        the smallest translation that puts every subject rect
+        fully on-screen AND not intersecting any other visible cell.
+
+        No-op when:
+          * the cell isn't visible yet;
+          * a collapse/expand animation is in flight (overlap during
+            collapse is allowed by spec);
+          * the resting state is already overlap-free + on-screen.
+
+        Spiral-searches 16 angles per ring outward in
+        ``size_px // 3``-px rings up to a generous cap.  If no
+        non-overlapping slot is found, leaves position unchanged and
+        logs so the failure surfaces in diagnostics.
+        """
+        if not self.isVisible():
+            return
+        if getattr(self, "_collapse_state", "expanded") in (
+            "collapsing", "expanding",
+        ):
+            return
+
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell.cell_registry import CellRegistry
+
+        registry = CellRegistry.instance()
+        app_inst = QGuiApplication.instance()
+        if app_inst is None:
+            return
+
+        # Build the subject set: just self, or master + every
+        # positioned (and visible, not auto-hidden) member.
+        subjects: list[tuple["CellWindow", QRect]] = []
+        if self.role == "master":
+            subjects.append((
+                self,
+                QRect(self.pos().x(), self.pos().y(),
+                      self._size_px, self._size_px),
+            ))
+            for mid in list(self._positioned):
+                if mid in self._auto_hidden:
+                    continue
+                m = registry.get(mid)
+                if m is None or not m.isVisible():
+                    continue
+                subjects.append((
+                    m,
+                    QRect(m.pos().x(), m.pos().y(),
+                          m._size_px, m._size_px),
+                ))
+        else:
+            subjects.append((
+                self,
+                QRect(self.pos().x(), self.pos().y(),
+                      self._size_px, self._size_px),
+            ))
+
+        if not subjects:
+            return
+
+        subject_ids = {c._id for c, _ in subjects}
+
+        # Obstacles: every other visible cell, with auto-hidden ones
+        # filtered out (they're not visually present anyway).
+        obstacles: list[QRect] = []
+        for h in registry.all():
+            if h._id in subject_ids:
+                continue
+            if not h.isVisible():
+                continue
+            # If this cell is auto-hidden by some master, skip.
+            mid = getattr(h, "_group_master_id", None)
+            if mid is not None:
+                m = registry.get(mid)
+                if m is not None and h._id in m._auto_hidden:
+                    continue
+            sz = h._size_px
+            obstacles.append(
+                QRect(h.pos().x(), h.pos().y(), sz, sz),
+            )
+
+        # Determine the containing screen via the subject's centre.
+        pivot = subjects[0][1].center()
+        screen = app_inst.screenAt(pivot)
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+
+        def _ok(dx: int, dy: int) -> bool:
+            for _c, r in subjects:
+                moved = r.translated(dx, dy)
+                # Must fit fully inside the available rect.
+                if (
+                    moved.left() < avail.left()
+                    or moved.top() < avail.top()
+                    or moved.right() > avail.right()
+                    or moved.bottom() > avail.bottom()
+                ):
+                    return False
+                # Must not intersect any cell outside the subject.
+                for o in obstacles:
+                    if moved.intersects(o):
+                        return False
+            return True
+
+        if _ok(0, 0):
+            return  # already settled
+
+        import math
+        step = max(8, self._size_px // 3)
+        best: tuple[int, int] | None = None
+        for ring in range(1, 41):  # up to ~ 40 * step px
+            radius = ring * step
+            for ang_i in range(16):
+                ang = (ang_i / 16.0) * 2.0 * math.pi
+                dx = int(round(radius * math.cos(ang)))
+                dy = int(round(radius * math.sin(ang)))
+                if _ok(dx, dy):
+                    best = (dx, dy)
+                    break
+            if best is not None:
+                break
+
+        if best is None:
+            _log(
+                f"_settle_no_overlap: no free slot found for "
+                f"{self._id[:8]} (subjects={len(subjects)}, "
+                f"obstacles={len(obstacles)})"
+            )
+            return
+
+        dx, dy = best
+        for c, r in subjects:
+            c._smooth_move(r.left() + dx, r.top() + dy)
+        _log(
+            f"_settle_no_overlap: {self._id[:8]} shifted by "
+            f"({dx},{dy}) to clear {len(obstacles)} obstacle(s)"
+        )
 
     # ------------------------------------------------------------------
     # Harness-driveable public hooks (ADR-001 Â§harness-driveable contract)
@@ -7212,6 +7448,12 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     # honeycomb slots around the master so a non-canonical drag-release
     # (e.g. dropped slightly off-slot) snaps to a clean ring layout.
     master._repack_members()
+    # v0.6.12 — fresh master + ring must not overlap any cell that
+    # already lived on screen before the dock fired.
+    try:
+        master._settle_no_overlap()
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_settle_no_overlap (try_spawn_master) raised {exc!r}")
     # Fresh master = brand-new ring with content but no on-disk file
     # → dirty (so close prompts to save).
     master._ring_dirty = True

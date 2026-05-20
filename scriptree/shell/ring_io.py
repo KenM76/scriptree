@@ -480,6 +480,10 @@ def load_ring(
             master_win._fade_in()
         except Exception:  # noqa: BLE001
             pass  # cosmetic only — never block a ring load
+        try:
+            master_win._settle_no_overlap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"load_ring: _settle_no_overlap raised {exc!r}")
         _log(
             f"load_ring: standalone hex {master_win._id[:8]} spawned at "
             f"({mf['pos_x']}, {mf['pos_y']}) catalog={resolved_catalog!r}"
@@ -672,6 +676,16 @@ def load_ring(
                 master_win._icon_data_format = BUNDLED_FORMAT
     except Exception as _hubexc:  # noqa: BLE001
         _log(f"load_ring: hub default-icon failed: {_hubexc!r}")
+
+    # v0.6.12 — universal no-overlap settle: after the ring is fully
+    # in place (master + members + repack), nudge the whole group so
+    # it doesn't intersect any other ring/cell/forest already on
+    # screen.  ``_repack_members`` above handled WITHIN-ring layout;
+    # this handles cross-group.
+    try:
+        master_win._settle_no_overlap()
+    except Exception as exc:  # noqa: BLE001
+        _log(f"load_ring: _settle_no_overlap raised {exc!r}")
 
     _log(
         f"load_ring: complete - master {master_win._id[:8]} "

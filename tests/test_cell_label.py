@@ -655,3 +655,188 @@ class TestRingScaleOpacityRoundTrip:
         assert "icon_scale" not in d
         assert "label_opacity" not in d
         c.close()
+
+
+# ---------------------------------------------------------------------------
+# v0.6.12 — _settle_no_overlap: cells/rings/forest never overlap or
+# go off-screen at rest
+# ---------------------------------------------------------------------------
+
+class TestSettleNoOverlap:
+    def _spawn(self):
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        c = CellWindow(load_branding())
+        c.show()
+        return c
+
+    def _close_all(self) -> None:
+        from scriptree.shell.cell_registry import CellRegistry
+        for h in list(CellRegistry.instance().all()):
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def test_settle_is_noop_when_already_free(self) -> None:
+        a = self._spawn()
+        a.move(200, 200)
+        # No other cells on screen → no obstacles → no-op.
+        a._settle_no_overlap()
+        assert getattr(a, "_pos_anim", None) is None
+        assert a.pos().x() == 200 and a.pos().y() == 200
+        self._close_all()
+
+    def test_settle_moves_overlapping_cell(self) -> None:
+        """Two visible standalone cells stacked on the same pixel:
+        settle on one of them slides it to a clear spot."""
+        from PySide6.QtCore import QEventLoop, QTimer
+        a = self._spawn()
+        b = self._spawn()
+        a.move(400, 400)
+        b.move(400, 400)  # exact stack
+        # Settle b — it should move; a should stay put.
+        b._settle_no_overlap()
+        # The settle uses _smooth_move; pump the loop to let it land.
+        loop = QEventLoop()
+        QTimer.singleShot(350, loop.quit)
+        loop.exec()
+        # a still at (400, 400)
+        assert a.pos().x() == 400 and a.pos().y() == 400
+        # b has moved
+        assert b.pos() != a.pos()
+        # And b is no longer stacked centre-on-centre with a.
+        sz = b._size_px
+        threshold = sz * 0.5
+        ca = (a.pos().x() + sz // 2, a.pos().y() + sz // 2)
+        cb = (b.pos().x() + sz // 2, b.pos().y() + sz // 2)
+        assert (
+            abs(ca[0] - cb[0]) >= threshold
+            or abs(ca[1] - cb[1]) >= threshold
+        )
+        self._close_all()
+
+    def test_settle_skips_hidden(self) -> None:
+        """A hidden cell shouldn't be moved even when overlapping."""
+        a = self._spawn()
+        b = self._spawn()
+        a.move(500, 500)
+        b.move(500, 500)
+        b.hide()
+        b._settle_no_overlap()
+        # Stayed put — settle is a no-op on hidden cells.
+        assert b.pos().x() == 500 and b.pos().y() == 500
+        self._close_all()
+
+    def test_settle_skips_during_collapse(self) -> None:
+        """During collapse/expand animations, overlap is allowed
+        (members shrink toward the master)."""
+        a = self._spawn()
+        b = self._spawn()
+        a.move(300, 300)
+        b.move(300, 300)
+        b._collapse_state = "collapsing"
+        b._settle_no_overlap()
+        # Did not run during the animation phase.
+        assert b.pos().x() == 300 and b.pos().y() == 300
+        b._collapse_state = "expanded"
+        self._close_all()
+
+    def test_settle_avoids_off_screen(self) -> None:
+        """The settle never lands the cell beyond availableGeometry."""
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtGui import QGuiApplication
+        a = self._spawn()
+        b = self._spawn()
+        # Stack at the top-left of the available area so any
+        # leftward/upward settle would push b off-screen.
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        if avail is not None:
+            x = avail.left() + 4
+            y = avail.top() + 4
+        else:
+            x, y = 4, 4
+        a.move(x, y)
+        b.move(x, y)
+        b._settle_no_overlap()
+        loop = QEventLoop()
+        QTimer.singleShot(350, loop.quit)
+        loop.exec()
+        if avail is not None:
+            assert b.pos().x() >= avail.left()
+            assert b.pos().y() >= avail.top()
+            assert b.pos().x() + b._size_px <= avail.right()
+            assert b.pos().y() + b._size_px <= avail.bottom()
+        self._close_all()
+
+
+class TestResolveMemberStacking:
+    def test_stacking_repacks_offenders(self) -> None:
+        """``_resolve_member_stacking`` on a master with two centre-
+        stacked members surgical-repacks the offenders.  Mirror of
+        the forest test but on a plain ring-master."""
+        from PySide6.QtCore import QEventLoop, QPoint, QTimer
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        a = CellWindow(load_branding())
+        b = CellWindow(load_branding())
+        master.show(); a.show(); b.show()
+        master.move(500, 500)
+        a.move(500, 500); b.move(500, 500)
+        master._members[a._id] = QPoint(500, 500)
+        master._members[b._id] = QPoint(500, 500)
+        master._positioned.add(a._id); master._positioned.add(b._id)
+        a._group_master_id = master._id; b._group_master_id = master._id
+
+        master._resolve_member_stacking()
+        loop = QEventLoop()
+        QTimer.singleShot(400, loop.quit)
+        loop.exec()
+
+        sz = a._size_px
+        threshold = sz * 0.5
+        ca = (a.pos().x() + sz // 2, a.pos().y() + sz // 2)
+        cb = (b.pos().x() + sz // 2, b.pos().y() + sz // 2)
+        assert (
+            abs(ca[0] - cb[0]) >= threshold
+            or abs(ca[1] - cb[1]) >= threshold
+        ), f"members still stacked: a={ca}, b={cb}"
+        master.close(); a.close(); b.close()
+
+
+class TestBreakFreeKeepsForestLink:
+    """The user spec 'cells dragged away from the forest stay
+    linked' is satisfied by ``_break_free_from_cluster`` preserving
+    ``_group_master_id``.  Lock that contract."""
+
+    def test_break_free_preserves_group_master_id(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        cell = CellWindow(load_branding())
+        master.show(); cell.show()
+        master.move(400, 400)
+        cell.move(456, 400)
+        master._members[cell._id] = QPoint(456, 400)
+        master._positioned.add(cell._id)
+        master._dock_partners.add(cell._id)
+        cell._group_master_id = master._id
+        cell._docked_to.add(master._id)
+
+        # Break-free drag (the path mouseMoveEvent takes when
+        # _drag_started crosses the threshold on a docked cell).
+        cell._break_free_from_cluster()
+
+        # Group link preserved, but the positional cluster broken.
+        assert cell._group_master_id == master._id
+        assert master._id not in cell._docked_to
+        assert cell._id not in master._positioned
+        # And the cell still appears in master._members (logical
+        # member, just not currently in the contiguous cluster).
+        assert cell._id in master._members
+        master.close(); cell.close()

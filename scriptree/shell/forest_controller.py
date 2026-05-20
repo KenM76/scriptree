@@ -384,6 +384,13 @@ class ForestController(QObject):
             self.forest_window._fade_in()
         except Exception:  # noqa: BLE001
             pass
+        # v0.6.12 — settle: the hub may overlap a standalone cell that
+        # was loaded from QSettings before us; slide whichever side
+        # is movable until clear.
+        try:
+            self.forest_window._settle_no_overlap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_settle_no_overlap (forest hub) raised {exc!r}")
 
         # Install the menu hook now that the cell exists.
         self._install_menu_hook(self.forest_window)
@@ -514,63 +521,20 @@ class ForestController(QObject):
 
     def _resolve_member_overlap(self) -> None:
         """v0.6.11 — repack any forest members whose centres land on
-        (or very near) another member's centre (typically: stale
-        stored positions after the forest moved between saves).
+        (or very near) another member's centre.
 
-        Strategy: build the set of members that "stack" with at
-        least one peer (centre distance < half the hex size — well
-        below the honeycomb neighbour distance of ``size_px``, so
-        legitimately-adjacent cells aren't flagged), then call
-        ``_repack_members(fixed=non_colliding)``.  Non-overlapping
-        cells keep their saved positions verbatim; only the
-        offenders are re-slotted onto free honeycomb positions
-        around the forest hub.
+        v0.6.12 — now a thin delegate to
+        ``CellWindow._resolve_member_stacking`` so plain rings get
+        the same fix at ``load_ring`` time without duplicating the
+        centre-stacking logic.
         """
         forest = self.forest_window
-        if forest is None or not forest._members:
+        if forest is None:
             return
-        from scriptree.shell.cell_registry import CellRegistry
-        registry = CellRegistry.instance()
-
-        centres: list[tuple[str, int, int, int]] = []  # id, cx, cy, sz
-        for mid in forest._members.keys():
-            m = registry.get(mid)
-            if m is None:
-                continue
-            sz = m._size_px
-            cx = m.pos().x() + sz // 2
-            cy = m.pos().y() + sz // 2
-            centres.append((mid, cx, cy, sz))
-        if len(centres) < 2:
-            return
-
-        colliders: set[str] = set()
-        for i, (id_a, cx_a, cy_a, sz_a) in enumerate(centres):
-            for id_b, cx_b, cy_b, sz_b in centres[i + 1:]:
-                # Half the smaller hex size: well under the
-                # honeycomb neighbour spacing (~size_px) so we only
-                # catch genuine stacking, not normal adjacency.
-                threshold = min(sz_a, sz_b) * 0.5
-                if (
-                    abs(cx_a - cx_b) < threshold
-                    and abs(cy_a - cy_b) < threshold
-                ):
-                    colliders.add(id_a)
-                    colliders.add(id_b)
-        if not colliders:
-            return
-
-        non_colliding = {
-            mid for mid in forest._members.keys() if mid not in colliders
-        }
-        _log(
-            f"_resolve_member_overlap: {len(colliders)} of "
-            f"{len(forest._members)} member(s) overlap; surgical repack"
-        )
         try:
-            forest._repack_members(fixed=non_colliding)
+            forest._resolve_member_stacking()
         except Exception as exc:  # noqa: BLE001
-            _log(f"_resolve_member_overlap: repack failed: {exc!r}")
+            _log(f"_resolve_member_overlap: delegate raised {exc!r}")
 
     def _attach_existing_master_as_member(self, ring_master: Any) -> None:
         """Make ``ring_master`` a member of the forest's group.
