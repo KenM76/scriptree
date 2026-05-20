@@ -195,9 +195,35 @@ existing tests and user files.
 5. **Schema version bumps are additive.** Add new fields, don't rename
    or remove existing ones. Old files keep loading forever.
 
+## Authoring rules that apply to every format file
+
+These apply to **`.scriptree`, `.scriptreetree`, and `.scriptreering`
+files alike** — read this before generating any catalog of any
+format.
+
+- **Set `schema_version` from the source-of-truth constant, not
+  from a doc.**  The current value lives at
+  `SCHEMA_VERSION` in `scriptree/core/model.py` for `.scriptree`
+  and `.scriptreetree`, and at `_VERSION` in
+  `scriptree/shell/ring_io.py` for `.scriptreering`.  **Do NOT
+  trust the number embedded in any format doc's title, JSON
+  sketch, prose, or "Example" block** — those drift at every
+  schema bump and have shipped stale at least once (an LLM
+  session wrote `schema_version: 2` for a tree after v3 was
+  released; the loader hard-rejected the file).  Always grep the
+  constant before writing the field.  The configurations sidecar
+  (`<name>.scriptree.configs.json`) has its own separate constant
+  (`CONFIGS_SCHEMA_VERSION` in `scriptree/core/configs.py`); it
+  rolls independently.
+- **Validate by round-trip through the real loader.**  Build the
+  dict, call `tool_from_dict` / `tree_from_dict` /
+  `load_ring` / `load_forest`, then re-serialise; if anything
+  drifts, the file won't load on a user's machine either.  Pure
+  JSON validity is not enough — the schema-version gate, type
+  coercions, and enum guards only fire inside the loader.
+
 ## When generating `.scriptree` files from scratch
 
-- Always set `schema_version` to the current value (check `core/io.py`).
 - Keep `argument_template` minimal — literals for subcommands,
   `{id}` / `{id?--flag}` / `{id?--flag=}` for param substitution.
 - Omit empty `env`, `path_prepend`, and `sections` unless you have a
@@ -211,8 +237,19 @@ existing tests and user files.
 
 ## Pre-save checklist
 
-Before saving any generated `.scriptree`, verify each of these:
+Before saving any generated `.scriptree` or `.scriptreetree`,
+verify each of these:
 
+0. **`schema_version` was read from
+   `SCHEMA_VERSION` in `scriptree/core/model.py`**, not copied
+   from any doc.  Files whose `schema_version` is below the
+   build's value may or may not load with in-memory upgrade
+   (depends on the version comments in `model.py`); files
+   *above* the build's value are hard-rejected (forward-compat
+   tripwire).  When in doubt, grep the constant.  Run a final
+   `tool_from_dict` / `tree_from_dict` round-trip and confirm
+   it returned successfully — that's the only check that
+   actually exercises the schema gate.
 1. **Required fields default to a working value** — or are explicitly
    user-supplied (input/output paths). Required + `default: ""` +
    no validation = a tool that crashes on Run.

@@ -1,13 +1,26 @@
-# `.scriptreetree` file format (schema v2)
+# `.scriptreetree` file format
 
 A tree-of-tools launcher. Leaves reference `.scriptree` files; interior
 nodes are named folders.
+
+> **Schema version — single source of truth**
+>
+> The current `schema_version` value is the `SCHEMA_VERSION`
+> constant in `scriptree/core/model.py` (shared with the
+> `.scriptree` leaf format).  **Read it from the constant.  Do
+> not copy the number out of this doc's title, JSON sketch
+> below, or any example** — those have shipped stale at least
+> once when the schema rolled (an LLM session wrote v2 after v3
+> was released; the loader hard-rejected the file).  Files with
+> `schema_version` *above* the current build are hard-rejected;
+> files *below* may load with in-memory upgrade (see the
+> `model.py` comment block).
 
 ## Shape
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": "<int — current SCHEMA_VERSION from scriptree/core/model.py; do NOT copy this string literally>",
   "name": "string, required",
   "description": "string, optional",
   "nodes": [/* list[Node] */],
@@ -223,9 +236,15 @@ Edit these via the **Configs...** button in the tree view toolbar.
 
 ## Example
 
+The `schema_version` value below is rendered with the current
+`SCHEMA_VERSION` constant at the time of writing.  When you copy
+this example, **use the current value from
+`scriptree/core/model.py:SCHEMA_VERSION`**, not the literal here —
+see the note at the top of this doc.
+
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "name": "Demo toolkit",
   "nodes": [
     {

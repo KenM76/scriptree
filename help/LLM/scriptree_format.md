@@ -1,13 +1,28 @@
-# `.scriptree` file format (schema v2)
+# `.scriptree` file format
 
 Canonical reference. If this document and `scriptree/core/io.py`
 disagree, the code wins — open an issue and fix the docs.
+
+> **Schema version — single source of truth**
+>
+> The current `schema_version` value is the
+> `SCHEMA_VERSION` constant in `scriptree/core/model.py`.  **Read
+> it from the constant.  Do not copy the number out of this doc's
+> title, JSON sketch below, or any example** — those have shipped
+> stale at least once when the schema rolled (LLM session wrote
+> v2 after v3 was released; loader hard-rejected it).  The same
+> constant is shared by `.scriptree` and `.scriptreetree` files
+> (both `ToolDef` and `TreeDef` default to `SCHEMA_VERSION` at
+> construction).  The loader hard-rejects files whose
+> `schema_version` is **above** the current value (forward-
+> compat tripwire); files **below** it load with in-memory
+> upgrade unless the comments in `core/model.py` say otherwise.
 
 ## Top-level shape
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": "<int — current SCHEMA_VERSION from scriptree/core/model.py; do NOT copy this string literally>",
   "name": "string, required",
   "description": "string, optional, default \"\"",
   "executable": "string, required — absolute, relative-to-.scriptree, or bare PATH name",
@@ -29,9 +44,13 @@ disagree, the code wins — open an issue and fix the docs.
 
 ### Field-level rules
 
-- `schema_version` — int. Current: `2`. v1 files (no `sections`, no
-  `env`, no `path_prepend`) load cleanly; the loader upgrades them in
-  memory.
+- `schema_version` — int. **Read the current value from
+  `SCHEMA_VERSION` in `scriptree/core/model.py`** — do not embed
+  the number in generated files based on this doc.  Older
+  schemas (no `sections`, no `env`, no `path_prepend`) load
+  cleanly when the loader is permissive (see the `model.py`
+  comment block at the top of the file for which versions are
+  accepted on read).
 - `name` — user-visible. May contain spaces. Used as the window title.
 - `executable` — must exist on disk at load time? No. ScripTree
   tolerates missing executables; the user sees an error at Run time.
