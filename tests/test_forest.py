@@ -1424,12 +1424,16 @@ class TestUnsavedForestDefaultSpot:
         assert loose_color.alpha() < docked_color.alpha()
         master.close(); c.close()
 
-    def test_collapse_propagates_recursively_to_ring_members(
+    def test_collapse_stays_open_unless_opted_in(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        """v0.6.16 — collapsing the forest hub recursively collapses
-        every ring-member it owns, including the ring's own cells.
-        Walk the link tree down to all descendants."""
+        """v0.6.17 — opt-in collapse model: collapsing the forest
+        does NOT tuck ring members by default; the ring stays
+        open (state == "expanded").  Only cells that explicitly
+        set ``_collapse_with_master = True`` tuck with their
+        master.  The master itself still flips to ``"collapsed"``
+        for the visual stroke-dim indicator.
+        """
         from PySide6.QtCore import QPoint
         from scriptree.shell import forest_controller as fc_mod
         from scriptree.shell import forest_io as io_mod
@@ -1453,33 +1457,30 @@ class TestUnsavedForestDefaultSpot:
         ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
         forest = ctrl.forest_window
 
-        # A ring that's a forest member, with its own cells.
+        # A ring that's a forest member.
         ring = CellWindow(load_branding(), role="master")
-        cell_x = CellWindow(load_branding())
-        cell_y = CellWindow(load_branding())
-        ring.show(); cell_x.show(); cell_y.show()
-        ring.move(500, 500)
-        cell_x.move(556, 500); cell_y.move(556, 556)
-        ring._members[cell_x._id] = QPoint(556, 500)
-        ring._members[cell_y._id] = QPoint(556, 556)
-        ring._positioned.add(cell_x._id)
-        ring._positioned.add(cell_y._id)
-        cell_x._group_master_id = ring._id
-        cell_y._group_master_id = ring._id
+        ring.show(); ring.move(500, 500)
         forest._members[ring._id] = QPoint(500, 500)
         forest._positioned.add(ring._id)
         ring._group_master_id = forest._id
+        # The ring did NOT opt in to collapse-with-master.
+        assert ring._collapse_with_master is False
 
-        # All expanded at the start.
-        assert forest._collapse_state == "expanded"
-        assert ring._collapse_state == "expanded"
         # Collapse the forest.
         forest._start_collapse()
-        # Forest is collapsing, AND the ring should also be in a
-        # collapsing/collapsed state (recursion fired).
+        # Forest flipped to collapsed (visual-only — no opted-in
+        # members to tuck), and the ring stays expanded.
+        assert forest._collapse_state == "collapsed"
+        assert ring._collapse_state == "expanded"
+
+        # Now opt the ring in and try again.
+        forest._collapse_state = "expanded"
+        ring._collapse_with_master = True
+        forest._start_collapse()
+        # The ring is one of the opted-in members → animation
+        # phase starts.
         assert forest._collapse_state == "collapsing"
-        assert ring._collapse_state in ("collapsing", "collapsed")
-        ring.close(); cell_x.close(); cell_y.close()
+        ring.close()
 
     def test_ring_drag_end_near_forest_member_joins_forest(
         self, tmp_path: Path, monkeypatch: Any,

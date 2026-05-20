@@ -2698,6 +2698,11 @@ class CellWindow(QMainWindow):
         self._home_positions: dict[str, QPoint] = self._members
         # Running animations keyed by hex_id — kept alive to avoid GC.
         self._collapse_animations: dict[str, QPropertyAnimation] = {}
+        # v0.6.17 — opt-in: tuck this cell into its link-master when
+        # the master collapses.  Default False (cells stay open).
+        # ``_load_settings`` overrides for cells with persisted state;
+        # this default is what masters and freshly-spawned cells use.
+        self._collapse_with_master: bool = False
 
         # ----------------------------------------------------------------
         # Settings dialog (lazy — created on first open, then reused)
@@ -2902,6 +2907,14 @@ class CellWindow(QMainWindow):
         self._label_text_over_icon = _coerce_bool(
             s.value(self._settings_key("text_over_icon"), False)
         )
+        # v0.6.17 — opt-in to tuck into the link-master when that
+        # master collapses.  Default False per user spec: "If I
+        # collapse a ring the cells that were on it should remain
+        # open unless opted to close."  Only the cells that have
+        # explicitly opted in via the right-click menu tuck.
+        self._collapse_with_master = _coerce_bool(
+            s.value(self._settings_key("collapse_with_master"), False)
+        )
 
     def _save_settings(self) -> None:
         """Persist current per-hex settings to QSettings immediately."""
@@ -2919,6 +2932,10 @@ class CellWindow(QMainWindow):
         s.setValue(
             self._settings_key("text_over_icon"),
             bool(getattr(self, "_label_text_over_icon", False)),
+        )
+        s.setValue(
+            self._settings_key("collapse_with_master"),
+            bool(getattr(self, "_collapse_with_master", False)),
         )
         s.sync()
 
@@ -3676,10 +3693,23 @@ class CellWindow(QMainWindow):
             # Bright leaf-green so the forest reads as the workspace
             # root.  Same RGB as the previous standalone ForestWindow
             # used, kept for visual continuity.
-            return QColor(108, 196, 138, 255)
+            c = QColor(108, 196, 138, 255)
+            # v0.6.17 — when collapsed, the forest also dims so the
+            # user sees the state change even though members didn't
+            # tuck (the new opt-in-only collapse model).
+            if self._collapse_state == "collapsed":
+                c.setAlpha(round(c.alpha() * 0.55))
+            return c
 
         if self.role == "master":
-            return self._accent_color
+            # v0.6.17 — dim the accent stroke when collapsed so the
+            # state change reads visually even with the new "cells
+            # stay open" default (otherwise the master looks
+            # unchanged after a collapse click).
+            c = QColor(self._accent_color)
+            if self._collapse_state == "collapsed":
+                c.setAlpha(round(c.alpha() * 0.55))
+            return c
 
         if self._group_master_id is None:
             # Unassociated standalone — green outline.
@@ -4990,6 +5020,22 @@ class CellWindow(QMainWindow):
                     leave_group_action = cell_menu.addAction("Leave group")
                 _seticon_bundled(leave_group_action, "scissors")
 
+        # v0.6.17 — collapse-with-master opt-in.  Cells default to
+        # "stay open" when their link-master collapses; this
+        # checkable action lets the user opt this cell in to
+        # tucking-with-the-master.  Only shown for cells that
+        # actually have a link master (so the toggle is meaningful).
+        collapse_with_action = None
+        if self._group_master_id is not None and self.role != "master":
+            collapse_with_action = cell_menu.addAction(
+                "Tuck with my master when it collapses"
+            )
+            collapse_with_action.setCheckable(True)
+            collapse_with_action.setChecked(
+                bool(getattr(self, "_collapse_with_master", False))
+            )
+            _seticon_bundled(collapse_with_action, "lock")
+
         menu.addMenu(cell_menu)
 
         menu.addSeparator()
@@ -5072,6 +5118,26 @@ class CellWindow(QMainWindow):
             self._leave_forest_keep_ring()
         elif leave_group_action is not None and chosen == leave_group_action:
             self._explicit_leave_group()
+        elif (
+            collapse_with_action is not None
+            and chosen == collapse_with_action
+        ):
+            # v0.6.17 — toggle the per-cell opt-in.  Persist
+            # immediately so the choice survives a restart.
+            self._collapse_with_master = bool(
+                collapse_with_action.isChecked()
+            )
+            try:
+                self._save_settings()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"_collapse_with_master toggle: "
+                    f"_save_settings raised {exc!r}"
+                )
+            _log(
+                f"{self._id[:8]}: _collapse_with_master = "
+                f"{self._collapse_with_master}"
+            )
         elif chosen == about_action:
             # None parent: inherits OS chrome, not the hex's translucent palette.
             try:
@@ -7257,21 +7323,42 @@ class CellWindow(QMainWindow):
             self._start_expand()
 
     def _start_collapse(self) -> None:
-        """Animate ALL group members toward master centre (Amendment 2).
+        """v0.6.17 — animate ONLY *opted-in* link-children toward
+        the master centre.  Cells with ``_collapse_with_master ==
+        False`` (the default) stay where they are.
 
-        Iterates self._members regardless of positioned/separated status.
-        Members animate from their current visible position to master.pos().
+        Per user spec: "If I collapse a ring the cells that were on
+        it should remain open unless opted to close."  The previous
+        cascade-by-default behaviour (v0.6.16 recursive +
+        pre-v0.6.16 always-tuck) is replaced by per-cell opt-in.
+
+        The master's ``_collapse_state`` still toggles so the user
+        gets a paint-level signal of the state change
+        (``_compute_stroke_color`` dims the master's stroke when
+        collapsed; see paintEvent).
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
 
-        # Build list of live member windows.
+        # v0.6.17 — only opted-in members tuck.  Members that didn't
+        # opt in stay open; the master just transitions visually.
         members = [
             registry.get(mid) for mid in self._members
             if registry.get(mid) is not None
+            and getattr(
+                registry.get(mid), "_collapse_with_master", False,
+            )
         ]
         if not members:
-            _log(f"_start_collapse {self._id}: no member windows found")
+            # No opted-in members — flip the visual state on the
+            # master itself and call it done.  Stroke dimming gives
+            # the user feedback that the toggle was acknowledged.
+            self._collapse_state = "collapsed"
+            self.update()
+            _log(
+                f"_start_collapse {self._id}: no opted-in members; "
+                f"master state → collapsed (visual only)"
+            )
             return
 
         self._collapse_state = "collapsing"
@@ -7297,25 +7384,12 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
-            # v0.6.16 — collapse propagates DOWN the link tree.  If
-            # this member is itself a master with link-children
-            # (e.g. a ring inside the forest), collapse it FIRST so
-            # its members tuck into it before it travels toward us.
-            # Visually: ring's cells start shrinking toward the
-            # ring; in parallel the ring shrinks toward the forest.
-            # Result: the whole sub-tree shrinks together.
-            if (
-                m.role == "master"
-                and getattr(m, "_members", None)
-                and m._collapse_state == "expanded"
-            ):
-                try:
-                    m._start_collapse()
-                except Exception as exc:  # noqa: BLE001
-                    _log(
-                        f"_start_collapse: recursive collapse of "
-                        f"{m._id[:8]} raised {exc!r} — continuing"
-                    )
+            # v0.6.17 — no recursive cascade.  The v0.6.16
+            # "collapse propagates down the link tree" was replaced
+            # by the per-cell opt-in: only members with
+            # ``_collapse_with_master`` set reach this loop.  If
+            # the user wants a ring to collapse along with the
+            # forest, they set the flag on the ring cell itself.
             anim = m._animate_to(target, duration_ms=250)
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
@@ -7324,18 +7398,20 @@ class CellWindow(QMainWindow):
         _log(f"_start_collapse {self._id}: animating {len(members)} member(s) to master pos")
 
     def _start_expand(self) -> None:
-        """Animate ALL group members back to their stored positions (Amendment 2).
+        """v0.6.17 — restore only the *opted-in* members that were
+        tucked by ``_start_collapse``.  Members that didn't opt in
+        were never moved during collapse, so there's nothing to
+        animate back for them.
 
-        Iterates self._members regardless of positioned/separated status.
-        Each member animates from master.pos() to its stored _members[id] position.
+        Per user spec the default is "cells stay open"; only cells
+        with ``_collapse_with_master == True`` participate in the
+        master's collapse/expand cycle.
 
-        Edge-fold interaction:
-        - _auto_hidden is cleared before animating so setVisible(True) is not
-          fought by any lingering auto-hide state.
-        - After ALL animations finish, _check_edge_fold() is called once to
-          re-evaluate visibility based on the current master position.  Members
-          whose preferred positions are still off-screen will be immediately
-          re-hidden; those with room will stay visible.
+        Edge-fold interaction (unchanged):
+        - _auto_hidden is cleared before expansion so setVisible(True)
+          isn't fought by any lingering auto-hide state.
+        - After all animations finish, _check_edge_fold() runs once
+          to re-evaluate visibility at the master's current position.
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
@@ -7343,9 +7419,20 @@ class CellWindow(QMainWindow):
         members = [
             registry.get(mid) for mid in self._members
             if registry.get(mid) is not None
+            and getattr(
+                registry.get(mid), "_collapse_with_master", False,
+            )
         ]
         if not members:
-            _log(f"_start_expand {self._id}: no member windows found")
+            # No opted-in members; just flip the visual state back
+            # to expanded so future collapses behave correctly.
+            self._collapse_state = "expanded"
+            self.update()
+            self._check_edge_fold()
+            _log(
+                f"_start_expand {self._id}: no opted-in members; "
+                f"master state → expanded (visual only)"
+            )
             return
 
         # Clear auto-hidden state before expansion so setVisible(True) is clean.
@@ -7379,21 +7466,6 @@ class CellWindow(QMainWindow):
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
             anim.start()
-            # v0.6.16 — link-tree expand propagation: if this member
-            # is itself a master in collapsed state, expand it too
-            # so the whole sub-tree re-blooms together.
-            if (
-                m.role == "master"
-                and getattr(m, "_members", None)
-                and m._collapse_state == "collapsed"
-            ):
-                try:
-                    m._start_expand()
-                except Exception as exc:  # noqa: BLE001
-                    _log(
-                        f"_start_expand: recursive expand of "
-                        f"{m._id[:8]} raised {exc!r} — continuing"
-                    )
 
         _log(f"_start_expand {self._id}: animating {len(members)} member(s) to stored positions")
 
@@ -7705,11 +7777,30 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         and tgt_master_id == src_master_id
     ):
         master = registry.get(tgt_master_id)
-        if master is not None and getattr(
-            master, "_is_forest_master", False,
+        # v0.6.17 — only fall through to ring-spawn when BOTH
+        # cells are LOOSE-linked to the forest (link parent is
+        # the forest AND they're NOT currently in the forest's
+        # positional cluster).  v0.6.14's check was too loose:
+        # it fired for any two forest-linked cells, so moving a
+        # cell within a chain of docked forest members spawned a
+        # spurious ring.  Loose-linked-only restores the intent:
+        # "two cells dragged AWAY from the forest, brought back
+        # together, form a new ring."
+        a_is_loose = (
+            master is not None
+            and a._id not in master._positioned
+        )
+        b_is_loose = (
+            master is not None
+            and b._id not in master._positioned
+        )
+        if (
+            master is not None
+            and getattr(master, "_is_forest_master", False)
+            and a_is_loose and b_is_loose
         ):
             _log(
-                f"Case 5→1 (both forest-linked, no ring): "
+                f"Case 5→1 (both forest-linked AND both loose): "
                 f"{a._id[:8]} + {b._id[:8]} → spawn new ring "
                 f"under forest {master._id[:8]}"
             )
@@ -7954,6 +8045,32 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     # Fresh master = brand-new ring with content but no on-disk file
     # → dirty (so close prompts to save).
     master._ring_dirty = True
+
+    # v0.6.17 — give the bare new ring hub the dedicated "ring"
+    # glyph (concentric circles).  ``load_ring`` already does this
+    # for *loaded* rings, but a ring spawned by drag-docking two
+    # cells doesn't go through load_ring — so without this block
+    # the ring rendered as just the centre dot (no icon).
+    try:
+        bare = (
+            not getattr(master, "_catalog_path", None)
+            and not getattr(master, "_icon_data_b64", "")
+            and not getattr(master, "_icon_path", None)
+        )
+        if bare:
+            from scriptree.shell.icon_assets import (
+                BUNDLED_FORMAT, bundled_icon_b64,
+            )
+            b64 = (
+                bundled_icon_b64("ring")
+                or bundled_icon_b64("container")
+            )
+            if b64:
+                master._icon_data_b64 = b64
+                master._icon_data_format = BUNDLED_FORMAT
+                master.update()
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_try_spawn_master: bare-hub icon failed: {exc!r}")
 
     # v0.6.14 — preserve the forest link.  If either source cell
     # had been a forest member that was dragged free (break-free
