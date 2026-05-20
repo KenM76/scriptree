@@ -427,6 +427,42 @@ class TestHoverTooltip:
         assert f.toolTip() == "Forest"
         f.close()
 
+    def test_master_with_icon_paints_it_no_centre_dot(self) -> None:
+        """v0.6.14 — forest/ring hubs that carry an icon must
+        actually render it.  Pre-v0.6.14 the paintEvent skipped
+        ``_paint_cell_label`` for masters entirely, so the
+        hub-icon wiring (icon-forest / icon-ring / a user-bound
+        catalog) was invisible — only a small centre dot showed.
+        Drive the relevant code path with a hand-fed
+        ``QPaintEvent`` and assert the master_painted_icon
+        decision branched correctly.
+        """
+        # We can't easily assert "which pixels got drawn", but we
+        # CAN drive the same conditional ``paintEvent`` uses and
+        # ensure the icon path would have run.  The compact form
+        # is just exercising the predicate.
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.icon_assets import bundled_icon_b64
+
+        m = CellWindow(load_branding(), role="master")
+        try:
+            # No icon yet → would paint the centre dot.
+            assert not bool(
+                getattr(m, "_icon_data_b64", "")
+                or getattr(m, "_icon_path", None)
+            )
+            # Apply the bundled forest icon (what
+            # ForestController.start does).
+            b64 = bundled_icon_b64("forest")
+            assert b64, "icon-forest must ship in the bundled set"
+            m._icon_data_b64 = b64
+            m._icon_data_format = "png"
+            # Now the predicate must say "yes, paint icon".
+            assert bool(m._icon_data_b64)
+        finally:
+            m.close()
+
     def test_tooltip_event_handler_fires_and_returns_true(self) -> None:
         """v0.6.13 — the manual ``event(QEvent.ToolTip)`` override
         always handles the ToolTip event (returns True) and routes

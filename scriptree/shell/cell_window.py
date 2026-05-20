@@ -3708,16 +3708,34 @@ class CellWindow(QMainWindow):
         # first and second letter of the tool's name…"
         #
         # Resolution order:
-        #   1. _icon_path → paint scaled pixmap.
+        #   1. _icon_data_b64 / _icon_path → paint scaled pixmap.
         #   2. _text_label → paint user-assigned text.
         #   3. _catalog_path → derive 1-2 letters from catalog name.
         # All three render at the cell's translucent default so they
         # blend with the background.
+        #
+        # v0.6.13: forest and ring HUBS (role == "master") *also*
+        # render an icon when they have one (icon-forest /
+        # icon-ring / a user-bound catalog).  Pre-v0.6.13 the master
+        # branch only painted a small centre dot, so the hub-icon
+        # wiring in forest_controller.start / ring_io.load_ring had
+        # no visible effect.  The centre dot is now a fallback for
+        # masters that genuinely have no icon (e.g. a bare master
+        # that hasn't loaded a hub default yet).
+        master_painted_icon = False
         if self.role != "master":
             self._paint_cell_label(painter, size, cx, cy)
+        else:
+            has_icon = bool(
+                getattr(self, "_icon_data_b64", "")
+                or getattr(self, "_icon_path", None)
+            )
+            if has_icon:
+                self._paint_cell_label(painter, size, cx, cy)
+                master_painted_icon = True
 
         # ---- Master centre dot ------------------------------------------
-        if self.role == "master":
+        if self.role == "master" and not master_painted_icon:
             # Small filled circle in menuBg colour at the centre.
             dot_r = max(4, size // 10)
             painter.setBrush(self._menu_bg_color)
@@ -4446,6 +4464,18 @@ class CellWindow(QMainWindow):
         # off-screen" invariant — every other code path relies on
         # this safety net at rest.
         if event.button() == Qt.LeftButton and was_dragging:
+            # v0.6.14 — masters that landed near a free cell on
+            # release absorb it as a new ring member (and inherit
+            # the forest link when applicable).  Runs BEFORE the
+            # settle so any absorbed cells are part of the
+            # subject set when no-overlap is computed.
+            if self.role == "master":
+                try:
+                    self._try_absorb_nearby_free_cells()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_try_absorb_nearby_free_cells raised {exc!r}"
+                    )
             try:
                 self._settle_no_overlap()
             except Exception as exc:  # noqa: BLE001
@@ -5966,6 +5996,128 @@ class CellWindow(QMainWindow):
     # Edge-fold: auto-hide positioned members that go off-screen
     # ------------------------------------------------------------------
 
+    def _try_absorb_nearby_free_cells(self) -> None:
+        """v0.6.14 — at the end of a master drag, absorb any free
+        standalone cell whose centre lies within ``absorb_radius``
+        of the master's centre.
+
+        "Free" means: visible, role=="standalone", and either
+        unaffiliated (``_group_master_id`` is None) OR linked only
+        to the forest hub (a break-free forest member).  Cells
+        that belong to another ring are NOT poached.
+
+        Forest-link semantics:
+          * If any absorbed cell was forest-linked AND this master
+            isn't itself a forest member, the master inherits the
+            forest link.  This is the symmetric counterpart of the
+            "two forest-linked cells form a forest-linked ring"
+            rule in ``_try_spawn_master``.
+          * The forest itself is never absorbed (it's a master).
+        """
+        if self.role != "master":
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        # Honeycomb neighbour distance ≈ size_px; add slack so the
+        # user doesn't have to land perfectly on a slot.
+        absorb_radius = self._size_px * 1.6
+        sz = self._size_px
+        mcx = self.pos().x() + sz // 2
+        mcy = self.pos().y() + sz // 2
+
+        absorbed: list[CellWindow] = []
+        forest_link_to_inherit: str | None = None
+        for c in list(registry.standalones()):
+            if c._id == self._id:
+                continue
+            if c._id in self._members:
+                continue
+            if not c.isVisible():
+                continue
+            # Already in another ring?  Don't poach.  Forest is
+            # special: a cell linked ONLY to the forest hub is
+            # "free" in the sense that it's not committed to a
+            # member ring.
+            gm = c._group_master_id
+            if gm is not None and gm != self._id:
+                gm_cell = registry.get(gm)
+                if gm_cell is not None and not getattr(
+                    gm_cell, "_is_forest_master", False,
+                ):
+                    continue  # member of a real ring; leave alone
+            # Distance check.
+            csx = c.pos().x() + c._size_px // 2
+            csy = c.pos().y() + c._size_px // 2
+            dist = math.hypot(csx - mcx, csy - mcy)
+            if dist > absorb_radius:
+                continue
+            absorbed.append(c)
+            if gm is not None:
+                gm_cell = registry.get(gm)
+                if gm_cell is not None and getattr(
+                    gm_cell, "_is_forest_master", False,
+                ):
+                    forest_link_to_inherit = gm
+
+        if not absorbed:
+            return
+
+        # Wire each absorbed cell as a ring member.
+        for c in absorbed:
+            # Detach from prior group (if any) — only forest-linked
+            # cells reach here, but stay defensive.
+            prior_id = c._group_master_id
+            if prior_id is not None and prior_id != self._id:
+                prior_master = registry.get(prior_id)
+                if prior_master is not None:
+                    prior_master._members.pop(c._id, None)
+                    prior_master._positioned.discard(c._id)
+                    prior_master._dock_partners.discard(c._id)
+                    if getattr(prior_master, "_is_forest_master", False):
+                        prior_master._ring_dirty = True
+                        prior_master.update()
+            self._members[c._id] = QPoint(c.pos())
+            self._positioned.add(c._id)
+            self._dock_partners.add(c._id)
+            c._group_master_id = self._id
+            c._docked_to.discard(prior_id) if prior_id else None
+            c.update()  # outline refresh
+
+        # Inherit forest link if applicable.
+        if (
+            forest_link_to_inherit is not None
+            and not getattr(self, "_is_forest_master", False)
+            and self._group_master_id != forest_link_to_inherit
+        ):
+            forest = registry.get(forest_link_to_inherit)
+            if forest is not None and self._id not in forest._members:
+                forest._members[self._id] = QPoint(self.pos())
+                forest._positioned.add(self._id)
+                forest._dock_partners.add(self._id)
+                self._group_master_id = forest_link_to_inherit
+                forest._ring_dirty = True
+                forest.update()
+
+        # Re-pack so absorbed cells land on real honeycomb slots
+        # around the master rather than wherever they happened to
+        # be on release.  Existing members keep their positions.
+        try:
+            existing_ids = {
+                m for m in self._members.keys()
+                if m not in {c._id for c in absorbed}
+            }
+            self._repack_members(fixed=existing_ids)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_try_absorb: repack failed: {exc!r}")
+        self._ring_dirty = True
+        self.update()
+        _log(
+            f"_try_absorb_nearby_free_cells: master {self._id[:8]} "
+            f"absorbed {len(absorbed)} free cell(s); forest-link "
+            f"inherited: {bool(forest_link_to_inherit)}"
+        )
+
     def _resolve_member_stacking(self) -> None:
         """v0.6.12 — surgical-repack any of *this master's* members
         whose centres land on (or very near) a peer's centre.
@@ -7273,13 +7425,37 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     )
 
     # ---- Case 5: both in same group ----------------------------------------
+    # v0.6.14 — if the "common group" is the *forest* hub (not a
+    # ring master), the two cells are forest-linked but not in the
+    # same ring.  Per user spec, they should form a NEW ring under
+    # the forest, not be repositioned as direct forest members.
+    # Fall through to Case 1 for the ring spawn; the link
+    # preservation block at the end of this function then promotes
+    # the new ring to a forest member.
     if (
         tgt_master_id is not None
         and src_master_id is not None
         and tgt_master_id == src_master_id
     ):
         master = registry.get(tgt_master_id)
-        if master is not None:
+        if master is not None and getattr(
+            master, "_is_forest_master", False,
+        ):
+            _log(
+                f"Case 5→1 (both forest-linked, no ring): "
+                f"{a._id[:8]} + {b._id[:8]} → spawn new ring "
+                f"under forest {master._id[:8]}"
+            )
+            # Fall through to the Case-1 path.  Null out the
+            # locally-resolved master ids so Case 4 / Case 2 / 3
+            # don't grab the flow on the way down.  The forest
+            # link is preserved later by the link-preservation
+            # block at the end of this function (it reads the
+            # *original* _group_master_id we captured into
+            # _a_prior_group / _b_prior_group).
+            tgt_master_id = None
+            src_master_id = None
+        elif master is not None:
             _adopt_member_geometry(a, master)
             master._members[a._id] = QPoint(a.pos())
             master._positioned.add(a._id)
@@ -7289,8 +7465,17 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             # the others.  ``a`` is at the position the snap engine
             # committed to (edge-adjacent to ``b``), and ``b`` and
             # the rest of the group stay where they are.
-        _log(f"Case 5 (same group): {a._id[:8]} repositioned within group {tgt_master_id[:8]}")
-        return
+            _log(
+                f"Case 5 (same ring): {a._id[:8]} repositioned "
+                f"within group {tgt_master_id[:8]}"
+            )
+            return
+        else:
+            _log(
+                f"Case 5 (same group): {a._id[:8]} repositioned "
+                f"within group {tgt_master_id[:8]} (master gone)"
+            )
+            return
 
     # ---- Case 4: both in DIFFERENT groups -----------------------------------
     if tgt_master_id is not None and src_master_id is not None:
@@ -7450,6 +7635,15 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         b._apply_size_self(group_size_px)
     master.move_to(cand_x, cand_y)
 
+    # v0.6.14 — capture prior forest-link state BEFORE reassigning
+    # ``_group_master_id`` so we can promote the new ring to a
+    # forest member if either source cell was forest-linked.  The
+    # user spec: two forest-linked cells dragged together form a
+    # ring that itself stays forest-linked; the cells become normal
+    # ring members under that new ring.
+    _a_prior_group = a._group_master_id
+    _b_prior_group = b._group_master_id
+
     # Wire group membership.
     master._members = {
         a._id: QPoint(a.pos()),
@@ -7493,6 +7687,56 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     # Fresh master = brand-new ring with content but no on-disk file
     # → dirty (so close prompts to save).
     master._ring_dirty = True
+
+    # v0.6.14 — preserve the forest link.  If either source cell
+    # had been a forest member that was dragged free (break-free
+    # preserves _group_master_id; see _break_free_from_cluster),
+    # promote the new ring to a forest member so the cluster
+    # stays bonded to the workspace root.  Symmetric: the cells
+    # are now ring members (their direct forest link is gone,
+    # transitively under the ring), and the ring takes the forest
+    # slot.
+    forest_id_for_link: str | None = None
+    for prior in (_a_prior_group, _b_prior_group):
+        if prior is None:
+            continue
+        prior_cell = registry.get(prior)
+        if prior_cell is not None and getattr(
+            prior_cell, "_is_forest_master", False,
+        ):
+            forest_id_for_link = prior
+            break
+    if forest_id_for_link is not None:
+        forest = registry.get(forest_id_for_link)
+        if forest is not None and forest._id != master_id:
+            try:
+                forest._members[master._id] = QPoint(master.pos())
+                forest._positioned.add(master._id)
+                forest._dock_partners.add(master._id)
+                master._group_master_id = forest_id_for_link
+                # Drop the two source cells from forest's direct
+                # membership — they're now reachable via the new
+                # ring.  Membership change → forest dirty.
+                forest._members.pop(a._id, None)
+                forest._members.pop(b._id, None)
+                forest._positioned.discard(a._id)
+                forest._positioned.discard(b._id)
+                forest._dock_partners.discard(a._id)
+                forest._dock_partners.discard(b._id)
+                forest._ring_dirty = True
+                forest.update()  # refresh badge / count
+                _log(
+                    f"forest-link preserved: new ring {master_id[:8]} "
+                    f"promoted to forest {forest._id[:8]} member; "
+                    f"sources {a._id[:8]} + {b._id[:8]} now ring "
+                    f"members under that ring"
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"_try_spawn_master: forest-link promotion "
+                    f"failed: {exc!r}"
+                )
+
     _log(f"Master spawned: {master_id[:20]} at ({cand_x},{cand_y})")
     registry.masterSpawned.emit(master_id, a._id, b._id)
 

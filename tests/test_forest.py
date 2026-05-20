@@ -1214,6 +1214,138 @@ class TestUnsavedForestDefaultSpot:
         assert prefs.fallback_to_default is True
         assert prefs.default_forest_path == str(target)
 
+    def test_try_spawn_master_preserves_forest_link(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.14 — two forest-linked cells dragged together form
+        a ring that itself stays forest-linked.  The new master is
+        promoted to a forest member; the source cells become ring
+        members (dropped from the forest's direct membership)."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.cell_window import (
+            CellWindow, _try_spawn_master,
+        )
+        from scriptree.shell.forest_controller import ForestController
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: prefs_file,
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+
+        # Two cells that are forest members but have been broken
+        # free (gripped → dragged out → still linked).
+        a = CellWindow(load_branding())
+        b = CellWindow(load_branding())
+        a.show(); b.show()
+        a.move(420, 420); b.move(480, 420)
+        forest._members[a._id] = QPoint(420, 420)
+        forest._members[b._id] = QPoint(480, 420)
+        a._group_master_id = forest._id
+        b._group_master_id = forest._id
+        # Break-free state: not in _positioned anymore.
+        # (forest._positioned doesn't include them.)
+
+        # Drive _try_spawn_master directly — same as snap engine.
+        _try_spawn_master(a, b)
+
+        # Find the newly spawned master (only one CellWindow with
+        # role=="master" that isn't the forest_window).
+        reg = CellRegistry.instance()
+        new_master = next(
+            m for m in reg.masters()
+            if m._id != forest._id
+        )
+
+        # The two source cells are members of the new ring.
+        assert a._id in new_master._members
+        assert b._id in new_master._members
+        # The new ring is itself a forest member.
+        assert new_master._id in forest._members
+        assert new_master._group_master_id == forest._id
+        # Source cells are no longer in the forest's *direct*
+        # membership (their forest link is transitive via the ring).
+        assert a._id not in forest._members
+        assert b._id not in forest._members
+        new_master.close(); a.close(); b.close()
+
+    def test_master_absorbs_nearby_forest_linked_free_cell(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.14 — a master dragged near a free cell that's
+        forest-linked absorbs the cell as a new ring member AND
+        inherits the forest link itself."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+
+        # A standalone master (a ring's master) at (500, 500).
+        m = CellWindow(load_branding(), role="master")
+        m.show()
+        m.move(500, 500)
+
+        # A free cell that's forest-linked (break-free state),
+        # placed within absorb radius of the master's centre.
+        c = CellWindow(load_branding())
+        c.show()
+        c.move(550, 500)  # ~50 px right of master, well within 1.6*size
+        forest._members[c._id] = QPoint(550, 500)
+        c._group_master_id = forest._id
+
+        # Drive the absorb routine that drag-end now invokes.
+        m._try_absorb_nearby_free_cells()
+
+        # The cell is now a ring member.
+        assert c._id in m._members
+        assert c._group_master_id == m._id
+        # The cell is no longer a direct forest member.
+        assert c._id not in forest._members
+        # The master itself inherited the forest link.
+        assert m._id in forest._members
+        assert m._group_master_id == forest._id
+        m.close(); c.close()
+
     def test_flush_prompt_personal_choice_no_file_dialog(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:

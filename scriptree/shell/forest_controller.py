@@ -408,13 +408,29 @@ class ForestController(QObject):
         for it in list(self.forest.items):
             self._spawn_item(it)
 
-        # v0.6.11 — clean up overlaps from stale stored positions.
-        # Each item's last-known position is restored verbatim in
-        # ``_spawn_item``; if the forest moved between saves the
-        # absolute coords may now land two items on top of each other.
-        # Detect overlapping pairs and surgical-repack the offenders
-        # so on-screen non-overlapping cells keep their layout.
-        self._resolve_member_overlap()
+        # v0.6.14 — canonicalise every forest member's position at
+        # startup so stale stored item.position values (from when
+        # the forest was at a different location, or from a save
+        # before the hub moved) never leave cells jumbled.  Pre-
+        # v0.6.14 we only checked for *centre-stacked* members
+        # (_resolve_member_overlap → _resolve_member_stacking) —
+        # but the user reported "cells get jumbled over top of each
+        # other until I drag the forest a bit", which means the
+        # surgical check wasn't catching everything.  A full
+        # canonical _repack_members() places every member on a free
+        # honeycomb slot around the (possibly moved) hub.  Trade-
+        # off: per-item.position overrides set by hand are
+        # discarded; the user has explicitly asked for this in
+        # exchange for never-jumbled-startup.
+        if self.forest_window is not None:
+            try:
+                self.forest_window._repack_members()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"startup _repack_members failed: {exc!r} — "
+                    f"falling back to stack-only resolution"
+                )
+                self._resolve_member_overlap()
 
         # First-run: empty forest → welcome dialog after the next
         # event-loop tick.  v0.3.16: trigger now fires whenever
