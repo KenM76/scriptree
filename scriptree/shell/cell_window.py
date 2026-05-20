@@ -3081,7 +3081,9 @@ class CellWindow(QMainWindow):
                 continue
             cur = member.pos()
             if cur.x() != home_pt.x() or cur.y() != home_pt.y():
-                member.move(home_pt.x(), home_pt.y())
+                # Eased slide back HOME (Mac-style); falls back to
+                # instant when off-screen or below threshold.
+                member._smooth_move(home_pt.x(), home_pt.y())
 
         # Step 2: partition by on-/off-screen at HOME.
         master_tl = (self.pos().x(), self.pos().y())
@@ -3196,11 +3198,14 @@ class CellWindow(QMainWindow):
             if not is_surgical:
                 self._members[mid] = QPoint(new_x, new_y)
             if member is not None:
-                # Move to new position and ensure visible.
-                member.move(new_x, new_y)
+                # Eased slide into the (re)packed slot; collapsed
+                # members would not be visible yet, so re-show first
+                # if needed and let the smooth move animate from
+                # whatever position they have now.
                 if mid in self._auto_hidden:
                     self._auto_hidden.discard(mid)
                     member.setVisible(True)
+                member._smooth_move(new_x, new_y, duration_ms=260)
 
         # Refresh badge / visibility for any members that changed state.
         self._check_edge_fold()
@@ -4152,6 +4157,7 @@ class CellWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             _log(f"  could not wire new cell to snap engine: {exc!r}")
         new_cell.show()
+        new_cell._fade_in()
         _rf.add(str(path.resolve()))
 
         # Wire ring membership.  Mirrors ``_try_spawn_master`` Case 2
@@ -5267,6 +5273,7 @@ class CellWindow(QMainWindow):
             )
 
         new_cell.show()
+        new_cell._fade_in()
         _rf.add(catalog_path)
         _log(
             f"Spawned sibling cell {new_cell._id[:8]} bound to "
@@ -5552,6 +5559,10 @@ class CellWindow(QMainWindow):
         new_hex = CellWindow(self._branding, catalog_path=self._catalog_path)
         new_hex.move_to(new_x, new_y)
         new_hex.show()
+        try:
+            new_hex._fade_in()
+        except Exception:  # noqa: BLE001
+            pass
         _log(
             f"Spawned new hex {new_hex._id} at ({new_x},{new_y}) "
             f"catalog={self._catalog_path!r}"
@@ -6285,20 +6296,124 @@ class CellWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _animate_to(
-        self, target_pos: QPoint, duration_ms: int = 250
+        self,
+        target_pos: QPoint,
+        duration_ms: int = 250,
+        curve: "QEasingCurve.Type | None" = None,
     ) -> QPropertyAnimation:
         """Create and return a QPropertyAnimation that slides self to target_pos.
 
-        Uses QEasingCurve.OutCubic for a smooth deceleration.  The caller is
-        responsible for connecting finished() and for keeping a reference to
-        the animation (store on the hex so GC doesn't collect it mid-flight).
+        Defaults to ``QEasingCurve.OutCubic`` (smooth deceleration; Mac-style
+        ease-out feel).  The caller is responsible for connecting finished() and
+        for keeping a reference to the animation (store on the hex so GC doesn't
+        collect it mid-flight).
         """
         anim = QPropertyAnimation(self, b"pos", self)
         anim.setDuration(duration_ms)
         anim.setStartValue(self.pos())
         anim.setEndValue(target_pos)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setEasingCurve(curve or QEasingCurve.Type.OutCubic)
         return anim
+
+    # ------------------------------------------------------------------
+    # Macify (v0.6.10) — smooth moves and spawn fade-ins.
+    #
+    # ``_smooth_move`` is the Mac-style replacement for ``self.move(x, y)``
+    # at the *end* of a logical reposition (a repack, a reflow restore, a
+    # snap commit).  Per-frame manual drag MUST still use the plain
+    # ``self.move`` — animating each cursor tick would feel laggy.
+    # ``_fade_in`` softens cell spawn so members slide into existence
+    # rather than popping.
+    # ------------------------------------------------------------------
+
+    def _smooth_move(
+        self,
+        target_x: int,
+        target_y: int,
+        *,
+        duration_ms: int = 240,
+        curve: "QEasingCurve.Type | None" = None,
+        threshold_px: int = 2,
+        max_animate_px: int = 600,
+    ) -> None:
+        """Eased slide to ``(target_x, target_y)``.
+
+        Falls back to an instant ``self.move`` when:
+          * the widget isn't visible (no point animating off-screen);
+          * the cell is mid-drag (per-frame translation, animation
+            would lag the cursor);
+          * the delta is below ``threshold_px`` (de-jitter no-ops);
+          * the delta exceeds ``max_animate_px`` on either axis — a
+            cross-screen slide of several hundred ms reads as slow,
+            not fluid, so we just teleport (matches Mac behaviour
+            where windows snap, not crawl, to a distant slot).
+
+        Cancels any prior in-flight position animation so successive
+        calls don't fight each other — the latest target always wins.
+        """
+        cur = self.pos()
+        dx = target_x - cur.x()
+        dy = target_y - cur.y()
+        if (
+            not self.isVisible()
+            or getattr(self, "_drag_started", False)
+            or (abs(dx) <= threshold_px and abs(dy) <= threshold_px)
+            or abs(dx) > max_animate_px
+            or abs(dy) > max_animate_px
+        ):
+            prior = getattr(self, "_pos_anim", None)
+            if prior is not None:
+                try:
+                    prior.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._pos_anim = None
+            self.move(target_x, target_y)
+            return
+        prior = getattr(self, "_pos_anim", None)
+        if prior is not None:
+            try:
+                prior.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        anim = self._animate_to(
+            QPoint(target_x, target_y),
+            duration_ms=duration_ms,
+            curve=curve,
+        )
+        self._pos_anim = anim  # keep alive until finished
+        anim.finished.connect(lambda: setattr(self, "_pos_anim", None))
+        anim.start()
+
+    def _fade_in(self, duration_ms: int = 180) -> None:
+        """Animate windowOpacity 0 → current on the next event loop tick.
+
+        Called by the spawn paths (drop-join, sibling clone, master
+        spawn) so a new cell glides into existence instead of popping.
+        Safe to call repeatedly — only triggers the first time per
+        cell unless ``_fade_in_done`` is cleared.
+        """
+        if getattr(self, "_fade_in_done", False):
+            return
+        self._fade_in_done = True
+        try:
+            target = float(self.windowOpacity())
+            if target <= 0.0:
+                target = 1.0
+            self.setWindowOpacity(0.0)
+            anim = QPropertyAnimation(self, b"windowOpacity", self)
+            anim.setDuration(duration_ms)
+            anim.setStartValue(0.0)
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._fade_anim = anim
+            anim.finished.connect(
+                lambda: setattr(self, "_fade_anim", None)
+            )
+            anim.start()
+        except Exception as exc:  # noqa: BLE001
+            # Never let a cosmetic fade abort the spawn.
+            _log(f"_fade_in failed: {exc!r}")
 
     def _fire_pending_master_single_click(self) -> None:
         """Timer callback: the double-click window elapsed with no double-click.
@@ -6934,6 +7049,11 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     b._dock_partners.add(master_id)
 
     master.show()
+    try:
+        # Macify: the master glides into existence when two cells dock.
+        master._fade_in()
+    except Exception:  # noqa: BLE001
+        pass
     # Canonicalise positions: both sources adopt their nearest free
     # honeycomb slots around the master so a non-canonical drag-release
     # (e.g. dropped slightly off-slot) snaps to a clean ring layout.

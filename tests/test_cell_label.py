@@ -429,6 +429,93 @@ class TestHoverTooltip:
 
 
 # ---------------------------------------------------------------------------
+# Macify (v0.6.10) — _smooth_move fluidity contract
+# ---------------------------------------------------------------------------
+
+class TestSmoothMove:
+    def test_smooth_move_instant_when_hidden(self) -> None:
+        """A hidden widget never animates — there's nothing to see."""
+        c = _spawn_cell()
+        assert not c.isVisible()
+        c.move(100, 100)
+        c._smooth_move(400, 250)
+        # No animation kicked in.
+        assert getattr(c, "_pos_anim", None) is None
+        assert c.pos().x() == 400 and c.pos().y() == 250
+        c.close()
+
+    def test_smooth_move_instant_below_threshold(self) -> None:
+        """Sub-pixel-ish deltas just teleport (no jitter animation)."""
+        c = _spawn_cell()
+        c.show()
+        c.move(100, 100)
+        c._smooth_move(101, 100, threshold_px=2)
+        assert getattr(c, "_pos_anim", None) is None
+        c.close()
+
+    def test_smooth_move_instant_when_mid_drag(self) -> None:
+        """Mid-drag updates must be instant — animating each cursor
+        tick would lag the pointer."""
+        c = _spawn_cell()
+        c.show()
+        c.move(100, 100)
+        c._drag_started = True
+        c._smooth_move(300, 220)
+        assert getattr(c, "_pos_anim", None) is None
+        assert c.pos().x() == 300 and c.pos().y() == 220
+        c._drag_started = False
+        c.close()
+
+    def test_smooth_move_instant_above_max_animate(self) -> None:
+        """Cross-screen jumps teleport: a 600+ px slide reads as slow
+        rather than fluid."""
+        c = _spawn_cell()
+        c.show()
+        c.move(0, 0)
+        c._smooth_move(1200, 100, max_animate_px=600)
+        assert getattr(c, "_pos_anim", None) is None
+        assert c.pos().x() == 1200
+        c.close()
+
+    def test_smooth_move_animates_when_in_band(self) -> None:
+        """A modest in-screen delta starts an animation and the
+        animation reaches the target when the event loop is pumped."""
+        from PySide6.QtCore import QEventLoop, QTimer
+        c = _spawn_cell()
+        c.show()
+        c.move(100, 100)
+        c._smooth_move(220, 180, duration_ms=80)
+        anim = getattr(c, "_pos_anim", None)
+        assert anim is not None, "expected an animation to start"
+        # Pump the loop long enough for the 80 ms animation to finish.
+        loop = QEventLoop()
+        QTimer.singleShot(220, loop.quit)
+        loop.exec()
+        assert c.pos().x() == 220 and c.pos().y() == 180
+        # Animation cleared after finishing.
+        assert getattr(c, "_pos_anim", None) is None
+        c.close()
+
+    def test_smooth_move_cancels_prior_animation(self) -> None:
+        """Successive _smooth_move calls don't stack — the latest
+        target wins."""
+        c = _spawn_cell()
+        c.show()
+        c.move(0, 0)
+        c._smooth_move(120, 90, duration_ms=400)
+        first = getattr(c, "_pos_anim", None)
+        assert first is not None
+        c._smooth_move(220, 160, duration_ms=400)
+        second = getattr(c, "_pos_anim", None)
+        assert second is not None
+        assert second is not first
+        # The first animation has been stopped.
+        from PySide6.QtCore import QAbstractAnimation
+        assert first.state() != QAbstractAnimation.State.Running
+        c.close()
+
+
+# ---------------------------------------------------------------------------
 # Ring file round-trip for icon_path / text_label
 # ---------------------------------------------------------------------------
 

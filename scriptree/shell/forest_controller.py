@@ -337,6 +337,11 @@ class ForestController(QObject):
                     position = QPoint(100, 100)
         self.forest_window.move(position)
         self.forest_window.show()
+        # v0.6.10 macify: soft fade-in for the forest hub.
+        try:
+            self.forest_window._fade_in()
+        except Exception:  # noqa: BLE001
+            pass
 
         # Install the menu hook now that the cell exists.
         self._install_menu_hook(self.forest_window)

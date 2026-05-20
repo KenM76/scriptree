@@ -476,6 +476,10 @@ def load_ring(
             master_raw.get("text_over_icon", False)
         )
         master_win.show()
+        try:
+            master_win._fade_in()
+        except Exception:  # noqa: BLE001
+            pass  # cosmetic only — never block a ring load
         _log(
             f"load_ring: standalone hex {master_win._id[:8]} spawned at "
             f"({mf['pos_x']}, {mf['pos_y']}) catalog={resolved_catalog!r}"
@@ -493,6 +497,10 @@ def load_ring(
     master_win.apply_always_on_top_change(mf["always_on_top"])
     master_win.move(mf["pos_x"], mf["pos_y"])
     master_win.show()
+    try:
+        master_win._fade_in()
+    except Exception:  # noqa: BLE001
+        pass
     _log(
         f"load_ring: master {master_win._id[:8]} spawned at "
         f"({mf['pos_x']}, {mf['pos_y']})"
@@ -556,6 +564,10 @@ def load_ring(
             m_raw.get("text_over_icon", False)
         )
         member_win.show()
+        try:
+            member_win._fade_in()
+        except Exception:  # noqa: BLE001
+            pass
 
         # preferred_position — also clamp.
         pref_raw = m_raw.get("preferred_position") or {}
