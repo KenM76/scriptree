@@ -6848,9 +6848,29 @@ class CellWindow(QMainWindow):
                     or moved.bottom() > avail.bottom()
                 ):
                     return False
-                # Must not intersect any cell outside the subject.
+                # v0.6.18 — overlap test uses CENTRE-DISTANCE, not
+                # bounding-rect intersection.  Two hexes at
+                # honeycomb-adjacent slots share an edge, but
+                # their axis-aligned bounding squares intersect at
+                # that edge — so the v0.6.12 rect.intersects()
+                # check flagged every legitimate dock attempt as
+                # "overlap" and the settle pushed the cells apart
+                # ("bounces away from each other").  Pixel-stacked
+                # cells have centre distance ~ 0, honeycomb
+                # neighbours have centre distance ≥ ~0.86 *
+                # size_px; threshold = 0.75 * (smaller size) lets
+                # honeycomb adjacency through while still
+                # catching genuine stacking.
+                mcx = moved.center().x()
+                mcy = moved.center().y()
                 for o in obstacles:
-                    if moved.intersects(o):
+                    ocx = o.center().x()
+                    ocy = o.center().y()
+                    threshold = min(moved.width(), o.width()) * 0.75
+                    if (
+                        abs(mcx - ocx) < threshold
+                        and abs(mcy - ocy) < threshold
+                    ):
                         return False
             return True
 
