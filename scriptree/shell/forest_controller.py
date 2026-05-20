@@ -319,10 +319,17 @@ class ForestController(QObject):
         except Exception as exc:  # noqa: BLE001
             _log(f"could not wire forest cell to snap engine: {exc!r}")
 
-        # Position.  Default is top-centre-ish; restore the user's
-        # last placement when the autoloaded forest carried one.
+        # Position.  Restore the user's last placement when the
+        # forest carried one (v0.6.11 — ``ForestDef.window_position``
+        # persists across launches).  Default is the bottom-left
+        # corner of the primary screen per user spec ("start in the
+        # bottom left corner").  ``_window_position`` is the legacy
+        # transient attribute name; honour it as a fallback so any
+        # caller that set it before the field existed still works.
         if position is None:
-            stored = getattr(self.forest, "_window_position", None)
+            stored = getattr(self.forest, "window_position", None)
+            if stored is None:
+                stored = getattr(self.forest, "_window_position", None)
             if stored is not None:
                 position = QPoint(*stored)
             else:
@@ -330,12 +337,47 @@ class ForestController(QObject):
                 screen = QGuiApplication.primaryScreen()
                 if screen is not None:
                     geo = screen.availableGeometry()
-                    cx = geo.center().x() - self.forest_window.width() // 2
-                    top = geo.top() + 24
-                    position = QPoint(cx, top)
+                    margin = 24
+                    x = geo.left() + margin
+                    y = geo.bottom() - self.forest_window.height() - margin
+                    position = QPoint(x, y)
                 else:
-                    position = QPoint(100, 100)
+                    position = QPoint(24, 600)
         self.forest_window.move(position)
+        # Seed the in-memory ForestDef so the first save without an
+        # explicit move still carries the position (matches the user
+        # spec "remember its last location").
+        try:
+            self.forest.window_position = (
+                int(position.x()), int(position.y()),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # v0.6.11 — keep ``forest.window_position`` in sync with every
+        # actual move so a later save (autosave or user-triggered)
+        # carries the latest coordinates.  Marking dirty triggers the
+        # debounced autosave when fallback_to_default is on.
+        def _on_hex_moved(hex_id: str) -> None:
+            if (
+                self.forest_window is None
+                or hex_id != self.forest_window._id
+            ):
+                return
+            try:
+                p = self.forest_window.pos()
+                new_pos = (int(p.x()), int(p.y()))
+                if self.forest.window_position != new_pos:
+                    self.forest.window_position = new_pos
+                    self._mark_dirty()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self._registry.hexagonMoved.connect(_on_hex_moved)
+            # Keep a reference so GC doesn't collect the closure.
+            self._forest_pos_slot = _on_hex_moved
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: could not wire window-position capture: {exc!r}")
         self.forest_window.show()
         # v0.6.10 macify: soft fade-in for the forest hub.
         try:
@@ -349,6 +391,14 @@ class ForestController(QObject):
         # Spawn items.
         for it in list(self.forest.items):
             self._spawn_item(it)
+
+        # v0.6.11 — clean up overlaps from stale stored positions.
+        # Each item's last-known position is restored verbatim in
+        # ``_spawn_item``; if the forest moved between saves the
+        # absolute coords may now land two items on top of each other.
+        # Detect overlapping pairs and surgical-repack the offenders
+        # so on-screen non-overlapping cells keep their layout.
+        self._resolve_member_overlap()
 
         # First-run: empty forest → welcome dialog after the next
         # event-loop tick.  v0.3.16: trigger now fires whenever
@@ -461,6 +511,66 @@ class ForestController(QObject):
                         self._spawned[_norm(item.path)] = cell
         except Exception as exc:  # noqa: BLE001
             _log(f"_spawn_item({item.path!r}): {exc!r}")
+
+    def _resolve_member_overlap(self) -> None:
+        """v0.6.11 — repack any forest members whose centres land on
+        (or very near) another member's centre (typically: stale
+        stored positions after the forest moved between saves).
+
+        Strategy: build the set of members that "stack" with at
+        least one peer (centre distance < half the hex size — well
+        below the honeycomb neighbour distance of ``size_px``, so
+        legitimately-adjacent cells aren't flagged), then call
+        ``_repack_members(fixed=non_colliding)``.  Non-overlapping
+        cells keep their saved positions verbatim; only the
+        offenders are re-slotted onto free honeycomb positions
+        around the forest hub.
+        """
+        forest = self.forest_window
+        if forest is None or not forest._members:
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        centres: list[tuple[str, int, int, int]] = []  # id, cx, cy, sz
+        for mid in forest._members.keys():
+            m = registry.get(mid)
+            if m is None:
+                continue
+            sz = m._size_px
+            cx = m.pos().x() + sz // 2
+            cy = m.pos().y() + sz // 2
+            centres.append((mid, cx, cy, sz))
+        if len(centres) < 2:
+            return
+
+        colliders: set[str] = set()
+        for i, (id_a, cx_a, cy_a, sz_a) in enumerate(centres):
+            for id_b, cx_b, cy_b, sz_b in centres[i + 1:]:
+                # Half the smaller hex size: well under the
+                # honeycomb neighbour spacing (~size_px) so we only
+                # catch genuine stacking, not normal adjacency.
+                threshold = min(sz_a, sz_b) * 0.5
+                if (
+                    abs(cx_a - cx_b) < threshold
+                    and abs(cy_a - cy_b) < threshold
+                ):
+                    colliders.add(id_a)
+                    colliders.add(id_b)
+        if not colliders:
+            return
+
+        non_colliding = {
+            mid for mid in forest._members.keys() if mid not in colliders
+        }
+        _log(
+            f"_resolve_member_overlap: {len(colliders)} of "
+            f"{len(forest._members)} member(s) overlap; surgical repack"
+        )
+        try:
+            forest._repack_members(fixed=non_colliding)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_resolve_member_overlap: repack failed: {exc!r}")
 
     def _attach_existing_master_as_member(self, ring_master: Any) -> None:
         """Make ``ring_master`` a member of the forest's group.

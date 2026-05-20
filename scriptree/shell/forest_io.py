@@ -239,6 +239,14 @@ class ForestDef:
     # byte-identical.
     icon_data: str = ""
     icon_format: str = ""
+    # v0.6.11 — last on-screen position of the forest hub window,
+    # restored on launch so the forest reopens where the user left
+    # it.  ``None`` means "no preference"; the controller falls
+    # back to the bottom-left of the primary screen.  Stored as a
+    # plain (x, y) tuple in window coordinates.  Serialised only
+    # when set so pre-v0.6.11 ``.scriptreeforest`` files stay
+    # byte-identical on round-trip.
+    window_position: tuple[int, int] | None = None
     schema_version: int = _VERSION
     """Path of the .scriptreeforest the forest was loaded from.  Set
     by ``load_forest``; ``None`` for forests created in memory."""
@@ -383,6 +391,10 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
         blob["icon_data"] = forest.icon_data
         if forest.icon_format:
             blob["icon_format"] = forest.icon_format
+    # v0.6.11 — emit the hub window position only when set.
+    if forest.window_position is not None:
+        wp = forest.window_position
+        blob["window_position"] = [int(wp[0]), int(wp[1])]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
     forest.loaded_from = str(path.resolve())
@@ -464,6 +476,21 @@ def load_forest(path: str | Path) -> ForestDef:
         update_mode=update_mode,  # type: ignore[arg-type]
     )
 
+    # v0.6.11 — restore the hub's last on-screen position when the
+    # file carries one.  Defensive parse: only accept a 2-tuple of
+    # ints; any other shape silently falls back to None so a hand-
+    # edited file can't poison the launcher.
+    wp_raw = raw.get("window_position")
+    window_position: tuple[int, int] | None = None
+    if (
+        isinstance(wp_raw, (list, tuple))
+        and len(wp_raw) == 2
+    ):
+        try:
+            window_position = (int(wp_raw[0]), int(wp_raw[1]))
+        except (TypeError, ValueError):
+            window_position = None
+
     forest = ForestDef(
         name=str(raw.get("name", "Forest")),
         items=items,
@@ -471,6 +498,7 @@ def load_forest(path: str | Path) -> ForestDef:
         auto_discover=auto,
         icon_data=str(raw.get("icon_data", "") or ""),
         icon_format=str(raw.get("icon_format", "") or ""),
+        window_position=window_position,
         schema_version=ver,
         loaded_from=str(path.resolve()),
     )

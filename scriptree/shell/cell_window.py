@@ -4468,13 +4468,34 @@ class CellWindow(QMainWindow):
                         member = registry.get(member_id)
                         if member is None:
                             continue
+                        # v0.6.11 — kill any in-flight eased-move on
+                        # this member before applying the rigid drag
+                        # translation.  Without this, a still-running
+                        # _pos_anim from a prior repack/reflow keeps
+                        # driving the member toward its old target and
+                        # the drag delta is overwritten the next
+                        # animation tick — the cell appears to "lag
+                        # behind" or get "left behind" entirely.
+                        prior = getattr(member, "_pos_anim", None)
+                        if prior is not None:
+                            try:
+                                prior.stop()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            member._pos_anim = None
                         member.move(member.pos().x() + delta_x, member.pos().y() + delta_y)
                 finally:
                     _GROUP_MOVE_IN_PROGRESS.discard(self._id)
 
-                # Edge-fold: after translating members, check which ones
-                # are now more-than-half off-screen and hide/show accordingly.
-                self._check_edge_fold()
+                # v0.6.11 — live edge reflow (replaces the old hide-only
+                # behaviour): when the group is dragged toward an edge,
+                # off-screen members are *relocated* to free on-screen
+                # honeycomb slots so they stay bonded and visible.  The
+                # call is throttled internally to ~50 ms; only the final
+                # call inside _live_edge_reflow_or_fold may fall back to
+                # the historical auto-hide when there's genuinely no
+                # on-screen slot left.
+                self._live_edge_reflow_or_fold()
 
         super().moveEvent(event)
 
@@ -5884,6 +5905,139 @@ class CellWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Edge-fold: auto-hide positioned members that go off-screen
     # ------------------------------------------------------------------
+
+    def _live_edge_reflow_or_fold(self) -> None:
+        """v0.6.11 — during a group drag, *relocate* off-screen members
+        to free on-screen honeycomb slots so they stay bonded to the
+        master and visible.  Falls back to the historical auto-hide
+        only when no on-screen slot is available.
+
+        Throttled to ~20 Hz so a per-pixel master move doesn't repack
+        the ring on every frame.  Per-frame cost dominated by
+        ``group_layout.repack``, which is cheap but not free.
+
+        Standalone-cell stay-on-screen clamping is handled separately
+        by ``_clamp_to_screen``.
+        """
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, "_last_live_reflow_time", 0.0)
+        if now - last < 0.05:
+            return
+        self._last_live_reflow_time = now
+
+        if self.role != "master" or not self._positioned:
+            return
+
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.group_layout import (
+            repack, screen_rect_for_master,
+        )
+        from PySide6.QtGui import QGuiApplication
+
+        registry = CellRegistry.instance()
+        app_inst = QGuiApplication.instance()
+        if app_inst is None:
+            return
+        screen = app_inst.screenAt(self.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+
+        off_ids: list[str] = []
+        on_ids: list[str] = []
+        for mid in self._positioned:
+            m = registry.get(mid)
+            if m is None:
+                continue
+            sz = m._size_px
+            rect = QRect(m.pos().x(), m.pos().y(), sz, sz)
+            inter = rect.intersected(avail)
+            inter_area = (
+                inter.width() * inter.height()
+                if not inter.isEmpty() else 0
+            )
+            if inter_area < (sz * sz) / 2:
+                off_ids.append(mid)
+            else:
+                on_ids.append(mid)
+
+        if not off_ids:
+            # Everything that should be visible IS — un-fold any
+            # members that came back on-screen.
+            for mid in list(self._auto_hidden):
+                m = registry.get(mid)
+                if m is None:
+                    continue
+                sz = m._size_px
+                rect = QRect(m.pos().x(), m.pos().y(), sz, sz)
+                inter = rect.intersected(avail)
+                inter_area = (
+                    inter.width() * inter.height()
+                    if not inter.isEmpty() else 0
+                )
+                if inter_area >= (sz * sz) / 2:
+                    self._auto_hidden.discard(mid)
+                    m.setVisible(True)
+            return
+
+        # Surgical repack: keep every on-screen member fixed, find
+        # fresh slots for the off-screen ones.
+        master_tl = (self.pos().x(), self.pos().y())
+        screen_rect = screen_rect_for_master(master_tl, self._size_px)
+        member_positions: dict[str, tuple[int, int]] = {}
+        for mid in self._positioned:
+            m = registry.get(mid)
+            if m is None:
+                continue
+            member_positions[mid] = (m.pos().x(), m.pos().y())
+
+        try:
+            new_positions = repack(
+                master_top_left=master_tl,
+                size_px=self._size_px,
+                shape=self._shape,
+                orientation=self._orientation,
+                members=member_positions,
+                screen_rect=screen_rect,
+                fixed=set(on_ids),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_live_edge_reflow_or_fold: repack failed: {exc!r}")
+            return
+
+        for mid in off_ids:
+            m = registry.get(mid)
+            if m is None:
+                continue
+            new_tl = new_positions.get(mid)
+            if new_tl is None:
+                # No on-screen slot — fall back to the historical
+                # hide so the ring doesn't grow off-screen ghosts.
+                if mid not in self._auto_hidden:
+                    self._auto_hidden.add(mid)
+                    m.setVisible(False)
+                continue
+            new_x, new_y = new_tl
+            if mid in self._auto_hidden:
+                self._auto_hidden.discard(mid)
+                m.setVisible(True)
+            # Instant move — we're inside the drag event loop and an
+            # eased animation would fight the next per-frame rigid
+            # translation from master.moveEvent.  Kill any prior
+            # in-flight pos animation first (defensive).
+            prior = getattr(m, "_pos_anim", None)
+            if prior is not None:
+                try:
+                    prior.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                m._pos_anim = None
+            m.move(new_x, new_y)
+
+        self.update()  # repaint badge / outline
 
     def _check_edge_fold(self) -> None:
         """Evaluate which positioned members should be auto-hidden due to

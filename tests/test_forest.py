@@ -1291,3 +1291,221 @@ class TestUnsavedForestDefaultSpot:
         prefs = load_preferences(load_branding())
         assert prefs.fallback_to_default is True
         assert prefs.default_forest_path == str(personal)
+
+
+# ===========================================================================
+# v0.6.11 — flakey-movement / overlap / live-edge / window-position fixes
+# ===========================================================================
+
+class TestForestWindowPositionPersistence:
+    """``ForestDef.window_position`` round-trips through io and the
+    controller restores it on start (default = bottom-left)."""
+
+    def test_window_position_round_trips(self, tmp_path: Path) -> None:
+        f = ForestDef(name="X")
+        f.window_position = (137, 421)
+        p = tmp_path / "x.scriptreeforest"
+        save_forest(f, p)
+        loaded = load_forest(p)
+        assert loaded.window_position == (137, 421)
+
+    def test_default_window_position_omitted_from_json(
+        self, tmp_path: Path,
+    ) -> None:
+        """Pre-v0.6.11 files have no ``window_position`` key — a
+        forest with the default (None) must round-trip byte-stable."""
+        f = ForestDef(name="X")
+        p = tmp_path / "x.scriptreeforest"
+        save_forest(f, p)
+        blob = json.loads(p.read_text(encoding="utf-8"))
+        assert "window_position" not in blob
+
+    def test_malformed_window_position_ignored(
+        self, tmp_path: Path,
+    ) -> None:
+        """A hand-edited ``window_position`` that isn't a 2-tuple of
+        ints silently falls back to ``None`` so the file can't poison
+        the launcher."""
+        p = tmp_path / "x.scriptreeforest"
+        p.write_text(json.dumps({
+            "format": "scriptreeforest", "version": 1,
+            "name": "X", "items": [], "excluded": [],
+            "auto_discover": {"enabled": True, "roots": [],
+                              "include": ["ring", "tree", "tool"],
+                              "update_mode": "prompt"},
+            "window_position": "not-a-tuple",
+        }), encoding="utf-8")
+        loaded = load_forest(p)
+        assert loaded.window_position is None
+
+    def test_start_uses_bottom_left_when_no_stored_position(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """First-run forest with no stored window_position → hub
+        appears in the bottom-left of the primary screen."""
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        monkeypatch.setattr(
+            io_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        pos = ctrl.forest_window.pos()
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            # x is near the left edge…
+            assert pos.x() <= geo.left() + 100
+            # …y is near the bottom edge.
+            assert pos.y() >= geo.bottom() - ctrl.forest_window.height() - 100
+        # And the seeded position lands on the in-memory ForestDef
+        # so the next save carries it.
+        assert ctrl.forest.window_position is not None
+
+    def test_start_restores_stored_window_position(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        f = ForestDef(name="F", window_position=(212, 88))
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=f, suppress_first_run=True)
+        pos = ctrl.forest_window.pos()
+        assert pos.x() == 212 and pos.y() == 88
+
+
+class TestMemberOverlapResolution:
+    """``_resolve_member_overlap`` repacks members that overlap and
+    leaves non-overlapping members alone (preserves user layout)."""
+
+    def test_overlapping_pair_is_repacked(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import CellWindow
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+
+        # Spawn two real members and stack them on the same pixel.
+        a = CellWindow(load_branding())
+        b = CellWindow(load_branding())
+        a.show(); b.show()
+        forest._members[a._id] = a.pos()
+        forest._members[b._id] = b.pos()
+        forest._positioned.add(a._id)
+        forest._positioned.add(b._id)
+        a.move(400, 400); b.move(400, 400)
+
+        ctrl._resolve_member_overlap()
+
+        # The surgical repack uses ``_smooth_move`` so the slot moves
+        # are eased animations — pump the event loop until they
+        # settle before asserting positions.
+        from PySide6.QtCore import QEventLoop, QRect, QTimer
+        loop = QEventLoop()
+        QTimer.singleShot(400, loop.quit)
+        loop.exec()
+
+        # Hex bounding rects overlap at adjacent honeycomb slots
+        # (hexes touch at edges but axis-aligned rects intersect).
+        # The real check is centre-stacking: any two cells whose
+        # centres lie within half the hex size are visually stacked.
+        ca = (a.pos().x() + a._size_px // 2, a.pos().y() + a._size_px // 2)
+        cb = (b.pos().x() + b._size_px // 2, b.pos().y() + b._size_px // 2)
+        threshold = min(a._size_px, b._size_px) * 0.5
+        assert (
+            abs(ca[0] - cb[0]) >= threshold
+            or abs(ca[1] - cb[1]) >= threshold
+        ), (
+            f"members still stacked after resolve: a-centre={ca}, "
+            f"b-centre={cb}, threshold={threshold}"
+        )
+        a.close(); b.close()
+
+
+class TestDragCancelsMemberAnimation:
+    """During a master drag, each member's in-flight ``_pos_anim``
+    must be cancelled so the rigid translation isn't overridden by
+    a stale animation target (the v0.6.10 "left behind" symptom)."""
+
+    def test_drag_kills_member_pos_anim(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        master = CellWindow(load_branding(), role="master")
+        member = CellWindow(load_branding())
+        master.show(); member.show()
+        master.move(500, 500)
+        member.move(560, 500)
+        master._members[member._id] = QPoint(560, 500)
+        master._positioned.add(member._id)
+
+        # Start an eased move on the member — the kind a prior
+        # repack would have started.
+        member._smooth_move(700, 500, duration_ms=400)
+        assert getattr(member, "_pos_anim", None) is not None
+
+        # Simulate the master taking a drag step.  moveEvent reads
+        # ``_drag_started`` + ``_last_pos`` and applies the rigid
+        # translation to every positioned member.
+        master._drag_started = True
+        master._last_pos = QPoint(500, 500)
+        master.move(510, 500)
+        # The moveEvent fires synchronously and should have killed
+        # the prior animation so the rigid +10 px translation wins.
+        assert getattr(member, "_pos_anim", None) is None
+        assert member.pos().x() == 570  # 560 + 10
+
+        master._drag_started = False
+        master.close(); member.close()
