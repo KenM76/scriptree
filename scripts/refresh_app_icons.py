@@ -73,6 +73,56 @@ _OVERRIDES: dict[str, str] = {
     "transfer_outlook_pst": "upload",
     "transfer_outlook_autocomplete": "key",  # autocomplete = stored key/data
     "merge_autocomplete_addresses": "link",
+    # --- SolidWorks toolkit --------------------------------------
+    # Differentiated by *operation* so the toolkit menu doesn't read
+    # as a wall of identical gears.  The toolkit root keeps the
+    # gear (``solidworks``) as its identity glyph; every leaf gets
+    # an operation-specific archetype.  These are generic CAD-
+    # operation names (rebuild, hide, restore, etc.) so the icon
+    # library transfers cleanly to any other CAD wrapper.
+    "solidworks_toolkit": "solidworks",
+    # AssemblyLoadDefaults/
+    "load-defaults": "settings",
+    # AssemblyPerformance/
+    "force-rebuild": "convert",
+    "hide-all-but-selected": "filter",
+    "resume-rebuild": "upload",
+    "set-all-lightweight": "archive",
+    "set-all-resolved": "package",
+    "show-all-components": "search",
+    "suspend-rebuild": "clock",
+    "visual-perf": "chart",
+    # DrawingPerformance/
+    "detailing-mode-default": "settings",
+    "disable-auto-view-update": "lock",
+    "fix-blank-views": "bug",
+    "restore-shaded-views": "download",
+    "set-draft": "edit",
+    "set-hq": "image",
+    "unshade-for-print": "printer",
+    # DxfExport/
+    "dxf-cleanup": "scissors",
+    "dxf-export": "convert",
+    "dxf-to-pdf": "pdf",
+    "dxfexport": "scissors",          # the .scriptreetree
+    # GraphicsCompatibility/
+    "gfx-compat": "chip",
+    "report-state": "chart",
+    "revert-stock": "download",
+    # HideSketches/
+    "hide-drawing-sketches": "filter",
+    # RemoveDrawingPages/
+    "remove-drawing-pages": "scissors",
+    # SheetCopy/
+    "copy-sheets": "package",
+    # sw_bridge/
+    "checkpoint": "pin",
+    "compare-hardware": "search",
+    "list-components": "document",
+    "replace-component": "convert",
+    "run-macro": "script",
+    "run-script": "script",
+    "sync-hardware": "convert",
 }
 
 
@@ -137,6 +187,7 @@ def refresh(targets: list[Path]) -> int:
 _DEFAULT_TARGETS = [
     Path("R:/ScripTreeApps/ffmpeg"),
     Path("R:/ScripTreeApps/outlook_migration"),
+    Path("R:/ScripTreeApps/SolidWorks"),
     Path(
         "C:/Users/Ken/OneDrive/Kens_Projects/Claude/Software/"
         "ScripTreeApps/ffmpeg"
@@ -144,6 +195,10 @@ _DEFAULT_TARGETS = [
     Path(
         "C:/Users/Ken/OneDrive/Kens_Projects/Claude/Software/"
         "ScripTreeApps/outlook_migration"
+    ),
+    Path(
+        "C:/Users/Ken/OneDrive/Kens_Projects/Claude/Software/"
+        "ScripTreeApps/SolidWorks"
     ),
 ]
 

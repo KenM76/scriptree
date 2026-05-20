@@ -319,26 +319,31 @@ legacy files stay byte-identical.
 >
 > A tool/tree with no icon renders as a bare text row in the cell
 > menu and the tree view. **When you author or generate a
-> `.scriptree` / `.scriptreetree`, give it an icon.** Two ways, in
-> order of preference:
+> `.scriptree` / `.scriptreetree`, give it an icon.**
 >
-> 1. **Reuse the shipped facet set.** The repo's `icons/` directory
->    holds a curated, trademark-safe, monochrome line set
->    (`icon-cli.svg`, `icon-spreadsheet.svg`, `icon-media.svg`,
->    `icon-solidworks.svg`, `icon-folder.svg`, `icon-database.svg`,
->    `icon-search.svg`, `icon-archive.svg`, `icon-settings.svg`,
->    `icon-tool.svg`, …). Pick the one whose **functional category**
->    matches the tool (a CLI wrapper → `cli`; a spreadsheet tool →
->    `spreadsheet`; a file-copy tool → `folder`; a generic utility
->    → `tool`). One archetype per category, fixed program-wide.
-> 2. **Generate a new one** only if no category fits — strictly per
->    [`../host-software-icon-style.md`](../host-software-icon-style.md):
+> See [`icon_library.md`](icon_library.md) for the canonical
+> reference: the full 52-icon bundled set grouped by category with
+> "use for" hints (§2), the keyword → icon heuristic in match
+> order (§3), the embed workflow (§5), worked examples for
+> multi-leaf suites — ffmpeg, outlook migration, SolidWorks
+> toolkit (§7), and the bar for generating a new archetype (§6).
+>
+> Short version, in order of preference:
+>
+> 1. **Reuse a bundled glyph.**  Pick the one whose *functional
+>    category* matches the tool by walking
+>    `icon_library.md` §1 decision tree.  One archetype per
+>    category, fixed program-wide.  For a multi-leaf suite, vary
+>    the leaves by operation while keeping the parent tree's icon
+>    as the suite's identity (§7).
+> 2. **Generate a new one** only if no §2 archetype fits — strictly
+>    per [`../host-software-icon-style.md`](../host-software-icon-style.md):
 >    48-grid, `fill="none"`, every element
 >    `stroke="currentColor" stroke-width="2.5"`, round caps/joins,
 >    1–4 stroke-only primitives, a leading
 >    `<!-- Generic … not the … trademark logo -->` comment, content
->    in the 4→44 band, must read at 24 px. **Never** a vendor's real
->    logo/wordmark/brand colour (hard legal gate).
+>    in the 4→44 band, must read at 24 px. **Never** a vendor's
+>    real logo/wordmark/brand colour (hard legal gate).
 >
 > **Embed it as PNG**, don't path-link it: rasterise the chosen
 > SVG to PNG, set `cell.icon_data` to the **base64 of the PNG** and

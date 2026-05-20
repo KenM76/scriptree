@@ -142,12 +142,23 @@ the declared sections.
   choices or value from an external command at form-open time
   (cascading dropdowns, dependent checkbox lists, auto-detected
   paths). The full provider stdin/stdout contract.
+- [`icon_library.md`](icon_library.md) — **start here for icon
+  picking.** The full bundled 52-icon set grouped by category with
+  a one-line "use for" hint per glyph, the keyword → icon
+  heuristic (`classify_icon`) rule table in match order, the
+  decision tree for picking an icon, the embed workflow (PNG, not
+  SVG — the portable runtime has no qsvg plugin), and how/when to
+  add a new archetype.  Cross-suite mapping conventions
+  (operation-by-operation, verb-keeps-the-meaning-distinct,
+  vendor-identity-on-the-root-only) with worked examples from
+  ffmpeg, outlook migration, and the SolidWorks toolkit.
 - [`../host-software-icon-style.md`](../host-software-icon-style.md)
-  — the trademark-safe monochrome line-icon spec. Every catalog you
-  author SHOULD carry an icon: reuse the shipped `icons/` set by
-  functional category, or generate one strictly to this spec, then
-  **embed** it as PNG (`cell.icon_data` base64 of the PNG + `cell.icon_format:"png"`) — the portable runtime has no SVG plugin.
-  See `scriptree_format.md` → "`cell` sub-object" authoring rule.
+  — the canonical trademark-safe monochrome line-icon spec.
+  Required reading before generating a *new* SVG when no §2
+  archetype in `icon_library.md` fits.  Defines the invariant
+  skeleton (48 grid, `currentColor`, stroke-width 2.5, 1–4
+  primitives, mandatory "generic … not the trademark" comment) +
+  the legal trademark gate.
 - [`parsers/`](parsers) — rules for generating CLI tools whose `--help`
   output will import cleanly into ScripTree on the first try. One file
   per tool family (`python_scripts.md`, `windows_exe.md`,
@@ -224,9 +235,17 @@ Before saving any generated `.scriptree`, verify each of these:
    enough — the argv has to actually work. This is the difference
    between "it loads" and "it does the thing."
 7. **The catalog carries an embedded icon.** A bare text row in the
-   cell menu / tree view is a defect. Reuse the shipped `icons/` set
-   by functional category, or generate one to
-   [`../host-software-icon-style.md`](../host-software-icon-style.md),
-   then embed it as PNG (`cell.icon_data` base64 of the PNG + `cell.icon_format:"png"`; portable runtime has no SVG plugin).
-   Never a vendor's real logo (legal gate). See
-   `scriptree_format.md` → "`cell` sub-object".
+   cell menu / tree view is a defect.  Walk the decision tree in
+   [`icon_library.md`](icon_library.md) §1: reuse a bundled glyph
+   from §2 (52 archetypes covering CAD, office docs, file system,
+   data, network, ops verbs, code/build/test, security, hardware,
+   media, measurement) — only generate a new SVG when none of the
+   §2 archetypes genuinely fit.  When generating, follow
+   [`../host-software-icon-style.md`](../host-software-icon-style.md)
+   verbatim, then embed it as PNG (`cell.icon_data` base64 of the
+   PNG + `cell.icon_format:"png"`; portable runtime has no SVG
+   plugin).  Never a vendor's real logo (legal gate).  For a
+   multi-leaf suite, vary the icons by operation — see
+   `icon_library.md` §7 worked examples (ffmpeg / outlook /
+   SolidWorks).  See `scriptree_format.md` → "`cell` sub-object"
+   for the schema.
