@@ -2325,8 +2325,36 @@ _GROUP_MOVE_IN_PROGRESS: set[str] = set()
 class CellWindow(QMainWindow):
     """Frameless, transparent, always-on-top hexagonal launcher window.
 
-    Per ADR-001 Â§sub-decision-2, the constructor receives a branding dict
+    Per ADR-001 §sub-decision-2, the constructor receives a branding dict
     (the parsed branding.config.json).  No brand literals live in this file.
+
+    Link vs Dock (v0.6.16 — the conceptual model in one place)
+    -----------------------------------------------------------
+    Every cell has TWO independent parent-pointers:
+
+    * **Link parent**  — ``_group_master_id`` (also exposed as
+      :pyattr:`link_master_id`).  The master this cell logically
+      belongs to.  Determines outline tint, save/exit-all
+      propagation, and — v0.6.16+ — collapse propagation down the
+      link tree.  Set once on join; **preserved on break-free**
+      (a cell dragged out of its cluster stays linked); cleared
+      only by the explicit "Leave group / Leave forest" gesture.
+
+    * **Dock parent** — encoded as membership in
+      ``master._positioned`` (the contiguous-cluster set).  The
+      master whose physical drag this cell rigidly translates
+      with.  A cell can be linked-but-not-docked
+      (:pyattr:`is_loose_linked` → True): logically associated
+      with the master, drawn with a dimmer outline, but NOT
+      translated when the master drags.  Re-docking happens
+      automatically when the snap engine fires.
+
+    Hierarchy: links form a tree with the Forest as root.  Rings
+    can be forest members (``ring._group_master_id == forest_id``)
+    so a forest-member ring's own cells are *transitive* forest
+    descendants — they collapse when the forest hub collapses
+    (recursive ``_start_collapse``), but only their direct master's
+    drag translates them.
 
     Instance roles
     --------------
@@ -3657,8 +3685,58 @@ class CellWindow(QMainWindow):
             # Unassociated standalone — green outline.
             return self._unassociated_stroke_color
 
-        # Associated standalone — normal stroke.
+        # v0.6.16 — "loose-linked": the cell is *linked* to a master
+        # (group_master_id is set) but isn't currently in that
+        # master's positional cluster (broken-free state).  Visual
+        # cue: same hue as a docked associated cell, but dimmer
+        # alpha (~55%) so the user can tell the cell is associated
+        # *without* being in the cluster right now.  The link still
+        # propagates collapse / save / outline tint; only the
+        # opacity is reduced.
+        if self._is_loose_linked():
+            c = QColor(self._stroke_color)
+            c.setAlpha(round(c.alpha() * 0.55))
+            return c
+
+        # Docked associated standalone — normal stroke.
         return self._stroke_color
+
+    def _is_loose_linked(self) -> bool:
+        """v0.6.16 — True iff this cell has a link_master but isn't
+        currently in that master's positional cluster (a "free but
+        still associated" break-free state).
+
+        Used by ``_compute_stroke_color`` to dim the outline so the
+        user can tell at a glance whether the cell is docked or
+        just loose-linked.
+        """
+        mid = self._group_master_id
+        if mid is None or self.role == "master":
+            return False
+        from scriptree.shell.cell_registry import CellRegistry
+        master = CellRegistry.instance().get(mid)
+        if master is None:
+            return False
+        return self._id not in master._positioned
+
+    @property
+    def link_master_id(self) -> "str | None":
+        """v0.6.16 — read-only alias for ``_group_master_id``.
+
+        The id of this cell's *logical* parent — the master it
+        collapses with, shows the "associated" outline tint for,
+        and saves under.  ``None`` for unaffiliated cells and for
+        masters themselves.  See the class docstring for the full
+        link-vs-dock model.
+        """
+        return self._group_master_id
+
+    @property
+    def is_loose_linked(self) -> bool:
+        """v0.6.16 — read-only flag: True when ``link_master_id`` is
+        set but the cell isn't currently in the link-master's
+        ``_positioned`` (dock) set."""
+        return self._is_loose_linked()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -4465,6 +4543,22 @@ class CellWindow(QMainWindow):
         # off-screen" invariant — every other code path relies on
         # this safety net at rest.
         if event.button() == Qt.LeftButton and was_dragging:
+            # v0.6.16 — masters that release near a forest-linked
+            # cell *join the forest* (link=Forest, dock=Forest)
+            # rather than absorbing the cell as a ring member.
+            # This is the user-spec direction-asymmetry: "drag a
+            # ring to a cell that is docked to the forest" should
+            # park the ring beside the cell as a forest sibling,
+            # not pull the cell into the ring.  Runs BEFORE the
+            # absorb routine so we don't accidentally poach a
+            # forest-linked free cell.
+            if self.role == "master":
+                try:
+                    self._try_join_forest_near_member()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_try_join_forest_near_member raised {exc!r}"
+                    )
             # v0.6.14 — masters that landed near a free cell on
             # release absorb it as a new ring member (and inherit
             # the forest link when applicable).  Runs BEFORE the
@@ -6036,6 +6130,94 @@ class CellWindow(QMainWindow):
     # Edge-fold: auto-hide positioned members that go off-screen
     # ------------------------------------------------------------------
 
+    def _try_join_forest_near_member(self) -> None:
+        """v0.6.16 — at master drag-end, if this master is not yet
+        linked anywhere AND it released within docking distance of
+        a cell that's linked to the forest, promote *this master*
+        to a forest member (``link=Forest, dock=Forest``).
+
+        This is the directional inverse of
+        ``_try_absorb_nearby_free_cells``: when the user drags a
+        ring *to* a forest member, the ring should join the forest
+        as a sibling — NOT pull the forest member into itself.
+
+        Implementation: just add the master to ``forest._members +
+        _positioned`` and call ``forest._repack_members(fixed=
+        existing)``.  The forest's repack places the new member on
+        its closest free first-ring slot, which by closest-slot
+        semantics will be adjacent to the cell the user dragged
+        toward.  No need for explicit "dock to that cell" wiring —
+        the layout authority is the forest's honeycomb.
+        """
+        if self.role != "master":
+            return
+        if getattr(self, "_is_forest_master", False):
+            return
+        # Already linked somewhere?  No double-link.
+        if self._group_master_id is not None:
+            return
+
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        # Find the forest hub (singleton).
+        forest = None
+        for m in registry.masters():
+            if getattr(m, "_is_forest_master", False):
+                forest = m
+                break
+        if forest is None:
+            return  # No forest in this session; nothing to join.
+
+        # Look for any forest-linked cell within docking distance of
+        # the master.  The forest-linked cell can be a standalone
+        # OR another ring master (forest member).
+        dock_radius = self._size_px * 1.6
+        sz = self._size_px
+        mcx = self.pos().x() + sz // 2
+        mcy = self.pos().y() + sz // 2
+
+        nearest_id: str | None = None
+        nearest_dist: float = float("inf")
+        for h in registry.all():
+            if h._id == self._id or h._id == forest._id:
+                continue
+            if not h.isVisible():
+                continue
+            if h._group_master_id != forest._id:
+                continue  # not a forest member
+            csx = h.pos().x() + h._size_px // 2
+            csy = h.pos().y() + h._size_px // 2
+            dist = math.hypot(csx - mcx, csy - mcy)
+            if dist <= dock_radius and dist < nearest_dist:
+                nearest_id = h._id
+                nearest_dist = dist
+        if nearest_id is None:
+            return  # not near any forest-linked cell — no-op
+
+        # Promote: become a forest member.
+        forest._members[self._id] = QPoint(self.pos())
+        forest._positioned.add(self._id)
+        forest._dock_partners.add(self._id)
+        self._group_master_id = forest._id
+        forest._ring_dirty = True
+        forest.update()
+        # Repack the forest so the new member lands on a real
+        # honeycomb slot adjacent to where it was dropped.  The
+        # closest-free-slot semantics naturally satisfy the user's
+        # "docks to cell; falls back to another forest-linked cell
+        # if no space" requirement.
+        try:
+            existing = {mid for mid in forest._members if mid != self._id}
+            forest._repack_members(fixed=existing)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_try_join_forest_near_member: repack failed: {exc!r}")
+        _log(
+            f"_try_join_forest_near_member: master {self._id[:8]} "
+            f"joined forest near cell {nearest_id[:8]}"
+        )
+        self.update()
+
     def _try_absorb_nearby_free_cells(self) -> None:
         """v0.6.14 — at the end of a master drag, absorb any free
         standalone cell whose centre lies within ``absorb_radius``
@@ -6081,6 +6263,17 @@ class CellWindow(QMainWindow):
             # member ring.
             gm = c._group_master_id
             if gm is not None and gm != self._id:
+                # v0.6.16 — sibling guard: if `c` shares THIS
+                # master's link parent (we're peers under the
+                # same forest hub), do not absorb.  This lets a
+                # master that just became a forest member (via
+                # ``_try_join_forest_near_member``) sit beside
+                # its peer forest cells without pulling them in.
+                if (
+                    self._group_master_id is not None
+                    and gm == self._group_master_id
+                ):
+                    continue
                 gm_cell = registry.get(gm)
                 if gm_cell is not None and not getattr(
                     gm_cell, "_is_forest_master", False,
@@ -7104,6 +7297,25 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
+            # v0.6.16 — collapse propagates DOWN the link tree.  If
+            # this member is itself a master with link-children
+            # (e.g. a ring inside the forest), collapse it FIRST so
+            # its members tuck into it before it travels toward us.
+            # Visually: ring's cells start shrinking toward the
+            # ring; in parallel the ring shrinks toward the forest.
+            # Result: the whole sub-tree shrinks together.
+            if (
+                m.role == "master"
+                and getattr(m, "_members", None)
+                and m._collapse_state == "expanded"
+            ):
+                try:
+                    m._start_collapse()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_start_collapse: recursive collapse of "
+                        f"{m._id[:8]} raised {exc!r} — continuing"
+                    )
             anim = m._animate_to(target, duration_ms=250)
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
@@ -7167,6 +7379,21 @@ class CellWindow(QMainWindow):
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
             anim.start()
+            # v0.6.16 — link-tree expand propagation: if this member
+            # is itself a master in collapsed state, expand it too
+            # so the whole sub-tree re-blooms together.
+            if (
+                m.role == "master"
+                and getattr(m, "_members", None)
+                and m._collapse_state == "collapsed"
+            ):
+                try:
+                    m._start_expand()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_start_expand: recursive expand of "
+                        f"{m._id[:8]} raised {exc!r} — continuing"
+                    )
 
         _log(f"_start_expand {self._id}: animating {len(members)} member(s) to stored positions")
 

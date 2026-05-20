@@ -1392,6 +1392,150 @@ class TestUnsavedForestDefaultSpot:
         assert m._group_master_id == forest._id
         m.close(); c.close()
 
+    def test_loose_linked_outline_dimmer_than_docked(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.16 — a cell that has link_master_id but isn't in
+        the master's _positioned set (break-free state) renders
+        its outline at ~55% alpha so the user can tell it's
+        loose-linked rather than fully docked."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        master = CellWindow(load_branding(), role="master")
+        c = CellWindow(load_branding())
+        master.show(); c.show()
+        master.move(400, 400); c.move(456, 400)
+        master._members[c._id] = QPoint(456, 400)
+        master._positioned.add(c._id)
+        c._group_master_id = master._id
+
+        # While docked, the stroke is the normal _stroke_color.
+        docked_color = c._compute_stroke_color()
+        assert not c.is_loose_linked
+
+        # Break-free: remove from _positioned but keep the link.
+        master._positioned.discard(c._id)
+        assert c.is_loose_linked
+        loose_color = c._compute_stroke_color()
+        # Same RGB, different alpha (dimmer).
+        assert loose_color.alpha() < docked_color.alpha()
+        master.close(); c.close()
+
+    def test_collapse_propagates_recursively_to_ring_members(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.16 — collapsing the forest hub recursively collapses
+        every ring-member it owns, including the ring's own cells.
+        Walk the link tree down to all descendants."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+
+        # A ring that's a forest member, with its own cells.
+        ring = CellWindow(load_branding(), role="master")
+        cell_x = CellWindow(load_branding())
+        cell_y = CellWindow(load_branding())
+        ring.show(); cell_x.show(); cell_y.show()
+        ring.move(500, 500)
+        cell_x.move(556, 500); cell_y.move(556, 556)
+        ring._members[cell_x._id] = QPoint(556, 500)
+        ring._members[cell_y._id] = QPoint(556, 556)
+        ring._positioned.add(cell_x._id)
+        ring._positioned.add(cell_y._id)
+        cell_x._group_master_id = ring._id
+        cell_y._group_master_id = ring._id
+        forest._members[ring._id] = QPoint(500, 500)
+        forest._positioned.add(ring._id)
+        ring._group_master_id = forest._id
+
+        # All expanded at the start.
+        assert forest._collapse_state == "expanded"
+        assert ring._collapse_state == "expanded"
+        # Collapse the forest.
+        forest._start_collapse()
+        # Forest is collapsing, AND the ring should also be in a
+        # collapsing/collapsed state (recursion fired).
+        assert forest._collapse_state == "collapsing"
+        assert ring._collapse_state in ("collapsing", "collapsed")
+        ring.close(); cell_x.close(); cell_y.close()
+
+    def test_ring_drag_end_near_forest_member_joins_forest(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.16 — drag a free ring to a cell that's a forest
+        member: the ring becomes a forest member (link=Forest,
+        dock=Forest).  The cell is NOT pulled into the ring."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+
+        # A cell that's already a forest member.
+        anchor = CellWindow(load_branding())
+        anchor.show()
+        anchor.move(500, 500)
+        forest._members[anchor._id] = QPoint(500, 500)
+        forest._positioned.add(anchor._id)
+        anchor._group_master_id = forest._id
+
+        # A free ring master near the anchor.  Not linked yet.
+        ring = CellWindow(load_branding(), role="master")
+        ring.show()
+        ring.move(560, 500)
+        assert ring._group_master_id is None
+
+        ring._try_join_forest_near_member()
+
+        # Ring is now a forest member.
+        assert ring._id in forest._members
+        assert ring._id in forest._positioned
+        assert ring._group_master_id == forest._id
+        # Anchor cell is UNTOUCHED — still a direct forest member.
+        assert anchor._id in forest._members
+        assert anchor._group_master_id == forest._id
+        assert anchor._id not in ring._members
+        ring.close(); anchor.close()
+
     def test_flush_prompt_personal_choice_no_file_dialog(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
