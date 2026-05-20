@@ -143,7 +143,7 @@ the declared sections.
   (cascading dropdowns, dependent checkbox lists, auto-detected
   paths). The full provider stdin/stdout contract.
 - [`icon_library.md`](icon_library.md) — **start here for icon
-  picking.** The full bundled 52-icon set grouped by category with
+  picking.** The full bundled 54-icon set grouped by category with
   a one-line "use for" hint per glyph, the keyword → icon
   heuristic (`classify_icon`) rule table in match order, the
   decision tree for picking an icon, the embed workflow (PNG, not
@@ -274,7 +274,7 @@ verify each of these:
 7. **The catalog carries an embedded icon.** A bare text row in the
    cell menu / tree view is a defect.  Walk the decision tree in
    [`icon_library.md`](icon_library.md) §1: reuse a bundled glyph
-   from §2 (52 archetypes covering CAD, office docs, file system,
+   from §2 (54 archetypes covering CAD, office docs, file system,
    data, network, ops verbs, code/build/test, security, hardware,
    media, measurement) — only generate a new SVG when none of the
    §2 archetypes genuinely fit.  When generating, follow

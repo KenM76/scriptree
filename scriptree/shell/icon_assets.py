@@ -95,6 +95,14 @@ def bundled_icon_b64(name: str) -> str:
 # vendor mark — the glyphs themselves are trademark-safe by §5.
 
 _ICON_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    # ScripTree's own primitives win first so a name like "Forest
+    # hub launcher" or "Tree ring layout" routes here rather than
+    # to a generic rule that happens to match a substring ("rest"
+    # → web; "build" → build).  Keep keywords specific so common
+    # words don't get misrouted.
+    ((" ring ", " rings ", "scriptreering", "tree ring",
+      "ring hub"), "ring"),
+    (("forest", "scriptreeforest", "workspace root"), "forest"),
     (("solidworks", "sldworks", "sw_bridge", "catia", "creo",
       "mechanical", "cad ", "freecad"), "solidworks"),
     # Cutting / fabrication beats plain CAD: a "DXF plasma cut" or

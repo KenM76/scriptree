@@ -199,6 +199,14 @@ def test_classify_icon_maps_keywords_to_glyphs() -> None:
         "Encrypt secret": "lock",
         "download release": "download",
         "Search files (ripgrep)": "search",
+        # v0.6.13 — ScripTree's own primitives.  Keep these
+        # examples clear of other rule keywords so we test the
+        # ring/forest match itself, not the rule-order tiebreaker.
+        "Tree ring layout": "ring",
+        "Forest hub launcher": "forest",
+        # Word-boundary guard: bare 'ring' inside another word
+        # must NOT misroute to ring (this used to confuse "string").
+        "Sort string list": "tool",
     }
     for nm, expected in cases.items():
         assert classify_icon(name=nm) == expected, (

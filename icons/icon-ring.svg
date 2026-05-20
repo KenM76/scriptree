@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <!-- Generic ring/hub-and-orbit shape — placeholder, not a vendor trademark logo -->
+  <circle cx="24" cy="24" r="5" stroke="currentColor" stroke-width="2.5"/>
+  <circle cx="24" cy="24" r="16" stroke="currentColor" stroke-width="2.5"/>
+</svg>

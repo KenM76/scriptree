@@ -299,7 +299,16 @@ class ForestController(QObject):
                 from scriptree.shell.icon_assets import (
                     BUNDLED_FORMAT, bundled_icon_b64,
                 )
-                ic_data = bundled_icon_b64("folder")
+                # v0.6.13 — the forest hub gets the dedicated
+                # ``forest`` glyph (a conifer-tree archetype) so the
+                # workspace root reads as the forest, not as a
+                # generic folder.  Fall back to ``folder`` only if
+                # the new icon isn't on disk yet (e.g. running an
+                # older deploy whose icons/ wasn't refreshed).
+                ic_data = (
+                    bundled_icon_b64("forest")
+                    or bundled_icon_b64("folder")
+                )
                 ic_fmt = BUNDLED_FORMAT
             if ic_data:
                 self.forest_window._icon_data_b64 = ic_data

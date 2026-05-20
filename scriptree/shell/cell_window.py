@@ -80,6 +80,7 @@ from typing import Literal
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
     QPoint,
     QPointF,
     QPropertyAnimation,
@@ -118,6 +119,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -3566,6 +3568,40 @@ class CellWindow(QMainWindow):
             self.setToolTip(title or "ScripTree")
         except Exception:  # noqa: BLE001
             pass
+
+    def event(self, ev) -> bool:  # noqa: ANN001
+        """Manual ``QEvent.ToolTip`` handler (v0.6.13).
+
+        ``setToolTip`` alone is not enough on this widget: cells are
+        ``Qt.Tool`` frameless windows with ``WA_TranslucentBackground``
+        and a custom polygon mask, and on Windows the default tooltip
+        delivery sometimes silently skips that combination (the
+        tooltip popup is itself a ``Qt.Tool`` window, and the stacking
+        + transparent-input interactions can prevent the host's
+        QEvent.ToolTip from being routed reliably).
+
+        We catch the ``ToolTip`` event ourselves and call
+        ``QToolTip.showText`` with the cell's resolved hover title at
+        the cursor's global position.  ``setToolTip`` is still set in
+        ``_update_hover_tooltip`` so accessibility tools that read
+        the property directly continue to work; this override is the
+        belt-and-suspenders that guarantees the visible tip.
+        """
+        try:
+            if ev.type() == QEvent.Type.ToolTip:
+                from scriptree.shell.tree_popup import _popup_header_text
+                title = _popup_header_text(self)
+                if title:
+                    QToolTip.showText(
+                        ev.globalPos(), title, self,
+                    )
+                else:
+                    QToolTip.hideText()
+                    ev.ignore()
+                return True
+        except Exception:  # noqa: BLE001
+            pass  # Never let a tooltip glitch break event delivery.
+        return super().event(ev)
 
     def apply_always_on_top_change(self, on: bool) -> None:
         """Toggle the WindowStaysOnTopHint flag live."""

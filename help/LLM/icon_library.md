@@ -63,7 +63,7 @@ For every catalog you touch:
 
 ---
 
-## 2. The bundled set (52 icons, all 48-grid `currentColor` line glyphs)
+## 2. The bundled set (54 icons, all 48-grid `currentColor` line glyphs)
 
 Each entry: `icon-<name>` — what it is — when to pick it.  Names
 without the `icon-` prefix are what you pass to `embed_icon` /
@@ -101,7 +101,9 @@ identify the **category** of host software, never a vendor's logo.
 | `folder` | Directory, explorer, tree view, filesystem ops. |
 | `archive` | ZIP / TAR / 7z / compression, backups (as in "produce a compressed bundle"). |
 | `package` | Parcel/box: installers, distribution packages (MSI, wheel, npm, pip), "fully resolved" / "all components included". |
-| `container` | Docker / Podman / Kubernetes / Compose / "grouped cells" hub. |
+| `container` | Docker / Podman / Kubernetes / Compose / generic grouped-cells hub. |
+| `forest` | Stepped conifer + trunk — the **ScripTree forest hub** (workspace root, owns rings + trees + tools).  Used as the default hub icon by `ForestController` when no bound catalog. |
+| `ring` | Concentric circles (hub + orbit) — the **ScripTree ring hub** (a master cell that owns several cell members).  Used as the bare-hub default by `ring_io.load_ring`. |
 
 ### 2.4 Data / databases / metrics
 
@@ -198,98 +200,110 @@ matches `autocad`, but "plasma" matches `scissors` higher up).
 
 **Rule order (first match wins):**
 
-1. CAD: `solidworks`, `sldworks`, `sw_bridge`, `catia`, `creo`,
+1. Ring (ScripTree primitive — wins first so substring
+   matches like "rest" → web don't misroute a ring-named
+   tool): `" ring "`, `" rings "`, `scriptreering`,
+   `tree ring`, `ring hub` → `ring`.
+2. Forest (ScripTree primitive — same reason): `forest`,
+   `scriptreeforest`, `workspace root` → `forest`.
+3. CAD: `solidworks`, `sldworks`, `sw_bridge`, `catia`, `creo`,
    `mechanical`, `cad `, `freecad` → `solidworks`
-2. Fabrication-cut: `scissors`, `cut`, `plasma`, `laser`, `nest`,
+4. Fabrication-cut: `scissors`, `cut`, `plasma`, `laser`, `nest`,
    `trim`, `kerf` → `scissors`  *(beats `autocad` so "DXF plasma cut"
    doesn't get the drafting triangle)*
-3. 2D drafting: `autocad`, `dwg`, `dxf`, `draft` → `autocad`
-4. 3D modeling: `inventor`, `fusion360`, `3d model`, `assembly`
+5. 2D drafting: `autocad`, `dwg`, `dxf`, `draft` → `autocad`
+6. 3D modeling: `inventor`, `fusion360`, `3d model`, `assembly`
    → `inventor`
-5. BIM: `revit`, `bim`, `ifc`, `archicad` → `revit`
-6. Measure: `ruler`, `measure`, `dimension`, `caliper`, `gauge`
+7. BIM: `revit`, `bim`, `ifc`, `archicad` → `revit`
+8. Measure: `ruler`, `measure`, `dimension`, `caliper`, `gauge`
    → `ruler`
-7. VCS: `git`, `svn`, `mercurial`, `version control`, `commit`,
+9. VCS: `git`, `svn`, `mercurial`, `version control`, `commit`,
    `branch`, `vcs` → `versioncontrol`
-8. PowerShell: `powershell`, `pwsh`, `.ps1`, `power shell` → `power`
-9. Shell/CLI: `terminal`, `shell`, `bash`, `cmd`, `console`, `cli`,
+10. PowerShell: `powershell`, `pwsh`, `.ps1`, `power shell` → `power`
+11. Shell/CLI: `terminal`, `shell`, `bash`, `cmd`, `console`, `cli`,
    `command line`, `zsh`, `sh ` → `cli`
-10. Script: `python`, `.py`, `node`, `ruby`, `perl`, `lua`, `script`,
+12. Script: `python`, `.py`, `node`, `ruby`, `perl`, `lua`, `script`,
     `macro`, `automation`, `batch`, `.bat` → `script`
-11. Build: `compile`, `build`, `make`, `gradle`, `maven`, `cmake`,
+13. Build: `compile`, `build`, `make`, `gradle`, `maven`, `cmake`,
     `msbuild`, `ninja`, `bundler` → `build`
-12. Test: `test`, `pytest`, `unittest`, `lint`, `spec`, `verify`,
+14. Test: `test`, `pytest`, `unittest`, `lint`, `spec`, `verify`,
     `assert`, `qa` → `test`
-13. Debug: `debug`, `bug`, `trace`, `profiler`, `diagnos` → `bug`
-14. Archive: `zip`, `archive`, `tar`, `7z`, `compress`, `unzip`,
+15. Debug: `debug`, `bug`, `trace`, `profiler`, `diagnos` → `bug`
+16. Archive: `zip`, `archive`, `tar`, `7z`, `compress`, `unzip`,
     `extract`, `gzip`, `rar` → `archive`
-15. Package: `package`, `installer`, `setup`, `deploy`, `msi`,
+17. Package: `package`, `installer`, `setup`, `deploy`, `msi`,
     `wheel`, `npm`, `pip ` → `package`
-16. Download: `download`, `fetch`, `pull`, `wget`, `curl`, `get `
+18. Download: `download`, `fetch`, `pull`, `wget`, `curl`, `get `
     → `download`
-17. Upload: `upload`, `publish`, `push`, `sync up`, `deploy to`
+19. Upload: `upload`, `publish`, `push`, `sync up`, `deploy to`
     → `upload`
-18. Convert: `convert`, `transcode`, `ffmpeg`, `transform`, `encode`,
+20. Convert: `convert`, `transcode`, `ffmpeg`, `transform`, `encode`,
     `decode`, `export`, `import` → `convert`
-19. Search: `search`, `find`, `locate`, `index`, `lookup`, `grep`,
+21. Search: `search`, `find`, `locate`, `index`, `lookup`, `grep`,
     `ripgrep` → `search`  *(grep moved here from filter so "search
     files (ripgrep)" reads as search, not filter)*
-20. Filter: `filter`, `sed`, `awk`, `query`, `select `, `where `
+22. Filter: `filter`, `sed`, `awk`, `query`, `select `, `where `
     → `filter`
-21. Database: `database`, `sql`, `postgres`, `mysql`, `sqlite`,
+23. Database: `database`, `sql`, `postgres`, `mysql`, `sqlite`,
     `mongo`, `redis`, `db ` → `database`
-22. Network: `network`, `ping`, `tcp`, `socket`, `port`, `dns`,
+24. Network: `network`, `ping`, `tcp`, `socket`, `port`, `dns`,
     `ssh`, `ftp`, `vpn`, `lan`, `subnet` → `network`
-23. Server: `server`, `daemon`, `service`, `apache`, `nginx`,
+25. Server: `server`, `daemon`, `service`, `apache`, `nginx`,
     `iis`, `hostname`, `webserver` → `server`  *(no bare `host`
     keyword — `ping host` was getting `server` instead of `network`)*
-24. Cloud: `cloud`, `aws`, `azure`, `gcp`, `s3 `, `lambda` → `cloud`
-25. Container: `docker`, `container`, `podman`, `kubernetes`, `k8s`,
+26. Cloud: `cloud`, `aws`, `azure`, `gcp`, `s3 `, `lambda` → `cloud`
+27. Container: `docker`, `container`, `podman`, `kubernetes`, `k8s`,
     `compose` → `container`
-26. Link: `link`, `url`, `shortcut`, `alias`, `symlink` → `link`
-27. Lock: `lock`, `encrypt`, `decrypt`, `cipher`, `ssl`, `tls`,
+28. Link: `link`, `url`, `shortcut`, `alias`, `symlink` → `link`
+29. Lock: `lock`, `encrypt`, `decrypt`, `cipher`, `ssl`, `tls`,
     `credential`, `password`, `secret` → `lock`
-28. Key: `key`, `token`, `auth`, `license`, `keygen` → `key`
-29. Shield: `shield`, `secure`, `security`, `firewall`, `antivirus`,
+30. Key: `key`, `token`, `auth`, `license`, `keygen` → `key`
+31. Shield: `shield`, `secure`, `security`, `firewall`, `antivirus`,
     `protect`, `defender` → `shield`
-30. Calendar: `schedule`, `calendar`, `cron`, `timer`, `reminder`
+32. Calendar: `schedule`, `calendar`, `cron`, `timer`, `reminder`
     → `calendar`
-31. Clock: `clock`, `time`, `stopwatch`, `duration`, `uptime`
+33. Clock: `clock`, `time`, `stopwatch`, `duration`, `uptime`
     → `clock`
-32. Chart: `chart`, `graph`, `analytic`, `metric`, `stat`, `report`,
+34. Chart: `chart`, `graph`, `analytic`, `metric`, `stat`, `report`,
     `plot`, `dashboard` → `chart`
-33. Spreadsheet: `spreadsheet`, `excel`, `csv`, `xlsx`, ` calc`
+35. Spreadsheet: `spreadsheet`, `excel`, `csv`, `xlsx`, ` calc`
     → `spreadsheet`
-34. Presentation: `presentation`, `powerpoint`, `slide`, `pptx`,
+36. Presentation: `presentation`, `powerpoint`, `slide`, `pptx`,
     `keynote` → `presentation`
-35. MS Office: `office`, `word`, `docx`, `outlook` → `msoffice`
-36. PDF: `pdf`, `acrobat` → `pdf`
-37. Email: `email`, `mail`, `smtp`, `imap`, `inbox` → `email`
-38. Print: `printer`, `print`, `plot `, `cups` → `printer`
-39. Audio: `audio`, `sound`, `mp3`, `wav`, `music`, `voice` → `audio`
-40. Video: `video`, `movie`, `film`, `mp4`, `stream`, `record`
+37. MS Office: `office`, `word`, `docx`, `outlook` → `msoffice`
+38. PDF: `pdf`, `acrobat` → `pdf`
+39. Email: `email`, `mail`, `smtp`, `imap`, `inbox` → `email`
+40. Print: `printer`, `print`, `plot `, `cups` → `printer`
+41. Audio: `audio`, `sound`, `mp3`, `wav`, `music`, `voice` → `audio`
+42. Video: `video`, `movie`, `film`, `mp4`, `stream`, `record`
     → `video`
-41. Image: `image`, `photo`, `picture`, `png`, `jpg`, `jpeg`, `svg`,
+43. Image: `image`, `photo`, `picture`, `png`, `jpg`, `jpeg`, `svg`,
     `raster`, `thumbnail` → `image`
-42. Media: `media`, `player`, `playlist` → `media`
-43. Chip: `chip`, `cpu`, `processor`, `firmware`, `embedded`,
+44. Media: `media`, `player`, `playlist` → `media`
+45. Chip: `chip`, `cpu`, `processor`, `firmware`, `embedded`,
     `arduino`, `raspberry` → `chip`
-44. Disk/storage: `disk`, `drive`, `storage`, `backup`, `volume`,
+46. Disk/storage: `disk`, `drive`, `storage`, `backup`, `volume`,
     `partition`, `mount` → `server`
-45. Pin: `location`, `map`, `pin`, `geo`, `gps`, `coordinate`
+47. Pin: `location`, `map`, `pin`, `geo`, `gps`, `coordinate`
     → `pin`
-46. Edit: `edit`, `editor`, `rename`, `modify`, `patch`, `pencil`
+48. Edit: `edit`, `editor`, `rename`, `modify`, `patch`, `pencil`
     → `edit`
-47. Settings: `settings`, `config`, `preference`, `options`, `tune`,
+49. Settings: `settings`, `config`, `preference`, `options`, `tune`,
     `profile` → `settings`
-48. Web: `web`, `http`, `browser`, `html`, `rest`, `api`, `site`
+50. Web: `web`, `http`, `browser`, `html`, `rest`, `api`, `site`
     → `web`
-49. Window: `window`, `gui`, `desktop`, `app ` → `window`
-50. Code: `code`, `develop`, `ide`, `compiler`, `sdk`, `function`
+51. Window: `window`, `gui`, `desktop`, `app ` → `window`
+52. Code: `code`, `develop`, `ide`, `compiler`, `sdk`, `function`
     → `code`
-51. Document: `document`, `doc `, `text`, `note`, `readme`,
+53. Document: `document`, `doc `, `text`, `note`, `readme`,
     `manual`, `report ` → `document`
-52. Folder: `folder`, `directory`, `explorer`, `tree`, `files`,
+54. Ring (ScripTree primitive): `" ring "`, `" rings "`,
+    `scriptreering`, `tree ring`, `ring hub` → `ring`
+    *(word-boundary spaces are intentional; bare "ring" would
+    misroute "string"/"monitoring"/"engineering")*
+55. Forest (ScripTree primitive): `forest`, `scriptreeforest`,
+    `workspace root` → `forest`
+56. Folder: `folder`, `directory`, `explorer`, `tree`, `files`,
     `filesystem` → `folder`
 
 Default when nothing matches: **`tool`**.

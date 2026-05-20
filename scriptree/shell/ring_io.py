@@ -670,7 +670,15 @@ def load_ring(
             from scriptree.shell.icon_assets import (
                 BUNDLED_FORMAT, bundled_icon_b64,
             )
-            b64 = bundled_icon_b64("container")
+            # v0.6.13 — bare ring hubs get the dedicated ``ring``
+            # glyph (concentric circles = hub + orbit) so a tree
+            # ring is visually distinct from the forest hub.
+            # Fall back to ``container`` if the new icon isn't
+            # present (older deploy whose icons/ wasn't refreshed).
+            b64 = (
+                bundled_icon_b64("ring")
+                or bundled_icon_b64("container")
+            )
             if b64:
                 master_win._icon_data_b64 = b64
                 master_win._icon_data_format = BUNDLED_FORMAT

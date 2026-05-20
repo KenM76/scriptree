@@ -427,6 +427,33 @@ class TestHoverTooltip:
         assert f.toolTip() == "Forest"
         f.close()
 
+    def test_tooltip_event_handler_fires_and_returns_true(self) -> None:
+        """v0.6.13 — the manual ``event(QEvent.ToolTip)`` override
+        always handles the ToolTip event (returns True) and routes
+        through ``QToolTip.showText`` with the resolved title.  We
+        confirm the handler ran by reading ``QToolTip.text()``,
+        which holds the last text passed to showText for this
+        process even in headless tests."""
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QHelpEvent
+        from PySide6.QtWidgets import QToolTip
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        c = CellWindow(load_branding())
+        try:
+            ev = QHelpEvent(
+                QEvent.Type.ToolTip, QPoint(10, 10), QPoint(100, 100),
+            )
+            handled = c.event(ev)
+            assert handled is True
+            # The handler must have pushed "ScripTree" (the role
+            # default for an unbound standalone) through showText.
+            assert QToolTip.text() == "ScripTree"
+        finally:
+            QToolTip.hideText()
+            c.close()
+
 
 # ---------------------------------------------------------------------------
 # Macify (v0.6.10) — _smooth_move fluidity contract

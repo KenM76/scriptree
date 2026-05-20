@@ -341,7 +341,7 @@ legacy files stay byte-identical.
 > `.scriptree` / `.scriptreetree`, give it an icon.**
 >
 > See [`icon_library.md`](icon_library.md) for the canonical
-> reference: the full 52-icon bundled set grouped by category with
+> reference: the full 54-icon bundled set grouped by category with
 > "use for" hints (§2), the keyword → icon heuristic in match
 > order (§3), the embed workflow (§5), worked examples for
 > multi-leaf suites — ffmpeg, outlook migration, SolidWorks
