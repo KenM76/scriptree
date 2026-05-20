@@ -92,6 +92,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QIcon,
     QPainter,
     QPen,
     QPolygon,
@@ -4639,6 +4640,25 @@ class CellWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
 
+        def _seticon_bundled(obj, name: str) -> None:  # noqa: ANN001
+            """v0.6.15 — set an icon from our bundled `icons/` set on
+            a QAction or QMenu.  Used where a category-specific glyph
+            reads better than the generic Qt standard one (e.g.
+            ``ring`` for the Tree Ring submenu instead of
+            SP_DriveNetIcon)."""
+            try:
+                from scriptree.shell.icon_assets import (
+                    bundled_icon_png_path,
+                )
+                p = bundled_icon_png_path(name)
+                if p is None:
+                    return
+                ic = QIcon(str(p))
+                if not ic.isNull():
+                    obj.setIcon(ic)
+            except Exception:  # noqa: BLE001
+                pass
+
         # ---- File type display (read-only, at top) ----
         # Show "ScripTree: <name>" or "ScripTreeTree: <name>" based on the
         # extension of the currently-loaded file.  If nothing is loaded,
@@ -4677,7 +4697,11 @@ class CellWindow(QMainWindow):
         # Open recent sub-sub-menu.  Per user direction (2026-05-07):
         # "Catalogue should say ScripTree instead."
         catalog_menu = QMenu("ScripTree", menu)
-        _seticon(catalog_menu, _SP.SP_DirIcon)
+        # v0.6.15 — submenu marker uses our bundled `script` glyph
+        # (document + prompt, the canonical script archetype) so the
+        # menu reads as "things that load/save catalogs" rather
+        # than the generic OS folder icon.
+        _seticon_bundled(catalog_menu, "script")
         load_scriptree_action = catalog_menu.addAction("Load ScripTree…")
         _seticon(load_scriptree_action, _SP.SP_DialogOpenButton)
         load_scriptreetree_action = catalog_menu.addAction("Load ScripTreeTree…")
@@ -4745,7 +4769,10 @@ class CellWindow(QMainWindow):
         # (fork to a new file).  Otherwise only "Save as…" — there's
         # no remembered path to overwrite.
         ring_menu = QMenu("Tree Ring", menu)
-        _seticon(ring_menu, _SP.SP_DriveNetIcon)
+        # v0.6.15 — submenu marker uses our `ring` glyph (concentric
+        # circles, hub + orbit) instead of the OS network-drive icon
+        # that read as wildly off-topic.
+        _seticon_bundled(ring_menu, "ring")
         already_saved = getattr(self, "_saved_ring_path", None) is not None
 
         save_ring_action = None
@@ -4805,9 +4832,13 @@ class CellWindow(QMainWindow):
         # ── Cell submenu ──────────────────────────────────────────
         # Multi-instance actions + group membership controls.
         cell_menu = QMenu("Cell", menu)
-        _seticon(cell_menu, _SP.SP_ComputerIcon)
+        # v0.6.15 — submenu marker uses our `tool` glyph (the
+        # universal wrench, fitting for cell-itself actions like
+        # spawn / leave / disband).
+        _seticon_bundled(cell_menu, "tool")
         spawn_action = cell_menu.addAction("Spawn another cell")
-        _seticon(spawn_action, _SP.SP_FileDialogNewFolder)
+        # "Spawn another" = a fresh package coming into existence.
+        _seticon_bundled(spawn_action, "package")
 
         # Group membership actions.  Three possible entries:
         #   * Leave forest  — when this cell is grouped under the
@@ -4847,8 +4878,13 @@ class CellWindow(QMainWindow):
                     leave_forest_action = cell_menu.addAction(
                         "Leave forest (keep ring intact)"
                     )
+                    # v0.6.15 — `scissors` reads as "cut the link" /
+                    # "detach from the parent group", consistent
+                    # across all three leave/disband actions below.
+                    _seticon_bundled(leave_forest_action, "scissors")
                 if self._members:
                     disband_action = cell_menu.addAction("Disband group")
+                    _seticon_bundled(disband_action, "scissors")
                     # Preserve the legacy variable name so existing
                     # downstream dispatch keeps working unchanged.
                     leave_group_action = disband_action
@@ -4858,6 +4894,7 @@ class CellWindow(QMainWindow):
                     leave_group_action = cell_menu.addAction("Leave forest")
                 else:
                     leave_group_action = cell_menu.addAction("Leave group")
+                _seticon_bundled(leave_group_action, "scissors")
 
         menu.addMenu(cell_menu)
 
@@ -4867,9 +4904,12 @@ class CellWindow(QMainWindow):
         about_action = menu.addAction(f"About {brand}")
         _seticon(about_action, _SP.SP_MessageBoxInformation)
         settings_action = menu.addAction("Settings…")
-        _seticon(settings_action, _SP.SP_FileDialogDetailedView)
+        # v0.6.15 — `settings` (three labelled sliders) is the
+        # category archetype; SP_FileDialogDetailedView reads as
+        # "show a file list", not "configure this thing".
+        _seticon_bundled(settings_action, "settings")
         preferences_action = menu.addAction("Preferences…")
-        _seticon(preferences_action, _SP.SP_FileDialogDetailedView)
+        _seticon_bundled(preferences_action, "settings")
         menu.addSeparator()
 
         # ---- Close / exit actions — role-aware ----

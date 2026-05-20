@@ -460,18 +460,60 @@ class ForestController(QObject):
         readable.  All actions wire to controller methods directly
         (no signal hops, simpler debug).
         """
+        # v0.6.15 — icon helpers.  Universal save/open/refresh come
+        # from Qt's standard set so they match every other app on
+        # the platform; everything else uses a glyph from our
+        # bundled ``icons/`` set whose category matches the action.
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import QApplication, QStyle
+        _SP = QStyle.StandardPixmap
+
+        def _std(which):  # noqa: ANN001, ANN202
+            app = QApplication.instance()
+            return app.style().standardIcon(which) if app else QIcon()
+
+        def _bundled(name: str) -> QIcon:
+            try:
+                from scriptree.shell.icon_assets import (
+                    bundled_icon_png_path,
+                )
+                p = bundled_icon_png_path(name)
+                if p is None:
+                    return QIcon()
+                ic = QIcon(str(p))
+                return ic if not ic.isNull() else QIcon()
+            except Exception:  # noqa: BLE001
+                return QIcon()
+
         forest_menu = QMenu("Forest", menu)
-        a_save = forest_menu.addAction("Save forest")
-        a_save_as = forest_menu.addAction("Save forest as…")
-        a_open = forest_menu.addAction("Open forest…")
+        forest_menu.setIcon(_bundled("forest"))
+
+        a_save = forest_menu.addAction(_std(_SP.SP_DialogSaveButton), "Save forest")
+        a_save_as = forest_menu.addAction(
+            _std(_SP.SP_DialogSaveButton), "Save forest as…",
+        )
+        a_open = forest_menu.addAction(
+            _std(_SP.SP_DialogOpenButton), "Open forest…",
+        )
         forest_menu.addSeparator()
-        a_refresh = forest_menu.addAction("Refresh from sources")
-        a_autoadd = forest_menu.addAction("Auto-add from ScripTreeApps now")
+        a_refresh = forest_menu.addAction(
+            _std(_SP.SP_BrowserReload), "Refresh from sources",
+        )
+        a_autoadd = forest_menu.addAction(
+            _bundled("package"),
+            "Auto-add from ScripTreeApps now",
+        )
         forest_menu.addSeparator()
-        a_settings = forest_menu.addAction("Forest settings…")
-        a_excluded = forest_menu.addAction("Manage excluded items…")
+        a_settings = forest_menu.addAction(
+            _bundled("settings"), "Forest settings…",
+        )
+        a_excluded = forest_menu.addAction(
+            _bundled("filter"), "Manage excluded items…",
+        )
         forest_menu.addSeparator()
-        a_about = forest_menu.addAction("About this forest")
+        a_about = forest_menu.addAction(
+            _bundled("forest"), "About this forest",
+        )
 
         a_save.triggered.connect(self.save)
         a_save_as.triggered.connect(self._on_save_as)

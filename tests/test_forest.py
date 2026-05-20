@@ -1287,6 +1287,52 @@ class TestUnsavedForestDefaultSpot:
         assert b._id not in forest._members
         new_master.close(); a.close(); b.close()
 
+    def test_forest_submenu_actions_carry_icons(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.6.15 — every action under the Forest submenu has a
+        non-null icon (used to be all icon-less, looking unfinished
+        next to the cell submenu's icons)."""
+        from PySide6.QtWidgets import QMenu
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(
+            load_branding(), CellRegistry.instance(), None,
+        )
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+
+        parent = QMenu()
+        ctrl._populate_forest_menu(parent)
+
+        # The forest submenu is the first action's menu().
+        forest_submenu_action = parent.actions()[0]
+        forest_submenu = forest_submenu_action.menu()
+        assert forest_submenu is not None
+        # The submenu marker itself carries the forest icon.
+        assert not forest_submenu.icon().isNull(), (
+            "Forest submenu should carry the forest hub icon."
+        )
+        # And every (non-separator) action inside has an icon.
+        for act in forest_submenu.actions():
+            if act.isSeparator():
+                continue
+            assert not act.icon().isNull(), (
+                f"Forest submenu action {act.text()!r} has no icon."
+            )
+
     def test_master_absorbs_nearby_forest_linked_free_cell(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
