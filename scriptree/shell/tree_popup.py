@@ -113,6 +113,61 @@ def _bundled_qicon(icon_name: str) -> QIcon | None:
     return ic
 
 
+def _node_icon(node) -> QIcon | None:  # noqa: ANN001
+    """Resolve a per-``TreeNode`` icon override (v0.6.26+).
+
+    Priority (only the first non-empty source wins):
+
+      1. ``node.icon_data`` — base64-encoded PNG bytes; decoded into
+         a ``QPixmap`` and wrapped as a ``QIcon``.
+      2. ``node.icon`` — first tried as a bundled-icon name
+         (``"build"`` → ``icons/icon-build.png``); on miss, treated
+         as a file path relative or absolute.
+
+    Returns ``None`` when the node has no override, the override is
+    unresolvable, or anything in the resolution raises.  Callers
+    that need a fallback (folder glyph, leaf-catalog icon) supply
+    their own.
+
+    Used by ``_add_node_to_menu`` for BOTH folder submenu icons and
+    leaf override icons — same precedence rules, same fallback.
+    """
+    icon_data = getattr(node, "icon_data", "") or ""
+    if icon_data:
+        try:
+            import base64
+            from PySide6.QtGui import QPixmap
+            raw = base64.b64decode(icon_data, validate=False)
+            pm = QPixmap()
+            if pm.loadFromData(raw):
+                ic = QIcon(pm)
+                if not ic.isNull():
+                    return ic
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_node_icon: icon_data decode failed: {exc!r}")
+
+    name_or_path = getattr(node, "icon", "") or ""
+    if name_or_path:
+        # First try as a bundled glyph name.
+        try:
+            bundled = _bundled_qicon(name_or_path)
+            if bundled is not None and not bundled.isNull():
+                return bundled
+        except Exception:  # noqa: BLE001
+            pass
+        # Otherwise treat as a path.
+        try:
+            p = Path(name_or_path)
+            if p.is_file():
+                cand = QIcon(str(p))
+                if not cand.isNull():
+                    return cand
+        except Exception:  # noqa: BLE001
+            pass
+
+    return None
+
+
 def _catalog_icon(path, label: str = "") -> QIcon:  # noqa: ANN001
     """The catalog's own icon; failing that, a category glyph chosen
     by keyword from the tool's name/filename (v0.6.9 — variety, so a
@@ -179,7 +234,10 @@ def _add_node_to_menu(  # noqa: ANN001
     if node.type == "folder":
         label = node.display_name or node.name or "(unnamed)"
         sub = menu.addMenu(label)
-        sub.setIcon(_folder_icon())
+        # v0.6.26+ — honour a per-node icon override, falling back
+        # to the OS folder icon when the node carries no glyph.
+        folder_override = _node_icon(node)
+        sub.setIcon(folder_override if folder_override is not None else _folder_icon())
         # ASCII '/' breadcrumb (not a unicode arrow): this string can
         # reach cp1252 logs / serialisation, and this codebase has
         # been bitten by mojibake before — keep it 7-bit.
@@ -200,7 +258,10 @@ def _add_node_to_menu(  # noqa: ANN001
     label = node.display_name or node.name or p.stem or "(unnamed)"
     cfg = node.configuration  # may be None
     act = menu.addAction(label)
-    leaf_icon = _catalog_icon(p, label)
+    # v0.6.26+ — honour a per-node icon override; otherwise use the
+    # leaf catalog's own icon (or a classified fallback).
+    leaf_override = _node_icon(node)
+    leaf_icon = leaf_override if leaf_override is not None else _catalog_icon(p, label)
     act.setIcon(leaf_icon)
     # Capture p, cfg in default args so the closure doesn't bind to
     # the loop variable.

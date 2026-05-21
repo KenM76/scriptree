@@ -682,6 +682,33 @@ class TreeNode:
     children: list[TreeNode] = field(default_factory=list)
     configuration: str | None = None
     display_name: str | None = None
+    # v0.6.26+ — optional per-node icon override.  Mirrors the
+    # ``cell.icon*`` triplet on ``ToolDef`` / ``TreeDef``:
+    #
+    #   * ``icon`` — bundled-icon name (e.g. ``"build"`` →
+    #     ``icons/icon-build.png``) OR a relative/absolute path
+    #     to an image file.  Cheapest option; uses the shipped
+    #     trademark-safe set.
+    #   * ``icon_data`` — base64-encoded PNG bytes for a custom
+    #     embedded glyph.  Use when none of the shipped icons fit
+    #     and a path-link would be fragile.
+    #   * ``icon_format`` — image-format hint for ``icon_data``
+    #     (``"png"`` for portable runtime; SVG renders blank on
+    #     the vendored PySide6 — see ``cell_metadata.py`` notes).
+    #
+    # For **folders**: the menu submenu marker (the chevron-y row)
+    # shows this glyph instead of the OS folder icon.  Useful for
+    # "this folder collects scissors workflows" / "this folder is
+    # the test-suite group" cues without separating the tools.
+    # For **leaves**: this OVERRIDES the bound catalog's own
+    # ``cell.icon_data`` for this leaf only — handy when the same
+    # ``.scriptree`` is referenced from multiple trees and one of
+    # them wants a different glyph.  All three fields are
+    # emitted only when non-empty so legacy trees round-trip
+    # byte-identical.
+    icon: str = ""
+    icon_data: str = ""
+    icon_format: str = ""
 
     def __post_init__(self) -> None:
         if self.type not in ("folder", "leaf"):

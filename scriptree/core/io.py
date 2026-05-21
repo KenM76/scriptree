@@ -656,6 +656,14 @@ def _node_to_dict(n: TreeNode) -> dict[str, Any]:
             d["configuration"] = n.configuration
         if n.display_name is not None:
             d["display_name"] = n.display_name
+        # v0.6.26+ — per-node icon override.  Emit only when set so
+        # legacy trees stay byte-identical on round-trip.
+        if n.icon:
+            d["icon"] = n.icon
+        if n.icon_data:
+            d["icon_data"] = n.icon_data
+        if n.icon_format:
+            d["icon_format"] = n.icon_format
         return d
     folder: dict[str, Any] = {
         "type": "folder",
@@ -664,6 +672,14 @@ def _node_to_dict(n: TreeNode) -> dict[str, Any]:
     }
     if n.display_name is not None:
         folder["display_name"] = n.display_name
+    # v0.6.26+ — per-node icon override.  Emit only when set so
+    # legacy trees stay byte-identical on round-trip.
+    if n.icon:
+        folder["icon"] = n.icon
+    if n.icon_data:
+        folder["icon_data"] = n.icon_data
+    if n.icon_format:
+        folder["icon_format"] = n.icon_format
     return folder
 
 
@@ -674,12 +690,18 @@ def _node_from_dict(d: dict[str, Any]) -> TreeNode:
             path=d["path"],
             configuration=d.get("configuration"),
             display_name=d.get("display_name"),
+            icon=str(d.get("icon", "") or ""),
+            icon_data=str(d.get("icon_data", "") or ""),
+            icon_format=str(d.get("icon_format", "") or ""),
         )
     return TreeNode(
         type="folder",
         name=d.get("name", ""),
         children=[_node_from_dict(c) for c in d.get("children", [])],
         display_name=d.get("display_name"),
+        icon=str(d.get("icon", "") or ""),
+        icon_data=str(d.get("icon_data", "") or ""),
+        icon_format=str(d.get("icon_format", "") or ""),
     )
 
 

@@ -186,6 +186,41 @@ class TestTreeRoundTrip:
         restored = tree_from_dict(d)
         assert restored.path_prepend == ["C:/Tools/gh", "./local_bin"]
 
+    def test_node_icon_fields_round_trip(self) -> None:
+        """v0.6.26+ — TreeNode.icon / icon_data / icon_format survive
+        a round-trip for both folder and leaf nodes, and are omitted
+        from the on-disk form when empty (so legacy trees stay
+        byte-identical)."""
+        # Empty by default → omitted.
+        tree = self._sample_tree()
+        d = tree_to_dict(tree)
+        folder_dict = d["nodes"][0]
+        leaf_dict = d["nodes"][1]
+        for key in ("icon", "icon_data", "icon_format"):
+            assert key not in folder_dict
+            assert key not in leaf_dict
+
+        # Set the fields on both a folder and a leaf.
+        tree.nodes[0].icon = "scissors"
+        tree.nodes[0].icon_data = ""  # leave embedded blank, name only
+        tree.nodes[1].icon = ""
+        tree.nodes[1].icon_data = "iVBORw0KGgo="  # garbage but base64-ish
+        tree.nodes[1].icon_format = "png"
+
+        d = tree_to_dict(tree)
+        assert d["nodes"][0]["icon"] == "scissors"
+        assert "icon_data" not in d["nodes"][0]
+        assert "icon_format" not in d["nodes"][0]
+        assert "icon" not in d["nodes"][1]
+        assert d["nodes"][1]["icon_data"] == "iVBORw0KGgo="
+        assert d["nodes"][1]["icon_format"] == "png"
+
+        restored = tree_from_dict(d)
+        assert restored.nodes[0].icon == "scissors"
+        assert restored.nodes[0].icon_data == ""
+        assert restored.nodes[1].icon_data == "iVBORw0KGgo="
+        assert restored.nodes[1].icon_format == "png"
+
     def test_unknown_folder_layout_falls_back_to_flat(self) -> None:
         """Loader is permissive — unknown values pass through, the
         runtime branch falls back to 'flat' rendering. Keeps old

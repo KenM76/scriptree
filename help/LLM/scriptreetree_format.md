@@ -67,14 +67,46 @@ Each `Node` is either a folder or a leaf:
 ```json
 { "type": "folder", "name": "string, required",
   "display_name": "string, optional — override for the folder label",
+  "icon": "string, optional — bundled glyph name (e.g. 'build') OR path",
+  "icon_data": "string, optional — base64-encoded PNG bytes",
+  "icon_format": "string, optional — 'png' (only PNG renders portably)",
   "children": [/* list[Node], may be empty */] }
 ```
 
 ```json
 { "type": "leaf", "path": "string, required",
   "display_name": "string, optional — override for the tree label and standalone tab",
-  "configuration": "string, optional — config name for standalone mode" }
+  "configuration": "string, optional — config name for standalone mode",
+  "icon": "string, optional — bundled glyph name OR path",
+  "icon_data": "string, optional — base64-encoded PNG bytes",
+  "icon_format": "string, optional — 'png'" }
 ```
+
+## Per-node icon overrides (v0.6.26+)
+
+Folder and leaf nodes both accept an optional `icon` / `icon_data` /
+`icon_format` triplet that overrides the default glyph used in the
+single-click popup menu.  Resolution priority — first match wins:
+
+1. `icon_data` (base64 PNG bytes) — embedded; portable, no path
+   fragility, takes precedence when both forms are set.
+2. `icon` — first tried as a **bundled glyph name** (e.g. `"build"`
+   → `icons/icon-build.png` from the shipped set); on miss, treated
+   as a **path** (relative to the `.scriptreetree`'s directory or
+   absolute).
+3. Fallback — folders use the OS folder icon, leaves use the bound
+   `.scriptree`'s own `cell.icon_data` (or a classified bundled
+   glyph chosen from the tool name).
+
+All three fields are emitted only when non-empty, so legacy trees
+round-trip byte-identical.  The override is consumed by the popup
+menu only — V1's full editor view still shows the bound tool's own
+icon.  Use this when:
+
+- A folder collects e.g. "scissor" workflows and you want its
+  submenu to show a `scissors` glyph instead of the generic folder.
+- The same `.scriptree` is referenced from multiple trees and one
+  of them wants a different glyph than the tool's default.
 
 ## `display_name` — precedence
 

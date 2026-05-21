@@ -18,6 +18,18 @@ the schema for the `cell.icon_data` field lives in
 This doc is the **menu of available glyphs + the decision rules** that
 sit between those two.
 
+> **v0.6.26+ — folder/leaf icon overrides.**  A `.scriptreetree`
+> node (folder OR leaf) can carry its own `icon` / `icon_data` /
+> `icon_format` triplet, which OVERRIDES the default glyph for
+> that node's submenu marker / row in the single-click popup
+> menu.  Use this when the tree-author wants a folder to show a
+> category glyph instead of the generic OS folder icon, or when
+> the same `.scriptree` is referenced from multiple trees that
+> want different glyphs for it.  See
+> [`scriptreetree_format.md`](scriptreetree_format.md) for the
+> field-level contract; the picking rules in this doc apply
+> unchanged.
+
 ---
 
 ## 1. Decision tree — which icon does this tool get?
