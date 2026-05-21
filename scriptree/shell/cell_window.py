@@ -87,6 +87,7 @@ from PySide6.QtCore import (
     QRect,
     Qt,
     QSettings,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -132,6 +133,113 @@ from PySide6.QtWidgets import (
 
 def _log(msg: str) -> None:
     print(f"[CellWindow] {msg}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Custom hover-tooltip (v0.6.27)
+# ---------------------------------------------------------------------------
+#
+# Why a custom widget instead of ``QToolTip.showText``:
+#
+# Cells are ``Qt.Tool`` frameless windows with ``WA_TranslucentBackground``
+# and a custom mask, AND they typically carry ``Qt.WindowStaysOnTopHint``.
+# On Win11 the standard QToolTip popup — which Qt creates as a
+# ``Qt.ToolTip`` window — competes with the cell windows for z-order and
+# often loses (the tooltip materialises *behind* the cells the user is
+# hovering, so they see nothing).  v0.6.13 tried catching ``QEvent.ToolTip``
+# manually and calling ``QToolTip.showText`` — that fixed *delivery* but
+# not the z-order problem.
+#
+# This widget is a tiny ``QLabel`` we own that carries the right window
+# flags ourselves (``Qt.ToolTip | Qt.FramelessWindowHint |
+# Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus |
+# Qt.WindowTransparentForInput``) so it draws *above* every cell window
+# in the workspace, regardless of which cells were created first or which
+# carry ``StaysOnTop`` themselves.  One module-level instance is shared
+# across all cells; ``show_at(text, global_point)`` re-uses it.
+#
+# Trigger: ``CellWindow.enterEvent`` starts a 700 ms ``QTimer`` (matching
+# Qt's default tooltip delay); on fire we look up the cell's hover title
+# and show the tip just below the cell.  ``leaveEvent`` / drag / popup
+# show all hide it.  We do NOT rely on ``QEvent.ToolTip`` at all — that
+# delivery is too unreliable on the cell's window combination.
+
+
+class _CellHoverTip:
+    """Singleton-style holder for the shared hover-tip widget.
+
+    Lazily creates a ``QLabel`` the first time ``show()`` is called,
+    so the import cost is zero on the headless ``validate`` /
+    ``migrate`` path and the widget construction only happens after
+    ``QApplication`` is running.
+
+    Methods:
+      * ``show(text, global_pt)`` — display the tip near ``global_pt``
+        with ``text`` as content.  Reuses the same QLabel; no flicker.
+      * ``hide()`` — hide the tip if visible.
+    """
+
+    _instance: "QLabel | None" = None
+
+    @classmethod
+    def _widget(cls) -> "QLabel":
+        if cls._instance is not None:
+            return cls._instance
+        lbl = QLabel(None)
+        # Tool-tip-style window with our own stays-on-top so it draws
+        # above the cells regardless of their stacking.
+        lbl.setWindowFlags(
+            Qt.ToolTip
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+            | Qt.WindowTransparentForInput
+        )
+        lbl.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # Match the OS default tooltip look — small border + light
+        # background.  Stylesheet is fine since this widget is solely
+        # ours and never inherits app-wide QSS for QLabel that we
+        # didn't author.
+        lbl.setStyleSheet(
+            "QLabel {"
+            "  background-color: rgb(255, 255, 220);"
+            "  color: rgb(20, 20, 20);"
+            "  border: 1px solid rgb(120, 120, 120);"
+            "  padding: 3px 6px;"
+            "}"
+        )
+        lbl.setTextFormat(Qt.PlainText)
+        cls._instance = lbl
+        return lbl
+
+    @classmethod
+    def show(cls, text: str, global_pt) -> None:  # noqa: ANN001
+        if not text:
+            cls.hide()
+            return
+        try:
+            lbl = cls._widget()
+            lbl.setText(text)
+            lbl.adjustSize()
+            # Offset 12 px down-right of the cursor so the cursor
+            # doesn't sit on top of the label (and won't generate a
+            # leaveEvent on the cell from us covering it).  We made
+            # the label transparent-for-input anyway, but the offset
+            # is the polite default.
+            lbl.move(global_pt.x() + 12, global_pt.y() + 18)
+            lbl.show()
+            lbl.raise_()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_CellHoverTip.show: {exc!r}")
+
+    @classmethod
+    def hide(cls) -> None:
+        try:
+            if cls._instance is not None and cls._instance.isVisible():
+                cls._instance.hide()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_CellHoverTip.hide: {exc!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -2854,6 +2962,15 @@ class CellWindow(QMainWindow):
         # Hover and drag state
         # ----------------------------------------------------------------
         self._hovered: bool = False
+        # v0.6.27 — custom hover-tip trigger.  enterEvent starts this
+        # one-shot timer; on fire we show the cell's title via
+        # ``_CellHoverTip``.  Reset on every mouseMoveEvent while the
+        # cursor is over the cell (matches OS tooltip behaviour: the
+        # tip appears after the cursor has been still for ~700 ms).
+        self._hover_tip_timer = QTimer(self)
+        self._hover_tip_timer.setSingleShot(True)
+        self._hover_tip_timer.setInterval(700)
+        self._hover_tip_timer.timeout.connect(self._show_hover_tip_now)
 
         # Manual drag state.
         # _press_global_pos  — where the mouse was pressed (global px).
@@ -3880,37 +3997,26 @@ class CellWindow(QMainWindow):
             pass
 
     def event(self, ev) -> bool:  # noqa: ANN001
-        """Manual ``QEvent.ToolTip`` handler (v0.6.13).
+        """Suppress the platform's own QEvent.ToolTip delivery
+        (v0.6.27) — the custom hover-tip widget owned by this module
+        replaces it.
 
-        ``setToolTip`` alone is not enough on this widget: cells are
-        ``Qt.Tool`` frameless windows with ``WA_TranslucentBackground``
-        and a custom polygon mask, and on Windows the default tooltip
-        delivery sometimes silently skips that combination (the
-        tooltip popup is itself a ``Qt.Tool`` window, and the stacking
-        + transparent-input interactions can prevent the host's
-        QEvent.ToolTip from being routed reliably).
-
-        We catch the ``ToolTip`` event ourselves and call
-        ``QToolTip.showText`` with the cell's resolved hover title at
-        the cursor's global position.  ``setToolTip`` is still set in
-        ``_update_hover_tooltip`` so accessibility tools that read
-        the property directly continue to work; this override is the
-        belt-and-suspenders that guarantees the visible tip.
+        We previously caught ``QEvent.ToolTip`` ourselves and called
+        ``QToolTip.showText`` (v0.6.13) but that popup competed with
+        the cell windows' ``Qt.WindowStaysOnTopHint`` and frequently
+        rendered *behind* them on Win11.  v0.6.27 moves the trigger
+        to a manual ``enterEvent`` → ``QTimer`` → ``_CellHoverTip``
+        path so the tip widget can carry its own stays-on-top
+        flag.  Eating the platform tooltip event here prevents the
+        OS tooltip from racing the custom one (which would flicker).
         """
         try:
             if ev.type() == QEvent.Type.ToolTip:
-                from scriptree.shell.tree_popup import _popup_header_text
-                title = _popup_header_text(self)
-                if title:
-                    QToolTip.showText(
-                        ev.globalPos(), title, self,
-                    )
-                else:
-                    QToolTip.hideText()
-                    ev.ignore()
+                # Custom tip is driven by enterEvent + the QTimer;
+                # don't let Qt's default tooltip path fire.
                 return True
         except Exception:  # noqa: BLE001
-            pass  # Never let a tooltip glitch break event delivery.
+            pass
         return super().event(ev)
 
     def apply_always_on_top_change(self, on: bool) -> None:
@@ -4669,14 +4775,74 @@ class CellWindow(QMainWindow):
     def enterEvent(self, event) -> None:
         self._hovered = True
         self.update()
+        # v0.6.27 — start the custom hover-tip delay.  Doing this on
+        # enterEvent (instead of relying on QEvent.ToolTip delivery)
+        # is what makes the tip actually appear over Qt.Tool +
+        # WA_TranslucentBackground frameless windows on Win11; see
+        # the docstring on _CellHoverTip for the full reasoning.
+        try:
+            self._hover_tip_timer.start()
+        except Exception:  # noqa: BLE001
+            pass
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         self._hovered = False
         self.update()
+        # v0.6.27 — cancel any pending tip + hide the visible one.
+        try:
+            self._hover_tip_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _CellHoverTip.hide()
+        except Exception:  # noqa: BLE001
+            pass
         super().leaveEvent(event)
 
+    def _show_hover_tip_now(self) -> None:
+        """Called by the hover-tip QTimer after the cursor has been
+        still over this cell for ~700 ms.  Resolves the cell's title
+        the same way the popup-menu header does and renders it via
+        the shared ``_CellHoverTip`` widget.
+
+        Bails silently if the cell isn't hovered any more (the user
+        moved the cursor off between timer start and fire), or if
+        the cell has been destroyed.
+        """
+        try:
+            if not self._hovered:
+                return
+            from scriptree.shell.tree_popup import _popup_header_text
+            title = _popup_header_text(self)
+            if not title:
+                return
+            # Anchor below-centre of the cell.  Falls back to cursor
+            # position if mapToGlobal raises (unlikely but
+            # belt-and-suspenders).
+            try:
+                anchor = self.mapToGlobal(
+                    QPoint(self.width() // 2, self.height())
+                )
+            except Exception:  # noqa: BLE001
+                from PySide6.QtGui import QCursor
+                anchor = QCursor.pos()
+            _CellHoverTip.show(title, anchor)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_show_hover_tip_now: {exc!r}")
+
     def mousePressEvent(self, event) -> None:
+        # v0.6.27 — kill any visible hover-tip and pending timer when
+        # the user starts interacting; nothing more annoying than a
+        # tooltip lingering during a drag or click.
+        try:
+            self._hover_tip_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _CellHoverTip.hide()
+        except Exception:  # noqa: BLE001
+            pass
         if event.button() == Qt.LeftButton:
             self._press_global_pos = event.globalPosition().toPoint()
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
