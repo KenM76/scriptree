@@ -5036,6 +5036,22 @@ class CellWindow(QMainWindow):
             )
             _seticon_bundled(collapse_with_action, "lock")
 
+        # v0.6.19 — collapse / expand toggle for masters.  Single-
+        # click on a master now opens the popup tree (the always-
+        # useful action); the collapse state toggle lives here as
+        # a right-click menu item.
+        collapse_toggle_action = None
+        if self.role == "master" and self._members:
+            if self._collapse_state == "expanded":
+                collapse_toggle_action = cell_menu.addAction(
+                    "Collapse this group"
+                )
+            else:
+                collapse_toggle_action = cell_menu.addAction(
+                    "Expand this group"
+                )
+            _seticon_bundled(collapse_toggle_action, "container")
+
         menu.addMenu(cell_menu)
 
         menu.addSeparator()
@@ -5138,6 +5154,19 @@ class CellWindow(QMainWindow):
                 f"{self._id[:8]}: _collapse_with_master = "
                 f"{self._collapse_with_master}"
             )
+        elif (
+            collapse_toggle_action is not None
+            and chosen == collapse_toggle_action
+        ):
+            # v0.6.19 — master collapse/expand toggle.  The action
+            # label was decided when building the menu based on
+            # the current ``_collapse_state``; flipping just fires
+            # the same toggle helper master single-click used to
+            # call.
+            try:
+                self._toggle_collapse()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"collapse_toggle: _toggle_collapse raised {exc!r}")
         elif chosen == about_action:
             # None parent: inherits OS chrome, not the hex's translucent palette.
             try:
@@ -7315,17 +7344,30 @@ class CellWindow(QMainWindow):
     def _fire_pending_master_single_click(self) -> None:
         """Timer callback: the double-click window elapsed with no double-click.
 
-        Clears the pending-timer reference and commits the collapse/expand toggle
-        that click("single") deferred.  If click("double") or click("double-right")
-        arrived first they would have stopped the timer; this method is never called
-        in that case, so no double-click action is clobbered.
+        v0.6.19 — single-click on a master now shows the popup tree
+        (union of every member's catalog for a ring; every forest
+        item for the forest hub), matching what standalone cells do
+        on single-click.  Pre-v0.6.19 this fired
+        ``_toggle_collapse``, but with v0.6.17's "cells stay open
+        unless opted in" semantics, collapse on most masters has no
+        visible effect — the user reported "single-clicking the
+        forest/ring does nothing."  Showing the popup is the
+        always-useful action.  The collapse/expand toggle is still
+        reachable via the master's right-click menu.
         """
         _log(
             f"_fire_pending_master_single_click id={self._id[:8]} "
-            "— double-click window elapsed; committing collapse/expand"
+            "— double-click window elapsed; showing master popup"
         )
         self._pending_master_single_click_timer = None
-        self._toggle_collapse()
+        try:
+            from scriptree.shell.tree_popup import show_tree_popup_for
+            show_tree_popup_for(self)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_fire_pending_master_single_click: popup failed: "
+                f"{exc!r}"
+            )
 
     def _toggle_collapse(self) -> None:
         """Toggle the collapsed/expanded state of this master hexagon (Bug 3).
