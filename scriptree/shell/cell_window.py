@@ -5604,12 +5604,23 @@ class CellWindow(QMainWindow):
                 from scriptree import __version__ as _ver
             except Exception:  # noqa: BLE001
                 _ver = "(unknown)"
+            # v0.6.29 — show the build date alongside the version so
+            # the user can tell which build they're running when
+            # revisions happen quickly.
+            try:
+                from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                _bd = ""
+            build_line = (
+                f"<br><b>Built:</b> {_bd}" if _bd else ""
+            )
             msg = QMessageBox(None)
             msg.setWindowTitle(f"About {brand}")
             msg.setText(
                 f"<b>{app_name_long}</b><br>"
                 f"{tagline}<br><br>"
                 f"<b>Version:</b> {_ver}"
+                f"{build_line}"
             )
             msg.exec()
         elif chosen == settings_action:

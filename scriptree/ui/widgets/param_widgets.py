@@ -1024,6 +1024,18 @@ class _PathListWidget(ParamWidget):
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.ExtendedSelection)
         self._list.setMaximumHeight(160)
+        # v0.6.29 — Remove/Up/Down stay enabled with the list:
+        # refresh button state whenever the selection changes, not
+        # only when an Add/Remove/Move action fires.  Without this,
+        # the buttons grey out at construction (nothing selected
+        # yet) and never light up because clicking a row never
+        # called ``_refresh_state``.
+        self._list.itemSelectionChanged.connect(self._refresh_state)
+        # v0.6.29 — accept dropped paths and Ctrl+V text on the list.
+        # Drops route through the widget-level dragEnter/dropEvent;
+        # Ctrl+V goes through eventFilter on the list itself.
+        self.setAcceptDrops(True)
+        self._list.installEventFilter(self)
         outer.addWidget(self._list)
 
         row = QHBoxLayout()
@@ -1144,6 +1156,124 @@ class _PathListWidget(ParamWidget):
         self._refresh_state()
         self._emit_changed()
 
+    # --- bulk add (paste / drop / programmatic) -----------------------
+
+    @staticmethod
+    def _clean_pasted_line(line: str) -> str:
+        """Trim whitespace + balanced surrounding quotes from one
+        pasted/dropped line.
+
+        Explorer's "Copy as path" wraps the path in double quotes; a
+        text editor selection might include trailing newlines or
+        spaces.  Strip both so the result is the bare path string.
+        """
+        s = line.strip().strip("\r\n")
+        # Strip ONE balanced pair of quotes if present.
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+            s = s[1:-1].strip()
+        return s
+
+    def _add_paths_bulk(
+        self, paths: list[str], *, source: str = "bulk",
+    ) -> None:
+        """Append many paths at once (paste / drop / programmatic).
+
+        Differs from looping :meth:`_add_path` in two ways:
+
+        * Suppresses the per-line ``QMessageBox.warning`` that
+          ``must_exist`` would raise — a paste of 30 paths must not
+          spam 30 dialogs.  A single summary box appears at the end
+          when anything was rejected.
+        * Fires exactly one ``valueChanged`` emission and one
+          ``_refresh_state`` regardless of how many entries
+          actually landed.
+        """
+        if not paths:
+            return
+        added = 0
+        skipped_dup = 0
+        skipped_missing = 0
+        skipped_cap = 0
+        existing = set(self._current_items())
+        for raw in paths:
+            p = self._clean_pasted_line(raw)
+            if not p:
+                continue
+            if p in existing:
+                skipped_dup += 1
+                continue
+            if (
+                self._max_items is not None
+                and self._list.count() >= self._max_items
+            ):
+                skipped_cap += 1
+                continue
+            if self._must_exist:
+                try:
+                    from pathlib import Path
+                    if not Path(p).exists():
+                        skipped_missing += 1
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+            self._list.addItem(QListWidgetItem(p))
+            existing.add(p)
+            added += 1
+
+        if added > 0:
+            self._refresh_state()
+            self._emit_changed()
+        elif (skipped_dup + skipped_missing + skipped_cap) > 0:
+            # Nothing landed but at least one row was rejected — keep
+            # the state fresh so labels / button enables are accurate.
+            self._refresh_state()
+
+        # One summary message at the end if anything was rejected.
+        rejected = skipped_dup + skipped_missing + skipped_cap
+        if rejected > 0:
+            parts: list[str] = [f"Added {added}."]
+            if skipped_dup:
+                parts.append(f"Skipped {skipped_dup} already in the list.")
+            if skipped_missing:
+                parts.append(
+                    f"Skipped {skipped_missing} that don't exist on disk."
+                )
+            if skipped_cap:
+                parts.append(
+                    f"Skipped {skipped_cap} past the {self._max_items}-item cap."
+                )
+            try:
+                QMessageBox.information(
+                    self, f"Bulk add ({source})", "\n".join(parts),
+                )
+            except Exception:  # noqa: BLE001 — never block on dialog
+                pass
+
+    def _paste_from_clipboard(self) -> None:
+        """Bulk-add the clipboard's text content as one path per line.
+
+        Called when the user presses Ctrl+V (or Shift+Insert) while
+        the list has focus.  Empty clipboard → no-op.  Single-line
+        clipboards become a single-element bulk add (same code path,
+        so de-dup / must_exist / cap still apply).
+        """
+        try:
+            from PySide6.QtWidgets import QApplication
+            cb = QApplication.clipboard()
+            text = cb.text() if cb is not None else ""
+        except Exception as exc:  # noqa: BLE001
+            try:
+                QMessageBox.warning(
+                    self, "Paste failed", str(exc),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        if not text:
+            return
+        lines = text.replace("\r\n", "\n").split("\n")
+        self._add_paths_bulk(lines, source="clipboard")
+
     def _move_selection(self, delta: int) -> None:
         if delta == 0:
             return
@@ -1218,6 +1348,101 @@ class _PathListWidget(ParamWidget):
             self._list.blockSignals(block)
         self._refresh_state()
         self._emit_changed()
+
+    # --- event handlers (paste + drop, v0.6.29) -----------------------
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        """Intercept Ctrl+V (and Shift+Insert) on the inner
+        ``QListWidget`` to paste clipboard paths.
+
+        We use an event filter rather than subclassing ``QListWidget``
+        so the rest of the widget's behaviour (selection, scrolling,
+        keyboard navigation) stays exactly as Qt ships it.  Returning
+        True consumes the event so Qt's default ListWidget paste
+        handling (which would only paste into a focused editor row,
+        i.e. nothing in our config) doesn't run afterwards.
+        """
+        try:
+            from PySide6.QtCore import QEvent
+            from PySide6.QtGui import QKeySequence
+            if obj is self._list and event.type() == QEvent.KeyPress:
+                if event.matches(QKeySequence.Paste):
+                    self._paste_from_clipboard()
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        return super().eventFilter(obj, event)
+
+    def _mime_has_acceptable_payload(self, mime) -> bool:  # noqa: ANN001
+        """True iff a drag carries URLs or text we can interpret as
+        paths.  Used by both ``dragEnterEvent`` and ``dragMoveEvent``
+        to give the cursor the correct accept / reject affordance."""
+        if mime is None:
+            return False
+        try:
+            if mime.hasUrls() and any(
+                u.isLocalFile() for u in mime.urls()
+            ):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if mime.hasText() and mime.text().strip():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
+        if self._mime_has_acceptable_payload(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        # Must match dragEnterEvent or some platforms drop the drag.
+        if self._mime_has_acceptable_payload(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: ANN001
+        """Append dropped paths to the list (v0.6.29).
+
+        Two payload shapes are handled, in priority order:
+
+        * **URL list** (Explorer / Finder drag) → each local file's
+          path is added; non-local URLs are ignored.
+        * **Plain text** (drag from a text editor or another field) →
+          treated as one path per line.
+
+        URL drops take precedence — Explorer drags carry BOTH a URL
+        list AND a text representation, and the URL list is more
+        reliable (already-resolved local paths, no quoting quirks).
+        """
+        mime = event.mimeData()
+        paths: list[str] = []
+        try:
+            if mime.hasUrls():
+                paths = [
+                    u.toLocalFile()
+                    for u in mime.urls()
+                    if u.isLocalFile() and u.toLocalFile()
+                ]
+        except Exception:  # noqa: BLE001
+            paths = []
+        if not paths:
+            try:
+                if mime.hasText():
+                    text = mime.text() or ""
+                    paths = text.replace("\r\n", "\n").split("\n")
+            except Exception:  # noqa: BLE001
+                paths = []
+        if paths:
+            self._add_paths_bulk(paths, source="drop")
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class FolderListWidget(_PathListWidget):

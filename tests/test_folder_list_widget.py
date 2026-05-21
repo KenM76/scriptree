@@ -297,3 +297,202 @@ class TestFileListWidget:
         )
         w._pick_paths()
         assert captured == ["Text (*.txt);;All (*)"]
+
+
+# ===========================================================================
+# v0.6.29 — selection-driven button state + paste + drop
+# ===========================================================================
+
+class TestSelectionEnablesButtons:
+    """v0.6.29 — Remove / Up / Down buttons must enable as soon as
+    the user selects a row.  v0.6.28 had them greyed at construction
+    and they only re-enabled after an Add/Remove/Move action because
+    ``_refresh_state`` never fired on ``itemSelectionChanged``.
+    """
+
+    def test_buttons_grey_at_construction_with_no_selection(self, qtbot) -> None:  # noqa: ANN001
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/a", "C:/b"]),
+        )
+        qtbot.addWidget(w)
+        # No selection → action buttons greyed.
+        assert w._btn_remove.isEnabled() is False
+        assert w._btn_up.isEnabled() is False
+        assert w._btn_down.isEnabled() is False
+
+    def test_buttons_enable_when_a_row_is_selected(self, qtbot) -> None:  # noqa: ANN001
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/a", "C:/b"]),
+        )
+        qtbot.addWidget(w)
+        # Selecting a row must enable Remove / Up / Down without any
+        # other action firing.
+        w._list.setCurrentRow(0)
+        assert w._btn_remove.isEnabled() is True
+        assert w._btn_up.isEnabled() is True
+        assert w._btn_down.isEnabled() is True
+
+    def test_buttons_disable_again_when_selection_clears(self, qtbot) -> None:  # noqa: ANN001
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/a", "C:/b"]),
+        )
+        qtbot.addWidget(w)
+        w._list.setCurrentRow(0)
+        assert w._btn_remove.isEnabled() is True
+        w._list.clearSelection()
+        assert w._btn_remove.isEnabled() is False
+
+
+class TestPasteSupport:
+    """v0.6.29 — Ctrl+V on the list pastes clipboard text as
+    one-path-per-line, bulk-added at the end."""
+
+    def test_paste_appends_clipboard_lines(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QApplication
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/already"]),
+        )
+        qtbot.addWidget(w)
+        QApplication.clipboard().setText(
+            "C:/path/one\r\nC:/path/two\nC:/path/three\n"
+        )
+        w._paste_from_clipboard()
+        assert w.get_value() == [
+            "C:/already",
+            "C:/path/one",
+            "C:/path/two",
+            "C:/path/three",
+        ]
+
+    def test_paste_strips_quotes_and_blanks(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QApplication
+        w = FolderListWidget(_mk_folder_param())
+        qtbot.addWidget(w)
+        # Mimic Explorer's "Copy as path" (quoted) + a stray blank line.
+        QApplication.clipboard().setText('"C:/with spaces"\n\n  C:/trimmed  \n')
+        w._paste_from_clipboard()
+        assert w.get_value() == [
+            "C:/with spaces",
+            "C:/trimmed",
+        ]
+
+    def test_paste_dedups_against_existing(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QApplication
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/dup"]),
+        )
+        qtbot.addWidget(w)
+        QApplication.clipboard().setText("C:/dup\nC:/new")
+        # Stub the summary box so the test doesn't pop a dialog.
+        import scriptree.ui.widgets.param_widgets as pw
+        captured = {"called": False}
+
+        class _StubBox:
+            @staticmethod
+            def information(*_a, **_kw):  # noqa: ANN001
+                captured["called"] = True
+                return 0
+
+            @staticmethod
+            def warning(*_a, **_kw):  # noqa: ANN001
+                return 0
+
+        real = pw.QMessageBox
+        pw.QMessageBox = _StubBox  # type: ignore[assignment]
+        try:
+            w._paste_from_clipboard()
+        finally:
+            pw.QMessageBox = real
+        assert w.get_value() == ["C:/dup", "C:/new"]
+        # Bulk summary fired because one path was skipped.
+        assert captured["called"] is True
+
+    def test_paste_respects_max_items(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QApplication
+        w = FolderListWidget(_mk_folder_param(max_items=2))
+        qtbot.addWidget(w)
+        QApplication.clipboard().setText("C:/a\nC:/b\nC:/c\nC:/d")
+        # Suppress the summary dialog.
+        import scriptree.ui.widgets.param_widgets as pw
+        real = pw.QMessageBox
+
+        class _StubBox:
+            @staticmethod
+            def information(*_a, **_kw):  # noqa: ANN001
+                return 0
+
+            @staticmethod
+            def warning(*_a, **_kw):  # noqa: ANN001
+                return 0
+
+        pw.QMessageBox = _StubBox  # type: ignore[assignment]
+        try:
+            w._paste_from_clipboard()
+        finally:
+            pw.QMessageBox = real
+        assert w.get_value() == ["C:/a", "C:/b"]
+
+
+class TestDropSupport:
+    """v0.6.29 — URL drops (Explorer drag) and text drops both
+    bulk-add to the list."""
+
+    def test_mime_acceptance_url(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtCore import QMimeData, QUrl
+        w = FolderListWidget(_mk_folder_param())
+        qtbot.addWidget(w)
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile("C:/some/path")])
+        assert w._mime_has_acceptable_payload(mime) is True
+
+    def test_mime_acceptance_text(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtCore import QMimeData
+        w = FolderListWidget(_mk_folder_param())
+        qtbot.addWidget(w)
+        mime = QMimeData()
+        mime.setText("C:/from/text")
+        assert w._mime_has_acceptable_payload(mime) is True
+
+    def test_mime_acceptance_empty(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtCore import QMimeData
+        w = FolderListWidget(_mk_folder_param())
+        qtbot.addWidget(w)
+        mime = QMimeData()
+        assert w._mime_has_acceptable_payload(mime) is False
+
+    def test_drop_event_url_appends(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtCore import QMimeData, QPoint, QUrl, Qt
+        from PySide6.QtGui import QDropEvent
+        w = FolderListWidget(
+            _mk_folder_param(default=["C:/existing"]),
+        )
+        qtbot.addWidget(w)
+        mime = QMimeData()
+        mime.setUrls([
+            QUrl.fromLocalFile("C:/dropped/one"),
+            QUrl.fromLocalFile("C:/dropped/two"),
+        ])
+        # Construct a synthetic drop event.  Position is irrelevant
+        # for our handler — it appends, not inserts-at-row.
+        ev = QDropEvent(
+            QPoint(0, 0), Qt.CopyAction, mime,
+            Qt.LeftButton, Qt.NoModifier,
+        )
+        w.dropEvent(ev)
+        assert w.get_value() == [
+            "C:/existing", "C:/dropped/one", "C:/dropped/two",
+        ]
+
+    def test_drop_event_text_appends(self, qtbot) -> None:  # noqa: ANN001
+        from PySide6.QtCore import QMimeData, QPoint, Qt
+        from PySide6.QtGui import QDropEvent
+        w = FolderListWidget(_mk_folder_param())
+        qtbot.addWidget(w)
+        mime = QMimeData()
+        mime.setText("C:/from/text/a\nC:/from/text/b")
+        ev = QDropEvent(
+            QPoint(0, 0), Qt.CopyAction, mime,
+            Qt.LeftButton, Qt.NoModifier,
+        )
+        w.dropEvent(ev)
+        assert w.get_value() == ["C:/from/text/a", "C:/from/text/b"]

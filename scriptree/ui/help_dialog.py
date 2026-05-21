@@ -326,6 +326,11 @@ def show_about(parent: QWidget | None = None) -> None:
     stays in sync with ``pyproject.toml``.  Falls back to "(unknown)"
     if the package somehow can't be introspected — the dialog still
     opens with a useful blurb either way.
+
+    v0.6.29+ — also shows ``scriptree.__build_date__`` so the user
+    can tell which build they're running when revisions happen
+    quickly.  Silently omits the line for older ScripTree imports
+    that lack the symbol.
     """
     from PySide6.QtWidgets import QMessageBox
 
@@ -333,12 +338,18 @@ def show_about(parent: QWidget | None = None) -> None:
         from scriptree import __version__ as _ver
     except Exception:  # noqa: BLE001
         _ver = "(unknown)"
+    try:
+        from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        _bd = ""
 
+    build_line = f"<p><b>Built:</b> {_bd}</p>" if _bd else ""
     QMessageBox.about(
         parent,
         "About ScripTree",
         f"<h3>ScripTree</h3>"
         f"<p><b>Version:</b> {_ver}</p>"
+        f"{build_line}"
         f"<p>A universal GUI generator for command-line tools.</p>"
         f"<p>Built with Python and PySide6.  See the Help menu for "
         f"documentation on building tools, configurations, and "

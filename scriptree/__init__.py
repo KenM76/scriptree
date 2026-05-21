@@ -2,8 +2,11 @@
 
 ## For humans
 
-The package root. Importing ``scriptree`` exposes ``__version__``,
-the runtime version string the About dialogs display.
+The package root. Importing ``scriptree`` exposes ``__version__``
+(the runtime version string the About dialogs display) and
+``__build_date__`` (when this version was cut — also shown in the
+About dialogs so the user can tell "is this the build I just
+pulled?" at a glance).
 
 ## For maintainers / LLMs
 
@@ -11,10 +14,15 @@ the runtime version string the About dialogs display.
   version string and MUST stay in lockstep with
   ``pyproject.toml::project.version`` — a test enforces equality, so
   bumping one without the other fails CI.
+- ``__build_date__`` is bumped TOGETHER with ``__version__`` to a
+  human-readable ``"YYYY-MM-DD HH:MM UTC"`` timestamp at the moment
+  the version is cut.  No CI guard — drift is annoying but not
+  load-bearing; keep it close-enough by always editing both lines in
+  the same commit.
 - ``scriptree.help_dialog.show_about`` and other About surfaces read
-  ``scriptree.__version__`` so the user always sees exactly the number
-  the package advertises; build/packaging tooling reads the
-  ``pyproject.toml`` copy. The two must not drift.
+  both globals so the user always sees exactly the number + build
+  date the package advertises; build/packaging tooling reads the
+  ``pyproject.toml`` copy.  The version strings must not drift.
 - Keep this module import-light: it is imported on the headless
   ``validate`` / ``migrate`` CLI path, so it must not pull in Qt.
 """
@@ -25,4 +33,12 @@ the runtime version string the About dialogs display.
 # so the user always sees the same number the package advertises),
 # the other is consumed by build / package tooling that walks
 # ``pyproject.toml`` directly.
-__version__ = "0.6.28"
+__version__ = "0.6.29"
+
+# When this version was cut.  Bumped together with ``__version__``
+# in the same commit.  Format: ``"YYYY-MM-DD HH:MM UTC"`` — UTC so
+# every build has a comparable timestamp regardless of where it was
+# cut.  Shown in the About dialogs alongside the version number so
+# the user can tell which build they're running when revisions
+# happen quickly.
+__build_date__ = "2026-05-21 20:33 UTC"

@@ -76,3 +76,48 @@ def test_editor_about_dialog_includes_version() -> None:
         f"About dialog text {captured['text']!r} doesn't contain "
         f"version {__version__!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Build date (v0.6.29+)
+# ---------------------------------------------------------------------------
+
+def test_build_date_string_is_well_formed() -> None:
+    """``scriptree.__build_date__`` is a non-empty string roughly in
+    ``YYYY-MM-DD HH:MM UTC`` form so the About dialog can show
+    "which build is this?" alongside the version.  Bumped together
+    with ``__version__`` per the module docstring."""
+    from scriptree import __build_date__
+    assert isinstance(__build_date__, str)
+    assert __build_date__, "build date must not be empty"
+    # YYYY-MM-DD prefix is the load-bearing part; the rest can be
+    # anything from "HH:MM UTC" to a richer timezone string later.
+    assert re.match(r"^\d{4}-\d{2}-\d{2}", __build_date__), (
+        f"build date {__build_date__!r} doesn't start with YYYY-MM-DD"
+    )
+
+
+def test_editor_about_dialog_includes_build_date() -> None:
+    """v0.6.29+ — the build date appears in the About dialog
+    alongside the version number."""
+    from PySide6.QtWidgets import QMessageBox
+    from scriptree import __build_date__
+    import scriptree.ui.help_dialog as help_dialog
+
+    captured: dict[str, str] = {}
+
+    def _fake_about(parent, title, text):
+        captured["title"] = title
+        captured["text"] = text
+
+    real_about = QMessageBox.about
+    QMessageBox.about = _fake_about  # type: ignore[assignment]
+    try:
+        help_dialog.show_about(None)
+    finally:
+        QMessageBox.about = real_about  # type: ignore[assignment]
+
+    assert __build_date__ in captured["text"], (
+        f"About dialog text {captured['text']!r} doesn't contain "
+        f"build date {__build_date__!r}"
+    )
