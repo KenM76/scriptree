@@ -333,6 +333,14 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["depends_on"] = list(p.depends_on)
     if p.select_all:
         d["select_all"] = True
+    # v0.6.28 — folder_list / file_list options.  Emit only when
+    # non-default so legacy params round-trip byte-identical.
+    if p.must_exist:
+        d["must_exist"] = True
+    if p.min_items:
+        d["min_items"] = int(p.min_items)
+    if p.max_items is not None:
+        d["max_items"] = int(p.max_items)
     return d
 
 
@@ -481,6 +489,12 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         ),
         depends_on=[str(x) for x in (d.get("depends_on") or [])],
         select_all=bool(d.get("select_all", False)),
+        must_exist=bool(d.get("must_exist", False)),
+        min_items=int(d.get("min_items", 0) or 0),
+        max_items=(
+            int(d["max_items"])
+            if d.get("max_items") is not None else None
+        ),
     )
 
 

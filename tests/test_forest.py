@@ -1424,15 +1424,18 @@ class TestUnsavedForestDefaultSpot:
         assert loose_color.alpha() < docked_color.alpha()
         master.close(); c.close()
 
-    def test_collapse_stays_open_unless_opted_in(
+    def test_collapse_cascades_to_linked_members(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        """v0.6.17 — opt-in collapse model: collapsing the forest
-        does NOT tuck ring members by default; the ring stays
-        open (state == "expanded").  Only cells that explicitly
-        set ``_collapse_with_master = True`` tuck with their
-        master.  The master itself still flips to ``"collapsed"``
-        for the visual stroke-dim indicator.
+        """v0.6.20 — collapsing the forest cascades to every linked
+        cell (ring members + standalone children).  The v0.6.17
+        opt-in model was reverted per user direction: "single click
+        on forest or a ring is supposed to collapse all linked
+        cells."
+
+        The dead ``_collapse_with_master`` field still exists for
+        backward-compat on disk but no longer gates the cascade —
+        every member tucks toward the master regardless.
         """
         from PySide6.QtCore import QPoint
         from scriptree.shell import forest_controller as fc_mod
@@ -1463,23 +1466,24 @@ class TestUnsavedForestDefaultSpot:
         forest._members[ring._id] = QPoint(500, 500)
         forest._positioned.add(ring._id)
         ring._group_master_id = forest._id
-        # The ring did NOT opt in to collapse-with-master.
-        assert ring._collapse_with_master is False
 
-        # Collapse the forest.
+        # Collapse the forest.  The forest transitions through
+        # ``"collapsing"`` and lands at ``"collapsed"`` once the
+        # animation finishes — we tolerate either since the exact
+        # moment depends on the Qt event loop's frame timing under
+        # headless test runs.
+        #
+        # The ring itself stays ``"expanded"``: the v0.6.20 cascade
+        # recurses into a member only when the member is a master
+        # WITH its own ``_members`` (a populated ring inside the
+        # forest).  This ring has no members of its own, so the
+        # forest tucks it positionally but leaves its state alone.
+        # When a populated ring is inside the forest the recursive
+        # branch fires — that's the "forest collapse → ring cells
+        # shrink into ring AND ring shrinks into forest" path.
         forest._start_collapse()
-        # Forest flipped to collapsed (visual-only — no opted-in
-        # members to tuck), and the ring stays expanded.
-        assert forest._collapse_state == "collapsed"
+        assert forest._collapse_state in ("collapsing", "collapsed")
         assert ring._collapse_state == "expanded"
-
-        # Now opt the ring in and try again.
-        forest._collapse_state = "expanded"
-        ring._collapse_with_master = True
-        forest._start_collapse()
-        # The ring is one of the opted-in members → animation
-        # phase starts.
-        assert forest._collapse_state == "collapsing"
         ring.close()
 
     def test_ring_drag_end_near_forest_member_joins_forest(

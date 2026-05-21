@@ -120,6 +120,20 @@ class Widget(str, Enum):
     # select-all/none master.  See ``ParamDef.select_all`` and the
     # dynamic-providers feature.
     CHECKBOX_LIST = "checkbox_list"
+    # v0.6.28 — multi-folder picker: an ordered list of folders the
+    # user composes themselves via a Browse button.  Each row holds
+    # one absolute folder path; the user can Add (opens
+    # ``QFileDialog.getExistingDirectory``), Remove, and reorder
+    # (Up / Down).  Order is preserved on argv emission.  ``multiselect``
+    # type emits a ``list[str]`` — the runner already comma-joins lists
+    # into one argv token; per-folder flags use the existing repeating-
+    # token argv pattern.  See ``ParamDef.must_exist`` for the on-add
+    # validation toggle.
+    FOLDER_LIST = "folder_list"
+    # v0.6.28 — multi-file picker.  Same shell as ``FOLDER_LIST`` but
+    # the Add button opens ``QFileDialog.getOpenFileNames`` and the
+    # param's ``file_filter`` is applied.
+    FILE_LIST = "file_list"
 
 
 # Which widgets are valid for each param type. The editor uses this to
@@ -131,7 +145,10 @@ VALID_WIDGETS: dict[ParamType, tuple[Widget, ...]] = {
     ParamType.BOOLEAN: (Widget.CHECKBOX,),
     ParamType.PATH: (Widget.FILE, Widget.SAVE_FILE, Widget.FOLDER),
     ParamType.ENUM: (Widget.DROPDOWN, Widget.RADIO),
-    ParamType.MULTISELECT: (Widget.DROPDOWN, Widget.CHECKBOX_LIST),
+    ParamType.MULTISELECT: (
+        Widget.DROPDOWN, Widget.CHECKBOX_LIST,
+        Widget.FOLDER_LIST, Widget.FILE_LIST,
+    ),
 }
 
 
@@ -332,6 +349,30 @@ class ParamDef:
     choices_provider: ProviderSpec | None = None
     depends_on: list[str] = field(default_factory=list)
     select_all: bool = False
+
+    # v0.6.28 — folder_list / file_list options.  All three are
+    # additive and ignored by widgets that don't use them, so any
+    # legacy param round-trips byte-identical when they sit at their
+    # defaults.
+    #
+    #   ``must_exist`` — when True, the Add button rejects a chosen
+    #       path that doesn't currently exist on disk.  Default False
+    #       (matches the ``file`` / ``folder`` single-picker
+    #       convention — pick first, validate later).  Existence is
+    #       checked at the moment the user finishes the dialog, NOT
+    #       on every keystroke or on form-load: a list that contained
+    #       a since-deleted folder still loads (the runner can
+    #       complain at exec time).
+    #   ``min_items`` / ``max_items`` — soft caps on the list length.
+    #       ``min_items=0`` (default) and ``max_items=None``
+    #       (default) impose no limit.  The widget greys the Add
+    #       button when ``len(items) >= max_items`` and lights an
+    #       error-state border when ``len(items) < min_items``;
+    #       the form's validate step surfaces both as standard
+    #       "missing required" messages.
+    must_exist: bool = False
+    min_items: int = 0
+    max_items: int | None = None
 
     def label_for_choice(self, value: str) -> str:
         """Return the descriptive label for a choice value, or the value itself.

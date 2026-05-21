@@ -44,6 +44,8 @@ accept the files.
 | `file`       | line edit + Browse (`getOpenFileName`) | existing input files  |
 | `save_file`  | line edit + Browse (`getSaveFileName`) | output files to write |
 | `folder`     | line edit + Browse (`getExistingDirectory`) | directories     |
+| `folder_list` | `QListWidget` + Add / Remove / Up / Down | ordered list of folders (search paths, ignore lists, library roots) |
+| `file_list`  | `QListWidget` + Add / Remove / Up / Down | ordered list of files |
 
 Widget names mirror the [HTML5 form-element vocabulary][html5-forms]
 where there's a direct analogue — `text`, `textarea`, `number`,
@@ -82,7 +84,7 @@ implementation's fallback.
 | `boolean`     | `checkbox`                          |
 | `path`        | `file`, `save_file`, `folder`       |
 | `enum`        | `dropdown`, `radio`                 |
-| `multiselect` | `dropdown`, `checkbox_list`         |
+| `multiselect` | `dropdown`, `checkbox_list`, `folder_list`, `file_list` |
 
 > **v0.6.0** — `multiselect` may now render as `checkbox_list` (a
 > scrollable column of checkboxes with an optional select-all/none
@@ -90,6 +92,12 @@ implementation's fallback.
 > choices/value from an external command at form-open time via
 > `choices_provider`. See
 > [`dynamic_providers.md`](dynamic_providers.md).
+>
+> **v0.6.28** — `multiselect` may also render as `folder_list` /
+> `file_list` (a user-composed ordered list of paths with Add /
+> Remove / Up / Down buttons; see the **Multi-path pickers**
+> section below for details and the new `must_exist` / `min_items`
+> / `max_items` fields).
 
 Hand-edited files with illegal combinations load, but on first save the
 editor snaps the widget to the first legal value. `scriptree validate`
@@ -126,6 +134,57 @@ Coercion failures produce a warning dialog but do not prevent the tool
 from loading.
 
 ## Widget-specific fields
+
+### `folder_list`, `file_list` (v0.6.28+)
+
+Both render the same shell: a `QListWidget` of paths with an
+Add / Remove / Up / Down button row and a live count label.  The
+user composes the list manually — there's no provider; for "read
+folders from an external command" use `choices_provider` +
+`checkbox_list`.
+
+| field          | type            | default | meaning |
+|----------------|-----------------|---------|---------|
+| `type`         | `"multiselect"` | required | runner emits a `list[str]` (same as the multi-select dropdown) |
+| `widget`       | `"folder_list"` or `"file_list"` | required | picks the dialog used by Add |
+| `default`      | `list[str]`     | `[]`    | preseeded entries; not validated against `must_exist` |
+| `file_filter`  | `str`           | `""`    | **`file_list` only** — Qt filter for the Add dialog |
+| `must_exist`   | `bool`          | `false` | when `true`, Add rejects a path that doesn't currently exist on disk (user-typed defaults / config-loaded entries skip the check so a since-deleted folder still loads) |
+| `min_items`    | `int`           | `0`     | soft cap — surfaced in the count label and (when `required`) in the form's validate step |
+| `max_items`    | `int` / `null`  | `null`  | soft cap — Add is greyed when reached |
+
+Argv emission is unchanged from any other `multiselect`: the
+runner comma-joins the list into one token by default, or fires
+one token per entry when the argument template uses the
+repeating-token pattern (see `argument_template.md`).
+
+Example — a CLI that takes `--include FOLDER` once per folder:
+
+```json
+{
+  "id": "search_folders",
+  "label": "Folders to search",
+  "type": "multiselect",
+  "widget": "folder_list",
+  "default": [],
+  "must_exist": true,
+  "min_items": 1
+}
+```
+
+```jsonc
+"argument_template": [
+  ["--include", "{search_folders}"]   // repeating-token group
+]
+```
+
+> **When to pick `folder_list` over `choices_provider` +
+> `checkbox_list`:** `folder_list` is for the user composing a
+> list (search paths, ignore-folder lists).  `choices_provider` is
+> for ScripTree reading external state (a list of open documents,
+> running containers, remote branches).  They compose — a future
+> `folder_list` could carry a `choices_provider` that suggests
+> recently-used folders — but the base capability is independent.
 
 ### `file`, `save_file`
 

@@ -54,6 +54,8 @@ class TestCanonicalEnumValues:
             # v0.6.0 — dynamic-providers feature added the
             # checkbox-list widget for multiselect params.
             "checkbox_list",
+            # v0.6.28 — multi-path pickers for multiselect params.
+            "folder_list", "file_list",
         ])
 
     def test_no_v2_aliases_present(self) -> None:

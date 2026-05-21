@@ -463,16 +463,20 @@ class TestHoverTooltip:
         finally:
             m.close()
 
-    def test_tooltip_event_handler_fires_and_returns_true(self) -> None:
-        """v0.6.13 — the manual ``event(QEvent.ToolTip)`` override
-        always handles the ToolTip event (returns True) and routes
-        through ``QToolTip.showText`` with the resolved title.  We
-        confirm the handler ran by reading ``QToolTip.text()``,
-        which holds the last text passed to showText for this
-        process even in headless tests."""
+    def test_tooltip_event_swallowed_by_event_override(self) -> None:
+        """v0.6.27 — the ``event(QEvent.ToolTip)`` override SWALLOWS
+        the platform tooltip event (returns True without calling
+        ``QToolTip.showText``).  The custom ``_CellHoverTip`` widget
+        — driven by enterEvent + a QTimer — replaces the platform
+        tooltip path so the tip carries our own
+        WindowStaysOnTopHint and draws *above* always-on-top cells.
+
+        v0.6.13 used to route through ``QToolTip.showText`` here;
+        that popup competed with the cells' StaysOnTop on Win11 and
+        rendered behind them — the user saw nothing.
+        """
         from PySide6.QtCore import QEvent, QPoint
         from PySide6.QtGui import QHelpEvent
-        from PySide6.QtWidgets import QToolTip
         from scriptree.shell.branding_loader import load_branding
         from scriptree.shell.cell_window import CellWindow
 
@@ -482,12 +486,28 @@ class TestHoverTooltip:
                 QEvent.Type.ToolTip, QPoint(10, 10), QPoint(100, 100),
             )
             handled = c.event(ev)
+            # Event is consumed so the platform's default tooltip
+            # path can't fire underneath our custom widget.
             assert handled is True
-            # The handler must have pushed "ScripTree" (the role
-            # default for an unbound standalone) through showText.
-            assert QToolTip.text() == "ScripTree"
         finally:
-            QToolTip.hideText()
+            c.close()
+
+    def test_hover_tip_title_resolves_through_popup_header(self) -> None:
+        """v0.6.27 — the custom hover-tip text comes from
+        ``tree_popup._popup_header_text`` (the same source as the
+        popup-menu header), so hover-tip + menu-title agree.
+
+        For an unbound standalone cell that resolves to the
+        role-default ``"ScripTree"``.
+        """
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.tree_popup import _popup_header_text
+
+        c = CellWindow(load_branding())
+        try:
+            assert _popup_header_text(c) == "ScripTree"
+        finally:
             c.close()
 
 

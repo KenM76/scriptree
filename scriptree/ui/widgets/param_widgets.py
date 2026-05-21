@@ -96,7 +96,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
@@ -973,6 +976,297 @@ class FolderWidget(_PathPickerBase):
             self._edit.setText(path)
 
 
+# --- multi-path list (v0.6.28 — folder_list / file_list) ------------------
+
+class _PathListWidget(ParamWidget):
+    """Shared shell for ``folder_list`` and ``file_list`` widgets
+    (v0.6.28).
+
+    UI shape:
+
+        ┌──────────────────────────────────────────────────────┐
+        │ C:/path/one                                          │
+        │ C:/path/two                                          │
+        │ C:/path/three                                        │
+        └──────────────────────────────────────────────────────┘
+         [ Add ] [ Remove ] [ Up ] [ Down ]                  Nx
+
+    Value model:
+
+      * ``get_value()`` → ``list[str]`` of paths in user-controlled
+        order.  Same shape the ``multiselect`` dropdown returns, so
+        the runner's existing comma-join / repeating-token logic
+        (``core/runner.py``) emits argv unchanged.
+      * ``set_value(list[str])`` — replaces the list.  Non-list
+        inputs are coerced to a single-element list (defensive — a
+        legacy `default=""` shouldn't crash the widget).
+
+    Subclasses implement ``_pick_paths()`` to return the chosen
+    paths from their respective ``QFileDialog`` call.  The shell
+    handles de-dup, the ``must_exist`` / ``max_items`` checks, and
+    the live-update of the count label.
+    """
+
+    def __init__(self, param: ParamDef) -> None:
+        super().__init__()
+        self._param = param
+        self._must_exist = bool(getattr(param, "must_exist", False))
+        self._min_items = max(0, int(getattr(param, "min_items", 0) or 0))
+        mx = getattr(param, "max_items", None)
+        self._max_items: int | None = (
+            int(mx) if mx is not None else None
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(2)
+
+        self._list = QListWidget()
+        self._list.setSelectionMode(QListWidget.ExtendedSelection)
+        self._list.setMaximumHeight(160)
+        outer.addWidget(self._list)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._btn_add = QPushButton("Add…")
+        self._btn_add.setToolTip(self._add_button_tooltip())
+        self._btn_add.clicked.connect(self._on_add_clicked)
+        row.addWidget(self._btn_add)
+
+        self._btn_remove = QPushButton("Remove")
+        self._btn_remove.setToolTip("Remove the selected entries.")
+        self._btn_remove.clicked.connect(self._on_remove_clicked)
+        row.addWidget(self._btn_remove)
+
+        self._btn_up = QPushButton("Up")
+        self._btn_up.setToolTip("Move the selected entry up one row.")
+        self._btn_up.clicked.connect(lambda: self._move_selection(-1))
+        row.addWidget(self._btn_up)
+
+        self._btn_down = QPushButton("Down")
+        self._btn_down.setToolTip("Move the selected entry down one row.")
+        self._btn_down.clicked.connect(lambda: self._move_selection(+1))
+        row.addWidget(self._btn_down)
+
+        row.addStretch(1)
+
+        self._count_label = QLabel("0")
+        self._count_label.setStyleSheet("QLabel { color: #888; }")
+        row.addWidget(self._count_label)
+        outer.addLayout(row)
+
+        # Seed from the param default (a list of strings, or "" for legacy).
+        default = param.default
+        if isinstance(default, list):
+            seed = [str(x) for x in default if str(x)]
+        elif isinstance(default, str) and default:
+            seed = [default]
+        else:
+            seed = []
+        for p in seed:
+            self._add_path(p, validated=True)  # trust defaults verbatim
+        self._refresh_state()
+
+    # --- helpers expected to be overridden ---------------------------
+
+    def _pick_paths(self) -> list[str]:  # pragma: no cover — overridden
+        """Subclass hook: open the appropriate file dialog and return
+        the paths the user chose (zero or more)."""
+        return []
+
+    def _add_button_tooltip(self) -> str:  # pragma: no cover — overridden
+        return "Add a path to the list."
+
+    # --- internals ---------------------------------------------------
+
+    def _current_items(self) -> list[str]:
+        return [
+            self._list.item(i).text() for i in range(self._list.count())
+        ]
+
+    def _add_path(self, path: str, *, validated: bool = False) -> bool:
+        """Append ``path`` to the list.  Returns True if added.
+
+        - De-dups against the existing list (silent skip on duplicate).
+        - When ``self._must_exist`` and ``validated`` is False, the
+          path is rejected (with a one-line warning) if it doesn't
+          currently exist on disk.
+        - Caps at ``self._max_items`` when set (silent skip with the
+          Add button greyed afterwards).
+        """
+        if not path:
+            return False
+        if path in self._current_items():
+            return False
+        if self._max_items is not None and self._list.count() >= self._max_items:
+            return False
+        if self._must_exist and not validated:
+            try:
+                from pathlib import Path
+                if not Path(path).exists():
+                    QMessageBox.warning(
+                        self,
+                        "Path does not exist",
+                        f"{path}\n\nThe param requires every entry to "
+                        f"exist on disk (must_exist=True).",
+                    )
+                    return False
+            except Exception:  # noqa: BLE001 — never block on a stat error
+                pass
+        self._list.addItem(QListWidgetItem(path))
+        return True
+
+    def _on_add_clicked(self) -> None:
+        try:
+            chosen = self._pick_paths()
+        except Exception:  # noqa: BLE001 — dialog failures must not crash
+            chosen = []
+        if not chosen:
+            return
+        added_any = False
+        for p in chosen:
+            if self._add_path(p):
+                added_any = True
+        if added_any:
+            self._refresh_state()
+            self._emit_changed()
+
+    def _on_remove_clicked(self) -> None:
+        rows = sorted(
+            (self._list.row(it) for it in self._list.selectedItems()),
+            reverse=True,
+        )
+        if not rows:
+            return
+        for r in rows:
+            self._list.takeItem(r)
+        self._refresh_state()
+        self._emit_changed()
+
+    def _move_selection(self, delta: int) -> None:
+        if delta == 0:
+            return
+        rows = sorted(
+            (self._list.row(it) for it in self._list.selectedItems()),
+            reverse=(delta > 0),  # bottom-up when moving down
+        )
+        if not rows:
+            return
+        moved = False
+        n = self._list.count()
+        for r in rows:
+            target = r + delta
+            if target < 0 or target >= n:
+                continue
+            # Don't collide with an unmoved peer.
+            item = self._list.takeItem(r)
+            self._list.insertItem(target, item)
+            item.setSelected(True)
+            moved = True
+        if moved:
+            self._refresh_state()
+            self._emit_changed()
+
+    def _refresh_state(self) -> None:
+        n = self._list.count()
+        # Live count label, with min/max hints when set.
+        bits = [str(n)]
+        if self._min_items:
+            bits.append(f"min {self._min_items}")
+        if self._max_items is not None:
+            bits.append(f"max {self._max_items}")
+        self._count_label.setText(" — ".join(bits) if len(bits) > 1 else bits[0])
+        # Enable / disable buttons.
+        at_max = (
+            self._max_items is not None and n >= self._max_items
+        )
+        self._btn_add.setEnabled(not at_max)
+        has_sel = bool(self._list.selectedItems())
+        self._btn_remove.setEnabled(has_sel)
+        self._btn_up.setEnabled(has_sel)
+        self._btn_down.setEnabled(has_sel)
+
+    def _emit_changed(self) -> None:
+        try:
+            self.valueChanged.emit(self.get_value())
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- public ParamWidget API --------------------------------------
+
+    def get_value(self) -> list[str]:
+        return self._current_items()
+
+    def set_value(self, v) -> None:  # noqa: ANN001
+        # Block signals during bulk rebuild — emit once at the end.
+        block = self._list.blockSignals(True)
+        try:
+            self._list.clear()
+            if isinstance(v, list):
+                items = [str(x) for x in v if str(x)]
+            elif isinstance(v, str) and v:
+                items = [v]
+            else:
+                items = []
+            for p in items:
+                # Defaults / config-loaded values bypass must_exist —
+                # the user can still see them in the list even if a
+                # folder was renamed since the config was saved.
+                self._add_path(p, validated=True)
+        finally:
+            self._list.blockSignals(block)
+        self._refresh_state()
+        self._emit_changed()
+
+
+class FolderListWidget(_PathListWidget):
+    """Multi-folder picker (v0.6.28 — ``folder_list``).
+
+    Add → ``QFileDialog.getExistingDirectory`` (one folder per click;
+    appended in the order chosen).  Order, de-dup, and ``must_exist``
+    handling are inherited from :class:`_PathListWidget`.
+    """
+
+    def _add_button_tooltip(self) -> str:
+        return (
+            "Pick a folder to add to the list.  Order is preserved; "
+            "duplicates are skipped."
+        )
+
+    def _pick_paths(self) -> list[str]:
+        path = QFileDialog.getExistingDirectory(
+            self,
+            f"Add folder to {self._param.label}",
+            "",
+        )
+        return [path] if path else []
+
+
+class FileListWidget(_PathListWidget):
+    """Multi-file picker (v0.6.28 — ``file_list``).
+
+    Add → ``QFileDialog.getOpenFileNames`` so the user can pick
+    several files in one dialog.  Honours ``param.file_filter``
+    exactly like the single-file picker.
+    """
+
+    def _add_button_tooltip(self) -> str:
+        return (
+            "Pick one or more files to add to the list.  Order is "
+            "preserved; duplicates are skipped."
+        )
+
+    def _pick_paths(self) -> list[str]:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            f"Add files to {self._param.label}",
+            "",
+            self._param.file_filter or "All files (*)",
+        )
+        return list(paths or [])
+
+
 # --- factory ---------------------------------------------------------------
 
 def _build_tooltip(param: ParamDef) -> str:
@@ -1063,6 +1357,9 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.FILE: FileOpenWidget,
         WidgetKind.SAVE_FILE: FileSaveWidget,
         WidgetKind.FOLDER: FolderWidget,
+        # v0.6.28 — multi-path pickers.
+        WidgetKind.FOLDER_LIST: FolderListWidget,
+        WidgetKind.FILE_LIST: FileListWidget,
     }
     cls = mapping.get(param.widget, TextWidget)
     widget = cls(param)
