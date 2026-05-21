@@ -663,6 +663,21 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     role = getattr(hex_win, "role", "standalone")
 
     menu = QMenu(None)
+    # v0.6.23 — bring the popup above any always-on-top cell
+    # widgets that surround the master.  Without this, a forest
+    # whose ring is expanded had its popup stacked UNDERNEATH the
+    # member cells (cells are Qt.Tool + Qt.WindowStaysOnTopHint;
+    # QMenu's default Qt.Popup doesn't outrank them on Win11
+    # composition).  Result: "double-clicking the forest when the
+    # other cells are slid out doesn't bring up the menu" —
+    # actually the menu DID open, you just couldn't see it.
+    # Setting StaysOnTop on the menu's window puts it above the
+    # cells while the popup is active; closes naturally on outside
+    # click as before.
+    try:
+        menu.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    except Exception:  # noqa: BLE001
+        pass
     # v0.6.21 — pull the user-configured font/icon scale before
     # adding items so the QFont propagates from the menu to every
     # action and the icon-size stylesheet is in place at paint time.

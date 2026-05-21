@@ -159,6 +159,14 @@ the declared sections.
   skeleton (48 grid, `currentColor`, stroke-width 2.5, 1–4
   primitives, mandatory "generic … not the trademark" comment) +
   the legal trademark gate.
+- [`menu_appearance.md`](menu_appearance.md) — global menu font +
+  icon scale (v0.6.21+) and global cell shape/orientation/size
+  defaults (v0.6.21+).  Storage paths (local QSettings + shared
+  JSON), resolution order, the `menu_appearance_shared_write`
+  capability that gates org-wide writes, and the programmatic
+  API (`load_menu_appearance` / `save_menu_appearance` /
+  `load_cell_defaults` / `save_cell_defaults`).  Default 125% font
+  and icon size on first install.
 - [`parsers/`](parsers) — rules for generating CLI tools whose `--help`
   output will import cleanly into ScripTree on the first try. One file
   per tool family (`python_scripts.md`, `windows_exe.md`,

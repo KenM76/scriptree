@@ -31,13 +31,54 @@ dock with each other).
 
 ## Cell gestures
 
-| Gesture | Standalone cell | Master / ring cell |
+| Gesture | Standalone cell | Master / ring cell (and Forest hub) |
 |---|---|---|
-| **1× left click** | Toggle the cell's tool menu next to the cell. Click another cell → its menu opens (the previous one closes). Click the same cell again → the menu hides. Picking a tool launches the V1 standalone runner with the tool's default configuration. | Same toggle behaviour, but the popup is the **merged** menu — one sub-folder per member cell, each containing that member's catalog. Members with no catalog bound show a disabled "(no catalog bound)" entry. |
-| **2× left click** | Opens V1: the **standalone runner** if the cell is bound to a `.scriptree`, or V1's **full editor** with the tree pre-loaded if the cell is bound to a `.scriptreetree`. | In-process popup with one sub-folder per member (same content as 1× left, but materialised as a regular menu so you can browse without dismissing on outside click). |
-| **1× right click** | Cell context menu organised into three sub-menus — **ScripTree ▶**, **Tree Ring ▶**, **Cell ▶** — plus top-level About / Settings / Preferences and role-aware Close / Exit-all entries. See "Right-click menu" below. | Same structure, with role-aware close items ("Close ring (undock all members)", "Close all related (master + members)"). |
+| **1× left click** | Toggle the cell's tool menu next to the cell. Click another cell → its menu opens (the previous one closes). Click the same cell again → the menu hides. Picking a tool launches the V1 standalone runner with the tool's default configuration. | **v0.6.20+:** collapse / expand the whole linked group. Forest single-click recursively tucks every link-descendant into the forest hub; ring single-click tucks the ring's members. Click again → expand. (Pre-v0.6.20 this opened a popup menu; the popup now lives on double-click — see below.) |
+| **2× left click** | Opens V1: the **standalone runner** if the cell is bound to a `.scriptree`, or V1's **full editor** with the tree pre-loaded if the cell is bound to a `.scriptreetree`. | **v0.6.20+:** in-process popup tree with one sub-folder per member (union of every member's catalog for a ring; every forest item for the forest hub). Same content the single-click used to show. Works whether the group is expanded or collapsed (v0.6.23: the popup raises above the always-on-top member cells when the group is expanded). |
+| **1× right click** | Cell context menu organised into three sub-menus — **ScripTree ▶**, **Tree Ring ▶**, **Cell ▶** — plus top-level About / Settings / Preferences and role-aware Close / Exit-all entries. See "Right-click menu" below. | Same structure plus the **Forest ▶** submenu on the forest hub (Save / Open / Refresh / Auto-add / Forest settings / Manage excluded items / About this forest). |
 | **2× right click** | Opens V1's full editor on the cell's catalog (or a blank editor if no catalog is bound). | Opens V1's full editor on a *merged* `.scriptreetree` — each member becomes a top-level folder. The merged file is regenerated whenever membership changes; same membership = same temp file (V1 can keep it open). If no member has a catalog yet, a placeholder folder is shown so the editor never opens blank. |
-| **Drag** | Live snap detection. When the dragged cell's centre falls within `snapDistancePx` (default 18 px) of one of the target's six honeycomb-neighbour slots, a 2 px highlight outlines the intended dock. Release to commit. | (masters don't dock with other masters in v3.x — pairwise only). |
+| **Drag (cell)** | Live snap detection — when the dragged cell's centre falls within `snapDistancePx` (default 18 px) of one of the target's six honeycomb-neighbour slots, a 2 px highlight outlines the intended dock. Release to commit. Two forest-linked cells dragged together while loose form a new ring that itself stays linked to the forest (v0.6.14+). | At master drag-end, a free standalone within ~1.6×size_px of the master's centre is absorbed as a new ring member; if the absorbed cell was forest-linked, the master inherits the forest link too (v0.6.14+). |
+| **Drag (ring to a forest cell)** | — | The ring becomes a forest sibling of the cell (`link = Forest, dock = Forest`); the cell is NOT pulled into the ring. The forest's repack lands the new ring on the nearest free honeycomb slot, which by closest-slot semantics ends up adjacent to the cell you dropped near (v0.6.16+). |
+
+## Link vs Dock (v0.6.16+)
+
+Every cell carries **two independent parent-pointers**:
+
+| Relationship | Field on cell | What it does | Triggers |
+|---|---|---|---|
+| **Link** | `_group_master_id` (alias `link_master_id`) | The master this cell logically belongs to. Forms a tree rooted at the Forest. | Outline tint (associated colour), recursive collapse, save/exit-all propagation. |
+| **Dock** | Membership in `master._positioned` | The master whose physical drag this cell rigidly translates with. Flat set. | Drag-translation, edge-fold, collapse-tuck animation. |
+
+The two usually coincide. They diverge in two practical cases:
+
+* **Loose-linked** — a cell dragged out of its cluster keeps its
+  `link_master_id` (you're still associated, you just stepped out
+  of the ring's geometry).  Visible via a dimmer outline tint.
+  The cell still collapses with the master when the master
+  collapses.
+* **Forest member rings** — a ring that's a child of the forest
+  has its master's `link_master_id` set to the forest hub.  Drag
+  the forest, the ring follows (it's also in `forest._positioned`).
+  Collapse the forest, the ring shrinks into it AND the ring's own
+  cells shrink into the ring (recursive).
+
+See `help/LLM/icon_library.md` for the icon vocabulary
+(`icon-forest`, `icon-ring`, …) and
+`help/LLM/menu_appearance.md` for the menu font / icon scale UI
+that lives in the cell **Settings → Shape & Size** tab.
+
+## Menu font & icon scale (v0.6.21+)
+
+Right-click any cell → **Settings… → Shape & Size** tab → scroll
+down to "Menu font & icon scale".  Slider for percent (default
+**125%** of OS default), dropdown for absolute pt size, separate
+slider for icon scale, and checkboxes for **Save to local** (this
+user) and **Save to shared** (all users on this machine; gated
+by the `menu_appearance_shared_write` capability).  The same
+save checkboxes also publish the current cell's shape /
+orientation / size to the global cell defaults so new cells you
+spawn afterwards inherit those choices.  Storage paths and
+resolution order in `help/LLM/menu_appearance.md`.
 | **Shake during drag** | Break free from the current ring. The cell un-docks; the master destroys itself if fewer than 2 members remain. | — |
 
 ### How the master ("ring" / "tree ring") spawns

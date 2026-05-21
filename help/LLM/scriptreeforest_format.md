@@ -63,6 +63,9 @@ travels with the source); absolute paths are stored verbatim.
 | `items` | list | `[]` | One entry per ring/tree/tool to load.  See **items** below. |
 | `excluded` | list of strings | `[]` | Paths the user has explicitly removed from the forest.  Auto-discovery surfaces them in the prompt as "previously excluded" rather than re-adding silently. |
 | `auto_discover` | object | sensible defaults | Settings for the discovery walker.  See **auto_discover** below. |
+| `icon_data` | string | absent | Base64-encoded PNG for the forest hub's glyph.  Emitted only when set; absent files fall back to the bundled `icon-forest` glyph. |
+| `icon_format` | string | absent | Image-format hint for `icon_data` (always `"png"` for runtime artifacts; the portable PySide6 build has no qsvg plugin). |
+| `window_position` | `[x, y]` \| absent | absent | **v0.6.11+** — last on-screen position of the forest hub window.  Restored on next launch; absent ⇒ default to the bottom-left of the primary screen.  Hand-edited non-2-tuple values silently fall back to `None`. |
 
 ### `items[]` entries
 
