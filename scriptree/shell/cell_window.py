@@ -5020,37 +5020,15 @@ class CellWindow(QMainWindow):
                     leave_group_action = cell_menu.addAction("Leave group")
                 _seticon_bundled(leave_group_action, "scissors")
 
-        # v0.6.17 — collapse-with-master opt-in.  Cells default to
-        # "stay open" when their link-master collapses; this
-        # checkable action lets the user opt this cell in to
-        # tucking-with-the-master.  Only shown for cells that
-        # actually have a link master (so the toggle is meaningful).
+        # v0.6.20 — the v0.6.17 "Tuck with my master" per-cell opt-in
+        # and the v0.6.19 "Collapse this group" right-click toggle
+        # were both removed: single-click on a master is the
+        # one-and-only "collapse all linked cells" gesture, and
+        # every member tucks by default (no opt-in/out at the cell
+        # level).  Locals kept as None so the action-dispatch
+        # branches below still typecheck.
         collapse_with_action = None
-        if self._group_master_id is not None and self.role != "master":
-            collapse_with_action = cell_menu.addAction(
-                "Tuck with my master when it collapses"
-            )
-            collapse_with_action.setCheckable(True)
-            collapse_with_action.setChecked(
-                bool(getattr(self, "_collapse_with_master", False))
-            )
-            _seticon_bundled(collapse_with_action, "lock")
-
-        # v0.6.19 — collapse / expand toggle for masters.  Single-
-        # click on a master now opens the popup tree (the always-
-        # useful action); the collapse state toggle lives here as
-        # a right-click menu item.
         collapse_toggle_action = None
-        if self.role == "master" and self._members:
-            if self._collapse_state == "expanded":
-                collapse_toggle_action = cell_menu.addAction(
-                    "Collapse this group"
-                )
-            else:
-                collapse_toggle_action = cell_menu.addAction(
-                    "Expand this group"
-                )
-            _seticon_bundled(collapse_toggle_action, "container")
 
         menu.addMenu(cell_menu)
 
@@ -7344,30 +7322,20 @@ class CellWindow(QMainWindow):
     def _fire_pending_master_single_click(self) -> None:
         """Timer callback: the double-click window elapsed with no double-click.
 
-        v0.6.19 — single-click on a master now shows the popup tree
-        (union of every member's catalog for a ring; every forest
-        item for the forest hub), matching what standalone cells do
-        on single-click.  Pre-v0.6.19 this fired
-        ``_toggle_collapse``, but with v0.6.17's "cells stay open
-        unless opted in" semantics, collapse on most masters has no
-        visible effect — the user reported "single-clicking the
-        forest/ring does nothing."  Showing the popup is the
-        always-useful action.  The collapse/expand toggle is still
-        reachable via the master's right-click menu.
+        Master single-click toggles collapse/expand on the master.
+        Per user spec (v0.6.20, correcting v0.6.17/v0.6.19): a single
+        click on the forest or any ring collapses *all linked cells*
+        — every member tucks into the master with the v0.6.16
+        recursive cascade so sub-rings collapse along with their
+        forest.  No opt-in / opt-out per cell; the toggle is the
+        one and only "minimize / maximize this group" gesture.
         """
         _log(
             f"_fire_pending_master_single_click id={self._id[:8]} "
-            "— double-click window elapsed; showing master popup"
+            "— double-click window elapsed; toggling collapse"
         )
         self._pending_master_single_click_timer = None
-        try:
-            from scriptree.shell.tree_popup import show_tree_popup_for
-            show_tree_popup_for(self)
-        except Exception as exc:  # noqa: BLE001
-            _log(
-                f"_fire_pending_master_single_click: popup failed: "
-                f"{exc!r}"
-            )
+        self._toggle_collapse()
 
     def _toggle_collapse(self) -> None:
         """Toggle the collapsed/expanded state of this master hexagon (Bug 3).
@@ -7385,42 +7353,21 @@ class CellWindow(QMainWindow):
             self._start_expand()
 
     def _start_collapse(self) -> None:
-        """v0.6.17 — animate ONLY *opted-in* link-children toward
-        the master centre.  Cells with ``_collapse_with_master ==
-        False`` (the default) stay where they are.
-
-        Per user spec: "If I collapse a ring the cells that were on
-        it should remain open unless opted to close."  The previous
-        cascade-by-default behaviour (v0.6.16 recursive +
-        pre-v0.6.16 always-tuck) is replaced by per-cell opt-in.
-
-        The master's ``_collapse_state`` still toggles so the user
-        gets a paint-level signal of the state change
-        (``_compute_stroke_color`` dims the master's stroke when
-        collapsed; see paintEvent).
+        """Animate ALL link-children toward the master centre,
+        recursing into sub-masters so the whole link tree collapses
+        together (v0.6.20, reverting the v0.6.17 opt-in to the
+        v0.6.16 cascade per user direction "single click on forest
+        or a ring is supposed to collapse all linked cells").
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
 
-        # v0.6.17 — only opted-in members tuck.  Members that didn't
-        # opt in stay open; the master just transitions visually.
         members = [
             registry.get(mid) for mid in self._members
             if registry.get(mid) is not None
-            and getattr(
-                registry.get(mid), "_collapse_with_master", False,
-            )
         ]
         if not members:
-            # No opted-in members — flip the visual state on the
-            # master itself and call it done.  Stroke dimming gives
-            # the user feedback that the toggle was acknowledged.
-            self._collapse_state = "collapsed"
-            self.update()
-            _log(
-                f"_start_collapse {self._id}: no opted-in members; "
-                f"master state → collapsed (visual only)"
-            )
+            _log(f"_start_collapse {self._id}: no member windows found")
             return
 
         self._collapse_state = "collapsing"
@@ -7446,12 +7393,25 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
-            # v0.6.17 — no recursive cascade.  The v0.6.16
-            # "collapse propagates down the link tree" was replaced
-            # by the per-cell opt-in: only members with
-            # ``_collapse_with_master`` set reach this loop.  If
-            # the user wants a ring to collapse along with the
-            # forest, they set the flag on the ring cell itself.
+            # v0.6.20 — recursive cascade restored.  If this member
+            # is itself a master with link-children (e.g. a ring
+            # inside the forest), collapse it FIRST so its members
+            # tuck into it in parallel with it traveling toward us.
+            # Result: forest collapse → ring's cells shrink into
+            # the ring AND the ring shrinks into the forest in one
+            # synchronized motion.
+            if (
+                m.role == "master"
+                and getattr(m, "_members", None)
+                and m._collapse_state == "expanded"
+            ):
+                try:
+                    m._start_collapse()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_start_collapse: recursive collapse of "
+                        f"{m._id[:8]} raised {exc!r} — continuing"
+                    )
             anim = m._animate_to(target, duration_ms=250)
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
@@ -7460,14 +7420,10 @@ class CellWindow(QMainWindow):
         _log(f"_start_collapse {self._id}: animating {len(members)} member(s) to master pos")
 
     def _start_expand(self) -> None:
-        """v0.6.17 — restore only the *opted-in* members that were
-        tucked by ``_start_collapse``.  Members that didn't opt in
-        were never moved during collapse, so there's nothing to
-        animate back for them.
-
-        Per user spec the default is "cells stay open"; only cells
-        with ``_collapse_with_master == True`` participate in the
-        master's collapse/expand cycle.
+        """Restore ALL link-children to their stored positions
+        (v0.6.20, reverting v0.6.17 opt-in).  Sub-masters in a
+        collapsed state are recursively expanded so the whole
+        sub-tree re-blooms together.
 
         Edge-fold interaction (unchanged):
         - _auto_hidden is cleared before expansion so setVisible(True)
@@ -7481,20 +7437,9 @@ class CellWindow(QMainWindow):
         members = [
             registry.get(mid) for mid in self._members
             if registry.get(mid) is not None
-            and getattr(
-                registry.get(mid), "_collapse_with_master", False,
-            )
         ]
         if not members:
-            # No opted-in members; just flip the visual state back
-            # to expanded so future collapses behave correctly.
-            self._collapse_state = "expanded"
-            self.update()
-            self._check_edge_fold()
-            _log(
-                f"_start_expand {self._id}: no opted-in members; "
-                f"master state → expanded (visual only)"
-            )
+            _log(f"_start_expand {self._id}: no member windows found")
             return
 
         # Clear auto-hidden state before expansion so setVisible(True) is clean.
@@ -7528,6 +7473,21 @@ class CellWindow(QMainWindow):
             anim.finished.connect(_make_finish_handler(m._id))
             self._collapse_animations[m._id] = anim
             anim.start()
+            # v0.6.20 — recursive expand restored.  If this member
+            # is itself a master in collapsed state, expand it too
+            # so the whole sub-tree re-blooms together with us.
+            if (
+                m.role == "master"
+                and getattr(m, "_members", None)
+                and m._collapse_state == "collapsed"
+            ):
+                try:
+                    m._start_expand()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_start_expand: recursive expand of "
+                        f"{m._id[:8]} raised {exc!r} — continuing"
+                    )
 
         _log(f"_start_expand {self._id}: animating {len(members)} member(s) to stored positions")
 
