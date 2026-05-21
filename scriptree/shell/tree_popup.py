@@ -456,22 +456,141 @@ def _apply_menu_appearance_recursive(  # noqa: ANN001
         _log(f"_apply_menu_appearance_recursive: submenu walk: {exc!r}")
 
 
-def _make_header_action(menu: QMenu, text: str) -> QAction:
-    """A bold, disabled header row naming what this popup is for
-    (the catalog / forest / ring).  Restores the title that was
-    lost when the search bar was added — it sits ABOVE the search
-    field and is never hidden by filtering (it's chrome, not a
-    structural item)."""
-    hdr = QAction(text, menu)
-    hdr.setEnabled(False)               # non-clickable label
-    f = hdr.font()
+def _make_header_action(  # noqa: ANN001
+    menu: QMenu, text: str, hex_win=None,
+) -> "QWidgetAction":
+    """A bold header row naming what this popup is for (the
+    catalog / forest / ring) — sits ABOVE the live-search field
+    and is never hidden by filtering (it's chrome, not a
+    structural item).
+
+    v0.6.24 — also carries two tool-buttons in the top-right
+    corner:
+
+      * ``□`` opens the full editor view loaded with whatever this
+        popup is showing.  Standalone cell → editor on the bound
+        catalog; ring / forest → editor on the merged tree (every
+        member's catalog as a top-level folder).
+      * ``✕`` closes the popup (same as clicking outside it).
+
+    ``hex_win`` is the cell that owns the popup; when ``None`` the
+    expand button is hidden (caller didn't pass enough context to
+    open the editor).
+    """
+    from PySide6.QtWidgets import (
+        QHBoxLayout, QLabel, QToolButton, QWidget, QWidgetAction,
+    )
+
+    w = QWidget()
+    h = QHBoxLayout(w)
+    h.setContentsMargins(8, 4, 4, 4)
+    h.setSpacing(6)
+
+    # Title label.
+    lbl = QLabel(text)
+    f = lbl.font()
     f.setBold(True)
-    hdr.setFont(f)
+    lbl.setFont(f)
+    lbl.setSizePolicy(
+        lbl.sizePolicy().horizontalPolicy(),
+        lbl.sizePolicy().verticalPolicy(),
+    )
+    h.addWidget(lbl, stretch=1)
+
+    # Open-in-editor button (□).
+    if hex_win is not None:
+        open_btn = QToolButton()
+        open_btn.setText("□")  # WHITE SQUARE — "open in editor"
+        open_btn.setToolTip(
+            "Open in the full editor view (same as a double-left "
+            "click on the cell)"
+        )
+        open_btn.setAutoRaise(True)
+        # Slightly bump the font size so the glyph is visible.
+        of = open_btn.font()
+        of.setPointSizeF(max(of.pointSizeF(), 11.0))
+        open_btn.setFont(of)
+
+        def _on_open_clicked(_checked=False, h_w=hex_win, m=menu):
+            try:
+                m.hide()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                _open_full_editor_for(h_w)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_make_header_action: open failed: {exc!r}")
+        open_btn.clicked.connect(_on_open_clicked)
+        h.addWidget(open_btn)
+
+    # Close-popup button (✕).
+    close_btn = QToolButton()
+    close_btn.setText("✕")  # MULTIPLICATION X
+    close_btn.setToolTip("Close this popup")
+    close_btn.setAutoRaise(True)
+    cf = close_btn.font()
+    cf.setPointSizeF(max(cf.pointSizeF(), 11.0))
+    close_btn.setFont(cf)
+
+    def _on_close_clicked(_checked=False, m=menu):
+        try:
+            m.hide()
+        except Exception:  # noqa: BLE001
+            pass
+    close_btn.clicked.connect(_on_close_clicked)
+    h.addWidget(close_btn)
+
+    hdr = QWidgetAction(menu)
+    hdr.setDefaultWidget(w)
     return hdr
 
 
-def _install_live_search(
-    menu: QMenu, leaves: list, header_text: str = "",
+def _open_full_editor_for(hex_win) -> None:  # noqa: ANN001
+    """Open the full editor view loaded with what ``hex_win``
+    represents.  Dispatches by role:
+
+      * Standalone → ``v1_launcher.show_tree_for(hex_win,
+        mode="lock-open")`` — loads the bound catalog (a
+        .scriptree → standalone runner; a .scriptreetree → editor
+        with the tree).  Blank editor when no catalog bound.
+      * Master (ring or forest) → build a merged .scriptreetree
+        from every member's catalog and open the editor on it.
+
+    The "V1" in ``v1_launcher`` is a historical module name from
+    when the editor and the shell were separate codebases — both
+    are now one product, so the function is just "open the full
+    editor."
+    """
+    role = getattr(hex_win, "role", "standalone")
+    if role == "master":
+        # Build merged temp tree from every member's catalog and
+        # open the editor on it.  ``build_merged_tree_for_master``
+        # already walks the master's members and resolves their
+        # catalog paths, so we can just hand it the master.
+        from scriptree.shell.merged_tree import build_merged_tree_for_master
+        from scriptree.shell.v1_launcher import (
+            launch_editor_blank, launch_editor_with_tree,
+        )
+        try:
+            merged = build_merged_tree_for_master(hex_win)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_open_full_editor_for master: merged build raised {exc!r}")
+            launch_editor_blank()
+            return
+        if merged is None:
+            launch_editor_blank()
+        else:
+            launch_editor_with_tree(merged)
+        return
+
+    # Standalone (or any non-master role) — defer to the existing
+    # lock-open helper which routes by catalog suffix.
+    from scriptree.shell.v1_launcher import show_tree_for
+    show_tree_for(hex_win, mode="lock-open")
+
+
+def _install_live_search(  # noqa: ANN001
+    menu: QMenu, leaves: list, header_text: str = "", hex_win=None,
 ) -> "QLineEdit | None":
     """Prepend a bold header label, then (when there are ≥2 tools)
     a live-filter ``QLineEdit`` + flat result pool, to ``menu``.
@@ -503,7 +622,7 @@ def _install_live_search(
     first = structural[0] if structural else None
 
     # --- header (always) ---------------------------------------------
-    hdr = _make_header_action(menu, header_text or "ScripTree")
+    hdr = _make_header_action(menu, header_text or "ScripTree", hex_win)
 
     has_search = len(leaves) >= 2
     edit = None
@@ -758,7 +877,9 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     # there are ≥2 tools to sift; both are chrome, never hidden by
     # filtering.
     search_edit = _install_live_search(
-        menu, leaves, header_text=_popup_header_text(hex_win),
+        menu, leaves,
+        header_text=_popup_header_text(hex_win),
+        hex_win=hex_win,
     )
 
     # Position: below-centre of the hex.

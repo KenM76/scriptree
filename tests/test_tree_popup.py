@@ -271,13 +271,25 @@ def test_collector_captures_all_leaves_with_breadcrumb(
 def test_header_then_search_are_the_first_actions(
     tmp_path: Path,
 ) -> None:
-    # v0.6.9: a bold disabled header label is restored at index 0
-    # (the title lost when the search bar arrived); the search
-    # QWidgetAction follows at index 1.
+    # v0.6.9: a bold header is restored at index 0 (the title lost
+    # when the search bar arrived); the search QWidgetAction
+    # follows at index 1.
+    # v0.6.24: the header is itself a QWidgetAction wrapping a
+    # QLabel + close/open tool-buttons.  Verify the structure:
+    # acts[0] is a QWidgetAction whose widget contains a bold
+    # QLabel with the header text and at least one QToolButton.
+    from PySide6.QtWidgets import QLabel, QToolButton
     menu, _edit, _ = _menu_with_search(tmp_path)
     acts = menu.actions()
-    assert acts[0].text() and not acts[0].isEnabled()
-    assert acts[0].font().bold()
+    assert isinstance(acts[0], QWidgetAction)
+    w = acts[0].defaultWidget()
+    labels = w.findChildren(QLabel)
+    assert labels and labels[0].text() and labels[0].font().bold()
+    buttons = w.findChildren(QToolButton)
+    assert len(buttons) >= 1, (
+        "header should carry at least a close button"
+    )
+    # The search QWidgetAction follows.
     assert isinstance(acts[1], QWidgetAction)
 
 
