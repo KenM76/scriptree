@@ -23,6 +23,16 @@ __pycache__/
 lib/python/**/__pycache__/
 lib/pypi/**/__pycache__/
 
+# combridge is a SEPARATE project (KenM76/combridge) with its own
+# repo and release cycle.  We bundle its built binaries into
+# lib/combridge/ at portable-build time via lib/install_combridge.ps1,
+# but the source-controlled markers (.gitkeep + README.md) are
+# tracked.  Everything else in that directory is a build artefact
+# from the other project and should never be committed here.
+lib/combridge/*
+!lib/combridge/.gitkeep
+!lib/combridge/README.md
+
 # Per-user state
 *.configs.json
 *.treeconfigs.json

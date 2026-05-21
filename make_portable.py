@@ -112,6 +112,138 @@ def _check_vendored_libs() -> None:
         )
 
 
+def _check_combridge_bundle(*, require: bool) -> None:
+    """Verify ``lib/combridge/combridge.exe`` is present.
+
+    combridge is the COM-bridge runtime (replacement for sw_bridge).
+    The portable zip is supposed to be self-contained — a user
+    downloads one zip and every .scriptree catalog that calls
+    combridge works without a separate install.
+
+    Behaviour:
+
+    * ``require=False`` (default) — print a WARNING when combridge.exe
+      is missing, but continue.  This is the bootstrap state used
+      *before* combridge has its first release; the build keeps
+      working, catalogs that need combridge just won't run yet.
+    * ``require=True`` — FAIL FAST when combridge.exe is missing,
+      with a hint pointing at ``lib/install_combridge.ps1``.  Use
+      this once combridge is a hard dependency.
+
+    When combridge ships, flip the default in ``main()`` to
+    ``require=True`` so a broken zip can't escape.
+    """
+    cb_dir = REPO / "lib" / "combridge"
+    cb_exe = cb_dir / "combridge.exe"
+    if cb_exe.is_file():
+        plugins = cb_dir / "plugins"
+        plugin_count = 0
+        if plugins.is_dir():
+            plugin_count = sum(1 for _ in plugins.glob("*.dll"))
+        print(
+            f"Bundle combridge: {cb_exe} present "
+            f"({plugin_count} plugin(s) in plugins/)."
+        )
+        return
+
+    msg = (
+        f"combridge.exe not found at {cb_exe}.\n"
+        f"\n"
+        f"The portable zip is supposed to include combridge so .scriptree\n"
+        f"catalogs that call it run without a separate install.\n"
+        f"\n"
+        f"Populate it with EITHER:\n"
+        f"\n"
+        f"  # From a local combridge build (preferred — never fails):\n"
+        f"  powershell -File lib\\install_combridge.ps1 -LocalSource "
+        f"<combridge>\\bin\\Release\\net10.0-windows\n"
+        f"\n"
+        f"  # From the GitHub release (network-dependent):\n"
+        f"  powershell -File lib\\install_combridge.ps1\n"
+    )
+    if require:
+        _fail(msg)
+    else:
+        print(f"\nWARNING — combridge not yet bundled:\n{msg}")
+
+
+def bundle_combridge(dest: Path) -> bool:
+    """Run ``lib/install_combridge.ps1`` (or .sh) against the
+    portable copy so combridge.exe ends up at
+    ``<dest>/lib/combridge/``.
+
+    Mirrors :func:`bundle_python` exactly — opt-in via
+    ``--bundle-combridge``, skipped when already populated, soft-fail
+    so a build doesn't break when combridge isn't released yet.
+    """
+    script_ps1 = dest / "lib" / "install_combridge.ps1"
+    script_sh = dest / "lib" / "install_combridge.sh"
+    target_dir = dest / "lib" / "combridge"
+    target_exe = target_dir / "combridge.exe"
+
+    if target_exe.is_file():
+        print("\nBundle combridge: lib/combridge/combridge.exe already present — skipping.")
+        return True
+
+    print("\nBundling combridge into lib/combridge/ ...")
+    if sys.platform == "win32":
+        if not script_ps1.is_file():
+            print(f"   SKIP {script_ps1} not present.")
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile",
+                    "-ExecutionPolicy", "Bypass",
+                    "-File", str(script_ps1),
+                    "-ScripTreeHome", str(dest),
+                ],
+                cwd=str(dest), timeout=600,
+            )
+            if result.returncode != 0:
+                print(
+                    f"   FAIL install_combridge.ps1 exited "
+                    f"with code {result.returncode}."
+                )
+                print(
+                    "   HINT: the GitHub-release download has historically "
+                    "been unreliable.  Re-run install_combridge.ps1 "
+                    "manually with -LocalSource pointing at a local "
+                    "combridge build."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001
+            print(f"   FAIL {e}")
+            return False
+    else:
+        if not script_sh.is_file():
+            print(f"   SKIP {script_sh} not present.")
+            return False
+        try:
+            result = subprocess.run(
+                ["bash", str(script_sh), str(dest)],
+                cwd=str(dest), timeout=600,
+            )
+            if result.returncode != 0:
+                print(
+                    f"   FAIL install_combridge.sh exited "
+                    f"with code {result.returncode}."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001
+            print(f"   FAIL {e}")
+            return False
+
+    if not target_exe.is_file():
+        print(
+            f"   FAIL install script ran but {target_exe} does not exist."
+        )
+        return False
+
+    print(f"   OK bundled combridge at {target_exe}")
+    return True
+
+
 def _rmtree_robust(path: Path, *, attempts: int = 20, pause: float = 0.5) -> None:
     """Remove ``path`` tolerating transient Windows/OneDrive locks.
 
@@ -562,6 +694,24 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--bundle-combridge", action="store_true",
+        help=(
+            "Run lib/install_combridge.ps1 (Windows) or install_combridge.sh "
+            "(Unix) against the portable copy so combridge.exe ends up at "
+            "<dest>/lib/combridge/.  Best-effort — the install script's "
+            "GitHub-download path has historically been unreliable; populate "
+            "lib/combridge/ manually with -LocalSource if this flag misses."
+        ),
+    )
+    ap.add_argument(
+        "--require-combridge", action="store_true",
+        help=(
+            "Fail the build if lib/combridge/combridge.exe is missing.  Use "
+            "this once combridge is shipping; until then the preflight only "
+            "WARNS so the build keeps working during bootstrap."
+        ),
+    )
+    ap.add_argument(
         "--scriptreeapps",
         choices=["keep", "overwrite", "backup"],
         default=None,
@@ -577,6 +727,7 @@ def main() -> int:
     args = ap.parse_args()
 
     _check_vendored_libs()
+    _check_combridge_bundle(require=args.require_combridge)
 
     dest = args.dest.resolve()
     copy_portable(
@@ -585,6 +736,8 @@ def main() -> int:
 
     if args.bundle_python:
         bundle_python(dest)
+    if args.bundle_combridge:
+        bundle_combridge(dest)
 
     size_mb = _folder_size_mb(dest)
     print(f"\nPortable build: {dest}")
