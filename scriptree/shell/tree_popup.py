@@ -324,52 +324,52 @@ def _rank(query: str, name: str, search_text: str) -> int | None:
     return None
 
 
-def apply_menu_appearance(menu: QMenu) -> None:
-    """v0.6.21 — scale this menu's font + icon size from the
-    user-configured menu-appearance settings (cell Settings → Menu
-    tab).  Defaults: 125% font, 125% icon; settable per-local and
-    per-shared (machine-wide).
+def _compute_menu_font_and_icon():  # noqa: ANN202
+    """Resolve the menu font (as a QFont) and icon-size in pixels
+    from the live menu-appearance settings.  Returns
+    ``(QFont | None, int | None)`` — None means "leave alone."
 
-    Falls back silently to Qt's stock appearance if anything in the
-    resolution chain raises.  Apply once per menu just after
-    construction — Qt propagates the font to child QActions
-    automatically on paint, and the icon-size stylesheet sticks
-    until ``setStyleSheet`` is called again.
+    Pulled out as a helper so ``apply_menu_appearance`` and its
+    recursive form share the same resolution + computation logic.
     """
     try:
         from scriptree.shell.menu_appearance import load_menu_appearance
         from scriptree.shell.branding_loader import load_branding
         ma = load_menu_appearance(load_branding())
     except Exception as exc:  # noqa: BLE001
-        _log(f"apply_menu_appearance: resolve failed: {exc!r}")
-        return
+        _log(f"_compute_menu_font_and_icon: resolve failed: {exc!r}")
+        return (None, None)
 
-    # Font: an absolute point size wins, otherwise scale the menu's
-    # current font by font_pct.
+    # Font.
+    qfont = None
     try:
-        f = menu.font()
+        from PySide6.QtGui import QFont
+        from PySide6.QtWidgets import QApplication
+        # Start from the application's default *menu* font so we
+        # apply a known baseline — using QMenu().font() picks up
+        # whatever the platform stylesheet has set, which for some
+        # Win11 styles is already non-default and led to the
+        # submenu-inheritance bug.
+        app = QApplication.instance()
+        base = QFont(app.font("QMenu")) if app is not None else QFont()
         if ma.font_pt is not None and ma.font_pt > 0:
-            f.setPointSize(int(ma.font_pt))
+            base.setPointSize(int(ma.font_pt))
         else:
-            base_pt = f.pointSizeF()
+            base_pt = base.pointSizeF()
             if base_pt <= 0:
-                # Qt sometimes returns -1 when only pixelSize is set.
-                base_px = f.pixelSize()
+                base_px = base.pixelSize()
                 if base_px > 0:
-                    f.setPixelSize(
+                    base.setPixelSize(
                         max(6, int(base_px * (ma.font_pct / 100.0)))
                     )
-                # else: leave the font alone; OS default applies.
             else:
-                f.setPointSizeF(base_pt * (ma.font_pct / 100.0))
-        menu.setFont(f)
+                base.setPointSizeF(base_pt * (ma.font_pct / 100.0))
+        qfont = base
     except Exception as exc:  # noqa: BLE001
-        _log(f"apply_menu_appearance: font apply failed: {exc!r}")
+        _log(f"_compute_menu_font_and_icon: font compute failed: {exc!r}")
 
-    # Icon size: QSS ``QMenu { icon-size: Npx; }`` is honoured by
-    # Qt's default style on every platform we care about.  The
-    # baseline is Qt's small-icon size (~16 px); scale that by
-    # icon_pct.
+    # Icon size.
+    icon_px = None
     try:
         from PySide6.QtWidgets import QApplication, QStyle
         app = QApplication.instance()
@@ -382,11 +382,78 @@ def apply_menu_appearance(menu: QMenu) -> None:
             except Exception:  # noqa: BLE001
                 pass
         icon_px = max(8, int(base_px * (ma.icon_pct / 100.0)))
-        menu.setStyleSheet(
-            f"QMenu {{ icon-size: {icon_px}px; }}"
-        )
     except Exception as exc:  # noqa: BLE001
-        _log(f"apply_menu_appearance: icon apply failed: {exc!r}")
+        _log(f"_compute_menu_font_and_icon: icon compute failed: {exc!r}")
+
+    return (qfont, icon_px)
+
+
+def apply_menu_appearance(menu: QMenu) -> None:
+    """v0.6.21 — scale this menu's font + icon size from the
+    user-configured menu-appearance settings (cell Settings →
+    Shape & Size tab → "Menu font & icon scale").  Defaults: 125%
+    font, 125% icon; settable per-local and per-shared
+    (machine-wide).
+
+    v0.6.22 — walks INTO every submenu recursively so the scale
+    propagates to ``addMenu``-created child menus.  Qt's font
+    inheritance through addMenu doesn't reliably carry to child
+    QMenus on Win11, hence the explicit recursion.  Idempotent —
+    safe to call after the build (recommended) or both before and
+    after.
+
+    Falls back silently to Qt's stock appearance if anything in
+    the resolution chain raises.
+    """
+    qfont, icon_px = _compute_menu_font_and_icon()
+    _apply_menu_appearance_recursive(menu, qfont, icon_px)
+
+
+def _apply_menu_appearance_recursive(  # noqa: ANN001
+    menu: QMenu, qfont, icon_px,
+) -> None:
+    """Apply the precomputed font + icon-size to ``menu`` and
+    recurse into every submenu reachable from it.  Called by
+    ``apply_menu_appearance``; kept private so callers don't have
+    to pre-compute the values."""
+    if qfont is not None:
+        try:
+            menu.setFont(qfont)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_menu_appearance_recursive: setFont: {exc!r}")
+    if icon_px is not None:
+        try:
+            menu.setStyleSheet(
+                f"QMenu {{ icon-size: {icon_px}px; }}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_menu_appearance_recursive: setStyleSheet: {exc!r}")
+    # Recurse into submenus.  Walk actions; an action whose menu()
+    # is non-None is a submenu trigger.  Belt-and-suspenders also
+    # force-set the font on each action so per-action overrides
+    # (e.g. the bold header _make_header_action sets) don't lose
+    # the size scale.
+    try:
+        for act in menu.actions():
+            sub = act.menu()
+            if sub is not None and sub is not menu:
+                _apply_menu_appearance_recursive(sub, qfont, icon_px)
+            elif qfont is not None:
+                # Preserve weight/italic the action may have set,
+                # but adopt the menu's point size.  This is what
+                # was missing for submenu actions and for the bold
+                # header on the popup.
+                try:
+                    act_font = act.font()
+                    if qfont.pointSizeF() > 0:
+                        act_font.setPointSizeF(qfont.pointSizeF())
+                    else:
+                        act_font.setPixelSize(qfont.pixelSize())
+                    act.setFont(act_font)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_apply_menu_appearance_recursive: submenu walk: {exc!r}")
 
 
 def _make_header_action(menu: QMenu, text: str) -> QAction:
@@ -710,5 +777,16 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     # the 0-ms timer defers until after exec() has shown the menu.
     if search_edit is not None:
         QTimer.singleShot(0, search_edit.setFocus)
+
+    # v0.6.22 — re-apply the menu-appearance scale AFTER the menu
+    # is fully built so submenus added by _add_node_to_menu /
+    # _build_menu_for_catalog get the same font + icon size.
+    # The pre-build call (early in this function) only catches the
+    # top level + the live-search QWidgetAction; the recursive
+    # walk here covers every submenu added by the builders above.
+    try:
+        apply_menu_appearance(menu)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"show_tree_popup_for: re-apply after build failed: {exc!r}")
 
     menu.exec(global_pt)

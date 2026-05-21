@@ -5334,6 +5334,21 @@ class CellWindow(QMainWindow):
         exit_all_action = menu.addAction("Exit all")
         _seticon(exit_all_action, _SP.SP_BrowserStop)
 
+        # v0.6.22 — re-apply menu-appearance AFTER all submenus are
+        # added so the catalog / Tree Ring / Cell sub-menus all
+        # match the top-level font + icon scale.  The pre-build
+        # call only catches the top level; submenus added via
+        # addMenu(label) start with default font and need the
+        # recursive walk.
+        try:
+            from scriptree.shell.tree_popup import apply_menu_appearance
+            apply_menu_appearance(menu)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_show_context_menu: re-apply after build failed: "
+                f"{exc!r}"
+            )
+
         chosen = menu.exec(pos)
 
         if chosen == load_scriptree_action:

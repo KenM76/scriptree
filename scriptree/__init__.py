@@ -25,4 +25,4 @@ the runtime version string the About dialogs display.
 # so the user always sees the same number the package advertises),
 # the other is consumed by build / package tooling that walks
 # ``pyproject.toml`` directly.
-__version__ = "0.6.21"
+__version__ = "0.6.22"
