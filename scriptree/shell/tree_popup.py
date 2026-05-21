@@ -324,6 +324,71 @@ def _rank(query: str, name: str, search_text: str) -> int | None:
     return None
 
 
+def apply_menu_appearance(menu: QMenu) -> None:
+    """v0.6.21 — scale this menu's font + icon size from the
+    user-configured menu-appearance settings (cell Settings → Menu
+    tab).  Defaults: 125% font, 125% icon; settable per-local and
+    per-shared (machine-wide).
+
+    Falls back silently to Qt's stock appearance if anything in the
+    resolution chain raises.  Apply once per menu just after
+    construction — Qt propagates the font to child QActions
+    automatically on paint, and the icon-size stylesheet sticks
+    until ``setStyleSheet`` is called again.
+    """
+    try:
+        from scriptree.shell.menu_appearance import load_menu_appearance
+        from scriptree.shell.branding_loader import load_branding
+        ma = load_menu_appearance(load_branding())
+    except Exception as exc:  # noqa: BLE001
+        _log(f"apply_menu_appearance: resolve failed: {exc!r}")
+        return
+
+    # Font: an absolute point size wins, otherwise scale the menu's
+    # current font by font_pct.
+    try:
+        f = menu.font()
+        if ma.font_pt is not None and ma.font_pt > 0:
+            f.setPointSize(int(ma.font_pt))
+        else:
+            base_pt = f.pointSizeF()
+            if base_pt <= 0:
+                # Qt sometimes returns -1 when only pixelSize is set.
+                base_px = f.pixelSize()
+                if base_px > 0:
+                    f.setPixelSize(
+                        max(6, int(base_px * (ma.font_pct / 100.0)))
+                    )
+                # else: leave the font alone; OS default applies.
+            else:
+                f.setPointSizeF(base_pt * (ma.font_pct / 100.0))
+        menu.setFont(f)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"apply_menu_appearance: font apply failed: {exc!r}")
+
+    # Icon size: QSS ``QMenu { icon-size: Npx; }`` is honoured by
+    # Qt's default style on every platform we care about.  The
+    # baseline is Qt's small-icon size (~16 px); scale that by
+    # icon_pct.
+    try:
+        from PySide6.QtWidgets import QApplication, QStyle
+        app = QApplication.instance()
+        base_px = 16
+        if app is not None:
+            try:
+                base_px = app.style().pixelMetric(
+                    QStyle.PixelMetric.PM_SmallIconSize,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        icon_px = max(8, int(base_px * (ma.icon_pct / 100.0)))
+        menu.setStyleSheet(
+            f"QMenu {{ icon-size: {icon_px}px; }}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log(f"apply_menu_appearance: icon apply failed: {exc!r}")
+
+
 def _make_header_action(menu: QMenu, text: str) -> QAction:
     """A bold, disabled header row naming what this popup is for
     (the catalog / forest / ring).  Restores the title that was
@@ -531,6 +596,10 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     role = getattr(hex_win, "role", "standalone")
 
     menu = QMenu(None)
+    # v0.6.21 — pull the user-configured font/icon scale before
+    # adding items so the QFont propagates from the menu to every
+    # action and the icon-size stylesheet is in place at paint time.
+    apply_menu_appearance(menu)
     # Flat live-search index — every leaf across the whole (possibly
     # master-union) catalog as (display, search_text, trigger).
     leaves: list = []

@@ -450,6 +450,15 @@ class SettingsDialog(QDialog):
         label_tab_layout.setSpacing(10)
         self._tabs.addTab(label_tab, "Label")
 
+        # v0.6.21 — menu-appearance controls live INSIDE the Shape &
+        # Size tab (per user direction: "Put it in the same section
+        # that controls cell size/shape").  They get appended to
+        # shape_tab_layout below, after the existing shape/size
+        # widgets.  The "Save to local / shared default" checkboxes
+        # also apply to the cell shape/size controls so the same
+        # group serves as a global-default save destination for
+        # both kinds of setting.
+
         # First section drops into the shape tab.
         layout = shape_tab_layout
 
@@ -1229,6 +1238,14 @@ class SettingsDialog(QDialog):
         self._update_label_controls_enabled()
         layout.addStretch(1)
 
+        # v0.6.21 — append the global menu-appearance group at the
+        # end of the Shape & Size tab.  This is intentionally NOT
+        # a separate tab — per user direction the controls live
+        # alongside the cell shape/size controls so the "Save to
+        # local / shared default" checkboxes apply to BOTH the
+        # menu font/icon scale AND the cell shape/size choices.
+        self._build_menu_appearance_tab(shape_tab_layout)
+
         # ---- Footer (lives outside the tab widget) -------------------------
         # The Reset / Close buttons apply to the whole dialog regardless of
         # which tab is active, so they go in the outer layout below the
@@ -1356,12 +1373,15 @@ class SettingsDialog(QDialog):
         orient_key = self._ORIENT_DISPLAY.get(self._orient_combo.currentText(), "flat-top")
         self._hex.apply_shape_change(shape_key, orient_key)
         self._hex._save_settings()
+        # v0.6.21 — also push to global cell defaults if user opted in.
+        self._maybe_save_cell_defaults_globally()
 
     def _on_orient_changed(self, display_text: str) -> None:
         orient_key = self._ORIENT_DISPLAY.get(display_text, "flat-top")
         shape_key = self._SHAPE_DISPLAY.get(self._shape_combo.currentText(), "hexagon")
         self._hex.apply_shape_change(shape_key, orient_key)
         self._hex._save_settings()
+        self._maybe_save_cell_defaults_globally()
 
     def _on_size_changed(self, value: int) -> None:
         # Snap to nearest multiple of 4.
@@ -1370,6 +1390,45 @@ class SettingsDialog(QDialog):
         self._size_label.setText(f"Size: {snapped} px")
         self._hex.apply_size_change(snapped)
         self._hex._save_settings()
+        self._maybe_save_cell_defaults_globally()
+
+    def _maybe_save_cell_defaults_globally(self) -> None:
+        """v0.6.21 — if the user has the menu-appearance tab's
+        "Save to local/shared default" checkboxes ticked, also
+        push the *current* cell's shape/orientation/size to the
+        global CellDefaults storage so newly-spawned cells pick
+        the choice up.  Gated by the same checkboxes (and the
+        same shared-write capability) as the menu-appearance
+        settings — one set of toggles controls both."""
+        # Defensive: the menu tab is built late in __init__, so
+        # very-early calls (before the checkboxes exist) must
+        # silently no-op.
+        local_cb = getattr(self, "_menu_save_local_cb", None)
+        shared_cb = getattr(self, "_menu_save_shared_cb", None)
+        if local_cb is None or shared_cb is None:
+            return
+        if not (local_cb.isChecked() or shared_cb.isChecked()):
+            return
+        try:
+            from scriptree.shell.menu_appearance import (
+                CellDefaults, save_cell_defaults,
+            )
+            values = CellDefaults(
+                shape=self._hex._shape,
+                orientation=self._hex._orientation,
+                size_px=int(self._hex._size_px),
+            )
+            save_cell_defaults(
+                values,
+                save_local=local_cb.isChecked(),
+                save_shared=shared_cb.isChecked(),
+                branding=self._hex._branding,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_maybe_save_cell_defaults_globally: "
+                f"save failed: {exc!r}"
+            )
 
     def _on_transp_changed(self, value: int) -> None:
         self._transp_label.setText(f"Transparency: {value}%")
@@ -1416,6 +1475,183 @@ class SettingsDialog(QDialog):
             )
 
     # ---- Cell-label slots ------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # v0.6.21 — Menu appearance tab (font + icon scale for popup menus)
+    # ------------------------------------------------------------------
+
+    def _build_menu_appearance_tab(self, layout) -> None:  # noqa: ANN001
+        """Populate the Settings dialog's "Menu" tab with the
+        font/icon scale controls + local/shared save toggles.
+
+        Reads the current resolved values via
+        ``menu_appearance.load_menu_appearance`` so the sliders
+        reflect the live state (local QSettings override, shared
+        file fallback, 125% default).  Every control writes back
+        live via ``_apply_menu_appearance_change``.
+        """
+        from scriptree.shell.menu_appearance import (
+            DEFAULT_FONT_PCT, DEFAULT_ICON_PCT,
+            load_menu_appearance,
+        )
+        ma = load_menu_appearance(self._hex._branding)
+
+        grp = QGroupBox("Menu font & icon scale")
+        glayout = QVBoxLayout(grp)
+
+        # ---- Font scale slider ---------------------------------------
+        font_row = QVBoxLayout()
+        self._menu_font_pct_label = QLabel(
+            f"Font scale: {ma.font_pct}% of the OS default"
+        )
+        self._menu_font_pct_slider = QSlider(Qt.Horizontal)
+        self._menu_font_pct_slider.setMinimum(50)
+        self._menu_font_pct_slider.setMaximum(300)
+        self._menu_font_pct_slider.setSingleStep(5)
+        self._menu_font_pct_slider.setPageStep(10)
+        self._menu_font_pct_slider.setValue(int(ma.font_pct))
+        font_row.addWidget(self._menu_font_pct_label)
+        font_row.addWidget(self._menu_font_pct_slider)
+        glayout.addLayout(font_row)
+
+        # ---- Fixed-pt override dropdown ------------------------------
+        pt_row = QHBoxLayout()
+        pt_row.addWidget(QLabel("Or fix the point size:"))
+        self._menu_font_pt_combo = QComboBox()
+        self._menu_font_pt_combo.addItem("Use percent", userData=0)
+        for pt in (8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32):
+            self._menu_font_pt_combo.addItem(f"{pt} pt", userData=int(pt))
+        # Select current value.
+        idx = 0
+        if ma.font_pt is not None and ma.font_pt > 0:
+            for i in range(self._menu_font_pt_combo.count()):
+                if self._menu_font_pt_combo.itemData(i) == int(ma.font_pt):
+                    idx = i
+                    break
+        self._menu_font_pt_combo.setCurrentIndex(idx)
+        pt_row.addWidget(self._menu_font_pt_combo, stretch=1)
+        glayout.addLayout(pt_row)
+
+        # ---- Icon scale slider ---------------------------------------
+        icon_row = QVBoxLayout()
+        self._menu_icon_pct_label = QLabel(
+            f"Icon scale: {ma.icon_pct}% of the OS default"
+        )
+        self._menu_icon_pct_slider = QSlider(Qt.Horizontal)
+        self._menu_icon_pct_slider.setMinimum(50)
+        self._menu_icon_pct_slider.setMaximum(300)
+        self._menu_icon_pct_slider.setSingleStep(5)
+        self._menu_icon_pct_slider.setPageStep(10)
+        self._menu_icon_pct_slider.setValue(int(ma.icon_pct))
+        icon_row.addWidget(self._menu_icon_pct_label)
+        icon_row.addWidget(self._menu_icon_pct_slider)
+        glayout.addLayout(icon_row)
+
+        # ---- Save destinations ---------------------------------------
+        glayout.addSpacing(4)
+        self._menu_save_local_cb = QCheckBox(
+            "Save changes to local settings (this user)"
+        )
+        self._menu_save_local_cb.setChecked(True)
+        glayout.addWidget(self._menu_save_local_cb)
+
+        self._menu_save_shared_cb = QCheckBox(
+            "Save changes to shared settings (all users on this machine)"
+        )
+        # Gated by the menu_appearance_shared_write capability.
+        try:
+            from scriptree.ui.permission_guards import perm_check
+            can_shared = perm_check("menu_appearance_shared_write")
+        except Exception:  # noqa: BLE001
+            can_shared = False
+        self._menu_save_shared_cb.setChecked(False)
+        if not can_shared:
+            self._menu_save_shared_cb.setEnabled(False)
+            self._menu_save_shared_cb.setToolTip(
+                "Disabled by IT — capability not granted: "
+                "menu_appearance_shared_write"
+            )
+        glayout.addWidget(self._menu_save_shared_cb)
+
+        # ---- Reset to default ----------------------------------------
+        reset_row = QHBoxLayout()
+        self._menu_reset_btn = QPushButton(
+            f"Reset to default ({DEFAULT_FONT_PCT}% / {DEFAULT_ICON_PCT}%)"
+        )
+        reset_row.addStretch(1)
+        reset_row.addWidget(self._menu_reset_btn)
+        glayout.addLayout(reset_row)
+
+        layout.addWidget(grp)
+
+        # ---- Connections ---------------------------------------------
+        self._menu_font_pct_slider.valueChanged.connect(
+            self._on_menu_font_pct_changed
+        )
+        self._menu_font_pt_combo.currentIndexChanged.connect(
+            self._on_menu_font_pt_changed
+        )
+        self._menu_icon_pct_slider.valueChanged.connect(
+            self._on_menu_icon_pct_changed
+        )
+        self._menu_reset_btn.clicked.connect(
+            self._on_menu_appearance_reset
+        )
+
+    def _current_menu_appearance(self):  # noqa: ANN202
+        """Snapshot the dialog's controls into a ``MenuAppearance``."""
+        from scriptree.shell.menu_appearance import MenuAppearance
+        pt = self._menu_font_pt_combo.currentData()
+        return MenuAppearance(
+            font_pct=int(self._menu_font_pct_slider.value()),
+            font_pt=(int(pt) if pt else None),
+            icon_pct=int(self._menu_icon_pct_slider.value()),
+        )
+
+    def _apply_menu_appearance_change(self) -> None:
+        """Persist the dialog's current state to whichever
+        destinations are ticked.  Live — fires on every control
+        change so the user sees the next popup menu reflect the
+        new scale immediately."""
+        from scriptree.shell.menu_appearance import save_menu_appearance
+        values = self._current_menu_appearance()
+        try:
+            save_menu_appearance(
+                values,
+                save_local=self._menu_save_local_cb.isChecked(),
+                save_shared=self._menu_save_shared_cb.isChecked(),
+                branding=self._hex._branding,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_menu_appearance_change: save failed: {exc!r}")
+
+    def _on_menu_font_pct_changed(self, value: int) -> None:
+        self._menu_font_pct_label.setText(
+            f"Font scale: {value}% of the OS default"
+        )
+        self._apply_menu_appearance_change()
+
+    def _on_menu_font_pt_changed(self, _idx: int) -> None:
+        # When a pt size is selected the percent slider is greyed —
+        # it's an override.  "Use percent" re-enables it.
+        pt = self._menu_font_pt_combo.currentData()
+        self._menu_font_pct_slider.setEnabled(not bool(pt))
+        self._menu_font_pct_label.setEnabled(not bool(pt))
+        self._apply_menu_appearance_change()
+
+    def _on_menu_icon_pct_changed(self, value: int) -> None:
+        self._menu_icon_pct_label.setText(
+            f"Icon scale: {value}% of the OS default"
+        )
+        self._apply_menu_appearance_change()
+
+    def _on_menu_appearance_reset(self) -> None:
+        from scriptree.shell.menu_appearance import (
+            DEFAULT_FONT_PCT, DEFAULT_ICON_PCT,
+        )
+        self._menu_font_pct_slider.setValue(DEFAULT_FONT_PCT)
+        self._menu_icon_pct_slider.setValue(DEFAULT_ICON_PCT)
+        self._menu_font_pt_combo.setCurrentIndex(0)  # "Use percent"
 
     def _update_label_controls_enabled(self) -> None:
         """Enable / disable the per-mode controls based on the radio
@@ -2453,9 +2689,29 @@ class CellWindow(QMainWindow):
         hex_cfg = branding.get("hexagon", {})
 
         # ---- Branding defaults (overridden by QSettings below) ----------
-        self._size_px: int = hex_cfg.get("defaultSizePx", 56)
-        self._shape: str = hex_cfg.get("shape", "hexagon")
-        self._orientation: str = hex_cfg.get("orientation", "flat-top")
+        # v0.6.21 — global CellDefaults (load_cell_defaults) is
+        # consulted BEFORE branding fallbacks for shape/orientation
+        # /size so the user's "save as default" choices in the
+        # Settings dialog actually shape new cells.  Per-cell
+        # QSettings (loaded further down) still wins for an
+        # existing cell that's already been customised.
+        try:
+            from scriptree.shell.menu_appearance import load_cell_defaults
+            _cell_def = load_cell_defaults(branding)
+        except Exception:  # noqa: BLE001
+            _cell_def = None
+        self._size_px: int = (
+            int(_cell_def.size_px) if _cell_def is not None
+            else hex_cfg.get("defaultSizePx", 56)
+        )
+        self._shape: str = (
+            str(_cell_def.shape) if _cell_def is not None
+            else hex_cfg.get("shape", "hexagon")
+        )
+        self._orientation: str = (
+            str(_cell_def.orientation) if _cell_def is not None
+            else hex_cfg.get("orientation", "flat-top")
+        )
         self._transparency: float = hex_cfg.get("defaultTransparency", 0.85)
         self._always_on_top: bool = bool(hex_cfg.get("defaultAlwaysOnTop", True))
 
@@ -4745,6 +5001,14 @@ class CellWindow(QMainWindow):
         # Use None parent so the menu gets Win11 system chrome rather than
         # inheriting the CellWindow's translucent/dark palette.
         menu = QMenu(None)
+        # v0.6.21 — apply the user's configured font / icon scale
+        # (cell Settings → Menu tab; default 125%).  Same helper the
+        # single-click popup uses so context and popup match.
+        try:
+            from scriptree.shell.tree_popup import apply_menu_appearance
+            apply_menu_appearance(menu)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_show_context_menu: apply_menu_appearance: {exc!r}")
 
         # v0.6.5 — OS standard icons on the program/context-menu items
         # (the user: "menu items both for the program and apps").

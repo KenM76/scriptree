@@ -315,6 +315,19 @@ CAPABILITIES: dict[str, str] = {
         "Allow tools to run an external command at form-open time "
         "to populate parameter choices/values (choices_provider)"
     ),
+    # Menu-appearance shared write (v0.6.21).  Gates the "Save to
+    # shared settings" checkbox in the cell Settings → Menu tab so
+    # an end user can't tweak the org-wide menu font/icon scale
+    # from their machine.  Default behaviour: missing file =
+    # DENIED so an admin must explicitly grant by dropping a
+    # writable capability file.  Per-user local writes are NOT
+    # gated by this capability — only the machine-wide JSON
+    # write.
+    "menu_appearance_shared_write": (
+        "Write the menu font/icon scale to the machine-wide "
+        "shared menu_appearance.json (otherwise only the per-user "
+        "QSettings copy is writeable)"
+    ),
 }
 
 
