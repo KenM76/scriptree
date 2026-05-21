@@ -53,12 +53,21 @@ still picks up `icon_pct` from the shared file if local has none.
 ## Capability gate
 
 Writing to the **shared** JSON is gated by the
-`menu_appearance_shared_write` capability.  Default deployments
-ship without the capability file, so the "Save to shared settings"
-checkbox in the Settings dialog is greyed and `save_menu_appearance(
-..., save_shared=True)` silently no-ops.  An admin grants by
-dropping a writable file named `menu_appearance_shared_write` into
-the `permissions/` folder.
+`appearance_shared_write` capability.  **This same capability
+governs BOTH the menu font/icon scale AND the cell
+shape/orientation/size global defaults** — one switch for the
+whole shared-appearance surface.  Default deployments ship
+without the capability file, so the "Save to shared settings"
+checkbox in the Settings dialog is greyed and
+`save_menu_appearance(..., save_shared=True)` /
+`save_cell_defaults(..., save_shared=True)` silently no-op.  An
+admin grants by dropping a writable file named
+`appearance_shared_write` into the `permissions/` folder.
+
+> **Legacy alias (v0.6.21–v0.6.24).**  The capability used to be
+> called `menu_appearance_shared_write`.  An admin install that
+> already deployed that file continues to work — the runtime
+> accepts either name.  Fresh installs should use the new name.
 
 Local QSettings writes are NOT gated — every user can adjust
 their own scale.

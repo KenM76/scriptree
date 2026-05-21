@@ -315,18 +315,29 @@ CAPABILITIES: dict[str, str] = {
         "Allow tools to run an external command at form-open time "
         "to populate parameter choices/values (choices_provider)"
     ),
-    # Menu-appearance shared write (v0.6.21).  Gates the "Save to
-    # shared settings" checkbox in the cell Settings → Menu tab so
-    # an end user can't tweak the org-wide menu font/icon scale
-    # from their machine.  Default behaviour: missing file =
-    # DENIED so an admin must explicitly grant by dropping a
-    # writable capability file.  Per-user local writes are NOT
-    # gated by this capability — only the machine-wide JSON
-    # write.
+    # Appearance shared write (v0.6.25, renamed from
+    # menu_appearance_shared_write in v0.6.21).  Single capability
+    # that gates the "Save to shared settings" checkbox in the
+    # cell Settings → Shape & Size tab so an end user can't
+    # tweak the org-wide *menu font/icon scale* OR the org-wide
+    # *cell shape/orientation/size defaults* from their machine.
+    # Both kinds of setting share the same shared JSON file and
+    # the same security gate by user direction.  Default
+    # behaviour: missing file = DENIED.  Per-user local writes
+    # are NOT gated — every user can adjust their own copy.
+    "appearance_shared_write": (
+        "Write the menu font/icon scale AND the cell shape / "
+        "orientation / size defaults to the machine-wide shared "
+        "appearance JSON (otherwise only the per-user QSettings "
+        "copy is writeable)"
+    ),
+    # Legacy alias kept so an admin install that already deployed
+    # ``menu_appearance_shared_write`` as a capability file
+    # continues to work without the file being renamed.  The
+    # check site OR's both names; a fresh install should use the
+    # new name.  Safe to drop in a future major.
     "menu_appearance_shared_write": (
-        "Write the menu font/icon scale to the machine-wide "
-        "shared menu_appearance.json (otherwise only the per-user "
-        "QSettings copy is writeable)"
+        "[Legacy alias of appearance_shared_write — same effect]"
     ),
 }
 

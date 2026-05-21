@@ -1558,10 +1558,18 @@ class SettingsDialog(QDialog):
         self._menu_save_shared_cb = QCheckBox(
             "Save changes to shared settings (all users on this machine)"
         )
-        # Gated by the menu_appearance_shared_write capability.
+        # v0.6.25 — gated by the appearance_shared_write capability
+        # (renamed from menu_appearance_shared_write).  Accept the
+        # legacy name too so installs that already deployed the
+        # old capability file keep working.  The same capability
+        # governs the cell shape/orientation/size global defaults
+        # — one switch for everything in this tab.
         try:
             from scriptree.ui.permission_guards import perm_check
-            can_shared = perm_check("menu_appearance_shared_write")
+            can_shared = (
+                perm_check("appearance_shared_write")
+                or perm_check("menu_appearance_shared_write")
+            )
         except Exception:  # noqa: BLE001
             can_shared = False
         self._menu_save_shared_cb.setChecked(False)
@@ -1569,7 +1577,7 @@ class SettingsDialog(QDialog):
             self._menu_save_shared_cb.setEnabled(False)
             self._menu_save_shared_cb.setToolTip(
                 "Disabled by IT — capability not granted: "
-                "menu_appearance_shared_write"
+                "appearance_shared_write"
             )
         glayout.addWidget(self._menu_save_shared_cb)
 
