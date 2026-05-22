@@ -188,6 +188,188 @@ class TestTokenGroups:
             resolve(tool, {"system": ""})
 
 
+class TestMultiselectFanout:
+    """v0.6.31 — when a token group contains exactly one bare
+    ``{id}`` placeholder whose param resolves to a list, the group
+    fans out: it's emitted once per element, with that one
+    placeholder substituted with the element each time.
+
+    This is what makes ``["--folder", "{folders}"]`` produce
+    ``--folder a --folder b --folder c`` for a multiselect /
+    folder_list / file_list / checkbox_list — the behaviour the
+    docs (correctly) describe.  Bare / embedded / conditional
+    placeholders OUTSIDE a group still comma-join, per the
+    canonical "--include a,b,c" pattern.
+    """
+
+    def _multi_tool(self) -> ToolDef:
+        return _tool(
+            template=[["--tag", "{tags}"]],
+            params=[
+                ParamDef(
+                    id="tags",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+
+    def test_three_element_list_fans_out(self) -> None:
+        cmd = resolve(self._multi_tool(), {"tags": ["a", "b", "c"]})
+        assert cmd.argv == [
+            "/usr/bin/echo",
+            "--tag", "a",
+            "--tag", "b",
+            "--tag", "c",
+        ]
+
+    def test_one_element_list_fans_out_cleanly(self) -> None:
+        cmd = resolve(self._multi_tool(), {"tags": ["only"]})
+        assert cmd.argv == ["/usr/bin/echo", "--tag", "only"]
+
+    def test_empty_list_drops_whole_group(self) -> None:
+        cmd = resolve(self._multi_tool(), {"tags": []})
+        assert cmd.argv == ["/usr/bin/echo"]
+
+    def test_group_with_multiple_literals_still_fans_out(self) -> None:
+        """Literals around the placeholder repeat per element too."""
+        tool = _tool(
+            template=[["--in", "{paths}", "--strict"]],
+            params=[
+                ParamDef(
+                    id="paths",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"paths": ["x", "y"]})
+        assert cmd.argv == [
+            "/usr/bin/echo",
+            "--in", "x", "--strict",
+            "--in", "y", "--strict",
+        ]
+
+    def test_bare_placeholder_outside_group_still_comma_joins(self) -> None:
+        """Comma-join is preserved for the bare-placeholder form so
+        the canonical ``--include a,b,c`` pattern still works."""
+        tool = _tool(
+            template=["{tags}"],
+            params=[
+                ParamDef(
+                    id="tags",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"tags": ["a", "b", "c"]})
+        assert cmd.argv == ["/usr/bin/echo", "a,b,c"]
+
+    def test_embedded_placeholder_still_comma_joins(self) -> None:
+        """``--tag={tags}`` is the OTHER canonical single-flag-comma
+        pattern — also preserved."""
+        tool = _tool(
+            template=["--tag={tags}"],
+            params=[
+                ParamDef(
+                    id="tags",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"tags": ["a", "b"]})
+        assert cmd.argv == ["/usr/bin/echo", "--tag=a,b"]
+
+    def test_conditional_with_equal_still_comma_joins(self) -> None:
+        """``{tags?--tag=}`` form keeps the single-flag-comma
+        contract too — it's just a conditional version of the
+        embedded form."""
+        tool = _tool(
+            template=["{tags?--tag=}"],
+            params=[
+                ParamDef(
+                    id="tags",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"tags": ["a", "b"]})
+        assert cmd.argv == ["/usr/bin/echo", "--tag=a,b"]
+
+    def test_group_with_two_multi_placeholders_keeps_comma_join(self) -> None:
+        """Two list placeholders in one group is ambiguous (zip?
+        cartesian?).  Rather than guess, the runner falls back to
+        the legacy comma-join behaviour so existing tools that
+        used this shape don't suddenly emit something surprising.
+        """
+        tool = _tool(
+            template=[["--from", "{srcs}", "--to", "{dests}"]],
+            params=[
+                ParamDef(
+                    id="srcs",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+                ParamDef(
+                    id="dests",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.CHECKBOX_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"srcs": ["a", "b"], "dests": ["x", "y"]})
+        # Falls back to single-emission, each list comma-joined.
+        assert cmd.argv == [
+            "/usr/bin/echo", "--from", "a,b", "--to", "x,y",
+        ]
+
+    def test_folder_list_param_fans_out(self) -> None:
+        """The v0.6.28 folder_list / file_list widgets emit
+        ``list[str]`` exactly like a multi-select dropdown does,
+        so they ride the same fan-out path."""
+        tool = _tool(
+            template=[["--folder", "{folder}"]],
+            params=[
+                ParamDef(
+                    id="folder",
+                    type=ParamType.MULTISELECT,
+                    widget=Widget.FOLDER_LIST,
+                ),
+            ],
+        )
+        cmd = resolve(tool, {"folder": ["C:/A", "C:/B", "C:/C"]})
+        assert cmd.argv == [
+            "/usr/bin/echo",
+            "--folder", "C:/A",
+            "--folder", "C:/B",
+            "--folder", "C:/C",
+        ]
+
+    def test_group_with_literal_only_unaffected(self) -> None:
+        """Token groups with NO placeholders still emit verbatim —
+        the new fan-out path must not affect literal groups."""
+        tool = _tool(
+            template=[["literal", "tokens"]],
+            params=[],
+        )
+        cmd = resolve(tool, {})
+        assert cmd.argv == ["/usr/bin/echo", "literal", "tokens"]
+
+    def test_group_with_non_list_placeholder_unaffected(self) -> None:
+        """A bare placeholder in a group whose value is a STRING (not
+        a list) keeps the original single-emission behaviour — the
+        fan-out only kicks in on list-shaped values."""
+        tool = _tool(
+            template=[["--out", "{path}"]],
+            params=[ParamDef(id="path", type=ParamType.STRING)],
+        )
+        cmd = resolve(tool, {"path": "x.txt"})
+        assert cmd.argv == ["/usr/bin/echo", "--out", "x.txt"]
+
+
 class TestStringPassthroughAutoSplit:
     """When a template token is exactly ``"{id}"`` and the referenced
     param is ``ParamType.STRING``, the substituted value is treated as

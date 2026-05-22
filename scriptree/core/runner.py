@@ -264,10 +264,57 @@ def resolve(
     argv: list[str] = [exe]
     for entry in tool.argument_template:
         if isinstance(entry, list):
-            # Token group: resolve each inner token; if ANY comes back
-            # as None (dropped), drop the entire group. Otherwise emit
-            # all tokens in order. This is how "/S system" style Windows
-            # flags work — both tokens appear together or not at all.
+            # Token group: how a flag and its value travel together.
+            #
+            # v0.6.31 — when EXACTLY ONE inner token is a bare ``{id}``
+            # placeholder whose param resolves to a list, the group
+            # FANS OUT: it's emitted once per list element, with that
+            # one placeholder substituted with the element each time.
+            # Empty list ⇒ the group drops entirely (same as any
+            # other empty-required placeholder).  This is what makes
+            # ``["--folder", "{folders}"]`` actually produce
+            # ``--folder a --folder b --folder c`` for a multiselect /
+            # folder_list / file_list / checkbox_list with three
+            # entries — the behaviour the docs (correctly) describe.
+            #
+            # The bare/embedded/conditional placeholder forms outside
+            # a group keep the comma-join behaviour (see
+            # ``_value_to_str``) — that's the canonical "--include
+            # a,b,c"-style single-flag pattern, still useful.
+            fanout_name, fanout_values = _detect_fanout_group(
+                entry, param_map, values,
+            )
+            if fanout_name is not None:
+                # Empty list → drop the whole group, same as any
+                # other empty-placeholder group.
+                if not fanout_values:
+                    continue
+                # Resolve every OTHER token once (constant across
+                # the fan-out); for the fan-out placeholder, splice
+                # each element in turn.
+                fixed: list[str | None] = []
+                drop_group = False
+                for inner in entry:
+                    if _is_bare_placeholder_for(inner, fanout_name):
+                        fixed.append(None)  # placeholder slot
+                        continue
+                    piece = _resolve_token(inner, param_map, values)
+                    if piece is None:
+                        drop_group = True
+                        break
+                    fixed.append(piece)
+                if drop_group:
+                    continue
+                for element in fanout_values:
+                    for slot in fixed:
+                        argv.append(slot if slot is not None else element)
+                continue
+
+            # No fan-out: original path.  Resolve each inner token;
+            # if ANY comes back as None (dropped), drop the entire
+            # group.  Otherwise emit all tokens in order.  This is
+            # how "/S system" style Windows flags work — both tokens
+            # appear together or not at all.
             resolved_group: list[str] = []
             drop_group = False
             for inner in entry:
@@ -417,6 +464,71 @@ def _inject_runtime_shim(argv: list[str]) -> list[str]:
         return argv
 
     return [argv[0], str(shim_path), *argv[1:]]
+
+
+def _is_bare_placeholder_for(token: str, name: str) -> bool:
+    """True iff ``token`` is exactly ``"{name}"`` (no conditional,
+    no embedded literal).  Used to identify the fan-out slot inside
+    a token group (v0.6.31)."""
+    if not isinstance(token, str):
+        return False
+    m = _PLACEHOLDER_RE.fullmatch(token)
+    if m is None or m.group(2):
+        return False
+    return m.group(1) == name
+
+
+def _detect_fanout_group(
+    entry: list[str],
+    param_map: dict[str, ParamDef],
+    values: dict[str, Any],
+) -> tuple[str | None, list[str]]:
+    """Inspect a token-group entry for the "single multi-value placeholder
+    that should fan out" pattern.
+
+    Returns ``(name, list_of_str)`` when the group qualifies for
+    fan-out — exactly one bare ``{id}`` placeholder whose current
+    value is a list / tuple (whether the param's declared type is
+    ``multiselect`` or a provider returned a list for a non-multi
+    type).  All other elements are returned as strings (coerced via
+    ``str(...)``); an empty list means "drop the group."
+
+    Returns ``(None, [])`` when the group should be resolved with the
+    legacy comma-join path:
+
+      * zero bare placeholders (only literals + embedded subs)
+      * two or more bare placeholders (ambiguous fan-out shape)
+      * the bare placeholder's value isn't a list
+
+    The fan-out is intentionally narrow: a single placeholder against
+    a list is the unambiguous "repeat the group per element" case.
+    Ambiguous shapes (zip vs cartesian for two lists) keep the
+    current behaviour rather than guess.
+    """
+    bare_names: list[str] = []
+    for inner in entry:
+        if not isinstance(inner, str) or "{" not in inner:
+            continue
+        m = _PLACEHOLDER_RE.fullmatch(inner)
+        if m is None or m.group(2):
+            continue  # not bare, or conditional
+        bare_names.append(m.group(1))
+
+    if len(bare_names) != 1:
+        return (None, [])
+
+    name = bare_names[0]
+    if name not in param_map:
+        return (None, [])
+
+    val = values.get(name, param_map[name].default)
+    if not isinstance(val, (list, tuple)):
+        return (None, [])
+
+    # ``[str(...)]`` mirrors the coercion ``_value_to_str`` would
+    # apply to each list element — keeps fan-out tokens byte-stable
+    # against the legacy comma-join path.
+    return (name, [str(x) for x in val])
 
 
 def _resolve_token(

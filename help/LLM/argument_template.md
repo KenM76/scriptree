@@ -195,16 +195,47 @@ instead:
 ["--flag", "{param_id}"]
 ```
 
-### 5. Multiselect expansion
+### 5. Multiselect emission
 
-For a `multiselect` param whose value is a list like `["a", "b", "c"]`:
+For a `multiselect` param (any widget — `dropdown`, `checkbox_list`,
+`folder_list`, `file_list`) whose value is a list like
+`["a", "b", "c"]`:
 
-- `{param_id}` as a standalone token → emits each value as a separate
-  argv token: `["a", "b", "c"]`.
-- `{param_id?--tag}` → emits `--tag` once if the list is non-empty.
-- `{param_id?--tag=}` → emits `--tag=a --tag=b --tag=c`.
-- `["--tag", "{param_id}"]` as a group → the group repeats for each
-  element: `--tag a --tag b --tag c`.
+| Template form | What argv gets |
+|---|---|
+| `"{param_id}"` standalone | **one** token: `"a,b,c"` (comma-joined) |
+| `"--tag={param_id}"` embedded | **one** token: `"--tag=a,b,c"` (comma-joined) |
+| `"{param_id?--tag}"` conditional, no `=` | `"--tag"` once if non-empty, else dropped |
+| `"{param_id?--tag=}"` conditional with `=` | **one** token: `"--tag=a,b,c"` (comma-joined) |
+| `["--tag", "{param_id}"]` **token group** with exactly one bare placeholder | **fans out** → `--tag a --tag b --tag c` |
+
+The split is intentional:
+
+* **Bare / embedded / conditional placeholders comma-join.** This is
+  the canonical pattern for CLIs that accept one flag with a
+  separated list (`--include a,b,c`, `--tags x,y,z`, etc.). The
+  consumer can split on `,` in its own shim.
+* **Token groups fan out.** A token group whose *only* bare
+  placeholder is the multiselect is the unambiguous "repeat this
+  flag per element" shape — `--folder A --folder B --folder C`,
+  `-I /one -I /two`, etc. The fan-out makes
+  `["--folder", "{folder}"]` actually emit the repeating-flag
+  pattern the docs (and your CLI) expect.
+
+**Group fan-out specifics (v0.6.31+):**
+
+* Empty list → the whole group drops (same as any group with an
+  empty-required placeholder).
+* Literals around the placeholder repeat with each element:
+  `["--in", "{paths}", "--strict"]` with `["x", "y"]` emits
+  `--in x --strict --in y --strict`.
+* A group with **two or more** bare list placeholders is ambiguous
+  (zip vs cartesian?) and falls back to the comma-join path rather
+  than guess. If you need that shape, split it into two groups.
+* `folder_list` / `file_list` (v0.6.28+) values are `list[str]` like
+  any other multiselect, so they ride the same fan-out path —
+  `["--source", "{folders}"]` with three folders selected emits
+  `--source A --source B --source C`.
 
 ## Group semantics
 
@@ -297,9 +328,19 @@ template = [["--cmd", "{cmd}"], ["--cmd-file", "{cmd_file}"]]
 values = {"cmd": "python x.py", "cmd_file": ""}
 → [exe, "--cmd", "python x.py"]   # only the non-empty group emits
 
-# Multiselect as a repeating group
+# Multiselect, token group → FANS OUT (one flag per element)
 template = [["--tag", "{tags}"]]; values = {"tags": ["a", "b"]}
 → [exe, "--tag", "a", "--tag", "b"]
+template = [["--tag", "{tags}"]]; values = {"tags": []}
+→ [exe]   # empty list → whole group drops
+
+# Multiselect, bare placeholder → COMMA-JOINS (single token)
+template = ["{tags}"]; values = {"tags": ["a", "b", "c"]}
+→ [exe, "a,b,c"]
+
+# Multiselect, embedded placeholder → COMMA-JOINS (single token)
+template = ["--tag={tags}"]; values = {"tags": ["a", "b"]}
+→ [exe, "--tag=a,b"]
 ```
 
 ## Authoring checklist for LLMs generating `.scriptree` files

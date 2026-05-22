@@ -153,10 +153,16 @@ folders from an external command" use `choices_provider` +
 | `min_items`    | `int`           | `0`     | soft cap — surfaced in the count label and (when `required`) in the form's validate step |
 | `max_items`    | `int` / `null`  | `null`  | soft cap — Add is greyed when reached |
 
-Argv emission is unchanged from any other `multiselect`: the
-runner comma-joins the list into one token by default, or fires
-one token per entry when the argument template uses the
-repeating-token pattern (see `argument_template.md`).
+Argv emission is unchanged from any other `multiselect` (v0.6.31+):
+
+* Bare or embedded placeholder (`"{folders}"`, `"--src={folders}"`)
+  → one comma-joined token (e.g. `"a,b,c"` or `"--src=a,b,c"`).
+* **Token group** (`["--include", "{folders}"]`) → **fans out**, one
+  copy of the group per element (`--include a --include b
+  --include c`).  This is the shape almost every multi-input CLI
+  wants; `folder_list` and `file_list` are designed around it.
+
+See `argument_template.md` §5 for the full matrix.
 
 Example — a CLI that takes `--include FOLDER` once per folder:
 
