@@ -1,18 +1,22 @@
-"""Lightweight standalone window for running tools outside the IDE.
+"""Standalone window for running tools outside the IDE.
 
 ## For humans
 
 Two modes:
 
-- **Single tool** — one :class:`ToolRunnerView` with optional output
-  in a vertical splitter.  No docks, no tree sidebar.
-- **Tree mode** — a :class:`QTabWidget` with one ToolRunnerView per
-  leaf tool in the tree.  Each tab applies its own configuration
-  (from ``TreeNode.configuration``).
+- **Single tool** — three ``PySide6QtAds`` docks (Form / Output /
+  Run controls) so the user can resize, undock, float, or tab the
+  panels exactly like the main editor.  Mirrors
+  :class:`MainWindow`'s dock layout (centre Form, Output below,
+  Run controls below).
+- **Tree mode** — a :class:`QTabWidget` with one
+  :class:`ToolRunnerView` per leaf tool in the tree.  Each tab
+  applies its own configuration (from ``TreeNode.configuration``)
+  and keeps the runner's internal QSplitter; tabs are not docked
+  because docking-inside-a-tab interactions are confusing.
 
-The window reads :class:`UIVisibility` from the specified configuration
-and applies it at construction time. The output pane is shown/hidden
-by reparenting into or out of the splitter (there are no dock widgets).
+The window reads :class:`UIVisibility` from the specified
+configuration and applies it at construction time.
 
 ## For maintainers / LLMs
 
@@ -25,28 +29,33 @@ by reparenting into or out of the splitter (there are no dock widgets).
   A config change that alters hidden params triggers a full
   ``_populate_form_rows`` rebuild in the runner — expect provider
   re-init on tab/config switches here.
-- No dock widgets exist. Output visibility is reparent-into/out-of
-  the ``QSplitter``; never assume QtAds docks are present (that is
-  :mod:`main_window`'s concern only).
+- **Single-tool mode now uses QtAds docks** (v0.6.30+).  The window
+  owns its own ``CDockManager``; the runner's ``form_panel``,
+  ``output_panel``, and ``bottom_panel`` are reparented into three
+  ``CDockWidget`` instances.  Layout state is persisted under the
+  per-window QSettings key ``standalone_layout_<safe_name>``.
+- Tree mode keeps the dockless splitter approach inside each tab —
+  the docking story there belongs to a follow-up.  Per-tab
+  resizing still works via the runner's own internal splitter.
 - :class:`UIVisibility` is read and applied once at construction from
   the *specified* configuration; per-tab configs in tree mode come
-  from ``TreeNode.configuration``. Re-applying visibility later is not
-  wired — rebuild the tab if a config must change.
+  from ``TreeNode.configuration``.  In single-tool mode the
+  output dock's visibility tracks runner ``visibilityChanged``
+  emissions so config switches that flip ``output_pane`` update
+  the layout live.
 - Each tab owns an independent ToolRunnerView with its own run
   worker/thread; closing the window must let in-flight runs tear down
   via the runner's own ``_on_finished`` path — don't kill threads
   from here.
-- Keep this window dockless and dependency-light: the lightweight
-  launch path (double-right-click in the tree) relies on it not
-  pulling in the full IDE shell.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
+    QLabel,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -54,6 +63,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+import PySide6QtAds as ads
 
 from ..core.configs import (
     SAFETREE_CONFIG_NAME,
@@ -64,6 +75,29 @@ from ..core.configs import (
 )
 from ..core.io import load_tool, load_tree
 from ..core.model import ToolDef, TreeDef, TreeNode
+
+
+# Same feature set the main editor uses, kept consistent so a user
+# moving between the editor and a standalone window doesn't get
+# subtly different dock behaviour.  No DockWidgetClosable — the
+# panels of a tool runner make no sense individually closed; users
+# who want a clean form view collapse the inner group boxes instead.
+_STANDALONE_DOCK_FEATURES = (
+    ads.CDockWidget.DockWidgetFeature.DockWidgetMovable
+    | ads.CDockWidget.DockWidgetFeature.DockWidgetFloatable
+    | ads.CDockWidget.DockWidgetFeature.DockWidgetPinnable
+)
+
+
+def _standalone_settings_key(label: str) -> str:
+    """Build a per-window QSettings sub-key for layout persistence.
+
+    Each distinct tool / tree label gets its own dock layout slot
+    so a user's preferred sizes for "find-missing-refs" don't get
+    overwritten when they next open a different standalone tool.
+    """
+    safe = "".join(c if c.isalnum() else "_" for c in (label or "default"))
+    return f"standalone_layout_{safe}"
 
 
 class StandaloneWindow(QMainWindow):
@@ -96,7 +130,30 @@ class StandaloneWindow(QMainWindow):
         *,
         parent: QWidget | None = None,
     ) -> "StandaloneWindow":
-        """Create a standalone window for a single tool."""
+        """Create a standalone window for a single tool.
+
+        v0.6.30 — the layout is now QtAds-based.  Three docks live
+        in the window:
+
+        * **Form** (centre) — the runner's parameter panel.  Owns
+          the heavy lifting; the inner reorderable param form
+          stretches/scrolls inside it.
+        * **Output** (bottom of Form) — the stdout/stderr pane.
+          Hidden when the active configuration's
+          :attr:`UIVisibility.output_pane` is False; shown again
+          on the next config switch that flips it back.
+        * **Run controls** (bottom of Form, beneath Output) — the
+          "Extra arguments" + "Command line" group boxes the
+          runner used to put at the bottom of its form panel.
+
+        Each dock is movable / floatable / pinnable.  The runner is
+        constructed once and its three panels (``form_panel``,
+        ``output_panel``, ``bottom_panel``) are reparented into
+        their respective docks.
+
+        Saved layouts (per-tool name) are restored on construction;
+        ``closeEvent`` saves the current layout back to QSettings.
+        """
         from .tool_runner import ToolRunnerView
 
         win = cls(title=f"ScripTree — {tool.name}", parent=parent)
@@ -122,28 +179,81 @@ class StandaloneWindow(QMainWindow):
 
         vis = runner.active_visibility
 
-        # Build a splitter with form + output (if output is visible).
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # ----------------------------------------------------------------
+        # QtAds dock layout — same shape as the editor's MainWindow.
+        # ----------------------------------------------------------------
+        ads.CDockManager.setConfigFlags(
+            ads.CDockManager.eConfigFlag.DragPreviewIsDynamic
+            | ads.CDockManager.eConfigFlag.DragPreviewShowsContentPixmap
+            | ads.CDockManager.eConfigFlag.OpaqueSplitterResize
+            | ads.CDockManager.eConfigFlag.FocusHighlighting
+            | ads.CDockManager.eConfigFlag.DockAreaHasUndockButton
+            | ads.CDockManager.eConfigFlag.DockAreaHasTabsMenuButton
+            | ads.CDockManager.eConfigFlag.FloatingContainerHasWidgetTitle
+        )
+        dock_manager = ads.CDockManager(win)
+        win.setCentralWidget(dock_manager)
+        win._dock_manager = dock_manager  # type: ignore[attr-defined]
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(runner.form_panel)
-        if vis.output_pane:
-            splitter.addWidget(runner.output_panel)
-            splitter.setStretchFactor(0, 3)
-            splitter.setStretchFactor(1, 2)
-        else:
-            splitter.setStretchFactor(0, 1)
+        # Reparent the form panel into the centre dock.  Reparent
+        # explicitly so the runner's outer layout doesn't hold a
+        # stale child pointer (Qt reparents on setWidget but being
+        # explicit avoids the "widget shows briefly in old parent"
+        # flicker on Win11).
+        form_panel = runner.form_panel
+        form_panel.setParent(None)
+        form_dock = ads.CDockWidget(dock_manager, "Form")
+        form_dock.setObjectName("StandaloneFormDock")
+        form_dock.setWidget(form_panel)
+        form_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
+        form_dock.setWindowTitle(f"Form — {tool.name}")
+        form_area = dock_manager.addDockWidget(
+            ads.CenterDockWidgetArea, form_dock
+        )
+        win._form_dock = form_dock  # type: ignore[attr-defined]
 
-        layout.addWidget(splitter)
-        win.setCentralWidget(central)
+        # Output dock — sits below the form area.  Toggled by config
+        # visibility on construction and live on visibilityChanged.
+        output_panel = runner.output_panel
+        output_panel.setParent(None)
+        output_dock = ads.CDockWidget(dock_manager, "Output")
+        output_dock.setObjectName("StandaloneOutputDock")
+        output_dock.setWidget(output_panel)
+        output_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
+        output_dock.setWindowTitle(f"Output — {tool.name}")
+        dock_manager.addDockWidget(
+            ads.BottomDockWidgetArea, output_dock, form_area
+        )
+        if not vis.output_pane:
+            output_dock.toggleView(False)
+        win._output_dock = output_dock  # type: ignore[attr-defined]
 
-        # Keep a reference so the runner isn't garbage collected.
+        # Run controls dock — extras + command line.  Same bottom
+        # area as the editor uses; the user can float it to a second
+        # monitor or tab it next to Output.
+        bottom_panel = runner.bottom_panel
+        bottom_panel.setParent(None)
+        run_dock = ads.CDockWidget(dock_manager, "Run controls")
+        run_dock.setObjectName("StandaloneRunControlsDock")
+        run_dock.setWidget(bottom_panel)
+        run_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
+        run_dock.setWindowTitle(f"Run controls — {tool.name}")
+        dock_manager.addDockWidget(
+            ads.BottomDockWidgetArea, run_dock, form_area
+        )
+        win._run_controls_dock = run_dock  # type: ignore[attr-defined]
+
+        # Keep references so neither runner nor docks get garbage
+        # collected when the closure unwinds.
         win._runner = runner  # type: ignore[attr-defined]
         win._runners: list[ToolRunnerView] = [runner]  # type: ignore[attr-defined]
 
-        # Listen for visibility changes from the runner.
+        # Persist layout key for save/restore.
+        win._layout_key = _standalone_settings_key(tool.name)  # type: ignore[attr-defined]
+        win._restore_layout()
+
+        # Listen for visibility changes from the runner so a config
+        # switch that flips ``output_pane`` updates the dock live.
         runner.visibilityChanged.connect(win._on_visibility_changed)
 
         return win
@@ -252,11 +362,66 @@ class StandaloneWindow(QMainWindow):
     # --- visibility handling ------------------------------------------------
 
     def _on_visibility_changed(self, vis: object) -> None:
-        """Handle runner visibility changes (no docks to toggle here)."""
-        # In standalone mode the output pane visibility is set at
-        # construction time. Dynamic toggling would require more
-        # complex splitter management — for now we just note it.
-        pass
+        """Toggle the output dock to match the active configuration's
+        :attr:`UIVisibility.output_pane`.
+
+        v0.6.30 — was a no-op in the splitter era.  Now that the
+        layout is QtAds-based, flipping a config that hides the
+        output pane folds the dock without affecting the rest of
+        the layout.  Toggling it back on restores it to its
+        previously-docked position.
+        """
+        dock = getattr(self, "_output_dock", None)
+        if dock is None:
+            return  # tree mode (no docks) — see from_tree.
+        try:
+            want_visible = bool(getattr(vis, "output_pane", True))
+        except Exception:  # noqa: BLE001
+            want_visible = True
+        # ``toggleView`` is idempotent — call it unconditionally
+        # rather than reading ``isClosed()`` first, which doesn't
+        # reflect intended state until the window has been shown
+        # (relevant in headless tests).
+        try:
+            dock.toggleView(want_visible)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- layout persistence (single-tool mode) -----------------------------
+
+    def _restore_layout(self) -> None:
+        """Pull a previously-saved QtAds layout out of QSettings and
+        apply it.  Silently no-ops when there's nothing saved yet
+        (first launch for this tool) or when the dock manager isn't
+        present (tree mode).
+
+        The layout key is per-tool — see ``_standalone_settings_key``.
+        """
+        dm = getattr(self, "_dock_manager", None)
+        key = getattr(self, "_layout_key", None)
+        if dm is None or not key:
+            return
+        try:
+            settings = QSettings("ScripTree", "ScripTree")
+            blob = settings.value(key)
+            if blob:
+                dm.restoreState(blob)
+        except Exception:  # noqa: BLE001 — never let restore break open
+            pass
+
+    def _save_layout(self) -> None:
+        """Persist the current QtAds layout under the per-tool key
+        so the next launch of this tool restores the user's
+        resizing / undocking choices."""
+        dm = getattr(self, "_dock_manager", None)
+        key = getattr(self, "_layout_key", None)
+        if dm is None or not key:
+            return
+        try:
+            settings = QSettings("ScripTree", "ScripTree")
+            settings.setValue(key, dm.saveState())
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- close guard --------------------------------------------------------
 
@@ -275,6 +440,10 @@ class StandaloneWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        # Persist the dock layout before tear-down so the next launch
+        # of this tool restores the user's resizing / undocking
+        # choices.  No-op in tree mode (no dock manager).
+        self._save_layout()
         event.accept()
 
 

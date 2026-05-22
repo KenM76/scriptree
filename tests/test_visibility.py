@@ -457,6 +457,117 @@ class TestStandaloneWindow:
         assert runner.active_visibility.extras_box is False
 
 
+class TestStandaloneWindowDocks:
+    """v0.6.30 — from_tool now uses QtAds docks (Form / Output /
+    Run controls) instead of a single QSplitter so the panels can
+    be resized, undocked, floated, or tabbed exactly like the main
+    editor."""
+
+    def test_from_tool_creates_three_docks(self, tmp_path: Path) -> None:
+        from scriptree.ui.standalone_window import StandaloneWindow
+
+        tool, path = _saved_tool(tmp_path)
+        win = StandaloneWindow.from_tool(tool, path)
+        # Single-tool mode owns its own dock manager + three docks.
+        assert hasattr(win, "_dock_manager")
+        assert hasattr(win, "_form_dock")
+        assert hasattr(win, "_output_dock")
+        assert hasattr(win, "_run_controls_dock")
+
+    def test_docks_carry_movable_floatable_pinnable_features(
+        self, tmp_path: Path,
+    ) -> None:
+        import PySide6QtAds as ads
+        from scriptree.ui.standalone_window import StandaloneWindow
+
+        tool, path = _saved_tool(tmp_path)
+        win = StandaloneWindow.from_tool(tool, path)
+        wanted = (
+            ads.CDockWidget.DockWidgetFeature.DockWidgetMovable
+            | ads.CDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | ads.CDockWidget.DockWidgetFeature.DockWidgetPinnable
+        )
+        for attr in ("_form_dock", "_output_dock", "_run_controls_dock"):
+            dock = getattr(win, attr)
+            # Either the exact set, or a superset that still
+            # includes everything we required (defensive against a
+            # future addition).
+            assert dock.features() & wanted == wanted, (
+                f"{attr} missing movable/floatable/pinnable"
+            )
+
+    def test_output_dock_toggleview_tracks_visibility(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A config flip that turns ``output_pane`` on/off must call
+        ``toggleView`` on the Output dock with the right argument.
+
+        We spy on ``toggleView`` rather than inspecting dock state
+        directly — under the headless test harness the dock's
+        ``isClosed()`` / ``toggleViewAction().isChecked()`` lag the
+        intended state until the window is shown, but we want to
+        pin the *intent* of the dispatch.
+        """
+        from scriptree.ui.standalone_window import StandaloneWindow
+
+        tool, path = _saved_tool(tmp_path)
+        cfg_off = Configuration(
+            name="silent",
+            values={"name": "x", "count": "1"},
+            ui_visibility=UIVisibility(output_pane=False),
+        )
+        cfg_on = Configuration(
+            name="loud",
+            values={"name": "x", "count": "1"},
+            ui_visibility=UIVisibility(output_pane=True),
+        )
+        cs = ConfigurationSet(
+            active="silent",
+            configurations=[cfg_off, cfg_on],
+        )
+        save_configs(path, cs)
+
+        win = StandaloneWindow.from_tool(
+            tool, path, config_name="silent",
+        )
+        # Spy on toggleView from here on — we want to see what
+        # happens when the user flips between configurations.
+        calls: list[bool] = []
+        real_toggle = win._output_dock.toggleView
+        monkeypatch.setattr(
+            win._output_dock, "toggleView",
+            lambda visible: (calls.append(visible), real_toggle(visible))[1],
+        )
+
+        # Switch to the loud config — visibilityChanged fires →
+        # _on_visibility_changed calls toggleView(True).
+        win._runners[0].apply_named_configuration("loud")
+        assert True in calls
+
+        calls.clear()
+        # Back to silent → toggleView(False).
+        win._runners[0].apply_named_configuration("silent")
+        assert False in calls
+
+    def test_panels_reparented_from_runner_into_docks(
+        self, tmp_path: Path,
+    ) -> None:
+        """The runner's three panels (form / output / bottom) must
+        live inside the docks now, not inside the runner's own
+        QSplitter — otherwise resizing the dock wouldn't actually
+        resize the panel content."""
+        from scriptree.ui.standalone_window import StandaloneWindow
+
+        tool, path = _saved_tool(tmp_path)
+        win = StandaloneWindow.from_tool(tool, path)
+        runner = win._runners[0]
+
+        # The dock should report each panel as its current widget.
+        assert win._form_dock.widget() is runner.form_panel
+        assert win._output_dock.widget() is runner.output_panel
+        assert win._run_controls_dock.widget() is runner.bottom_panel
+
+
 # --- Phase 5: CLI argument parsing ---
 
 
