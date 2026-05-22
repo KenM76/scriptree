@@ -890,6 +890,125 @@ class TestResolveMemberStacking:
         master.close(); a.close(); b.close()
 
 
+class TestComputeLayout:
+    """v0.6.35 — the new slot-based layout function on master cells.
+
+    Pins the bridge between the pure-Python algorithm (proven by
+    ``tests/test_layout_algorithm.py``) and the Qt widget code.
+    See ``scriptree/shell/layout.py`` for the algorithm and
+    ``help/LLM/scenegraph_layout_plan.md`` for the model docs.
+    """
+
+    def test_compute_layout_assigns_slots_to_unassigned_members(self) -> None:
+        """Calling ``_compute_layout`` on a master with members that
+        have ``_slot = None`` and ``_floating_intent = False``
+        should assign them slots.  Mirrors the simulator's
+        ``assign_initial_slots`` semantics."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+
+        cells = []
+        for i in range(3):
+            c = CellWindow(load_branding())
+            c.show()
+            c.move(100 + i * 10, 100)  # stale starting positions
+            master._members[c._id] = QPoint(c.pos())
+            master._positioned.add(c._id)
+            c._group_master_id = master._id
+            cells.append(c)
+
+        # Before compute_layout: no slots assigned.
+        for c in cells:
+            assert c._slot is None
+            assert c._floating_intent is False
+
+        master._compute_layout(instant=True)
+
+        # After: every cell got a slot.
+        slots = [c._slot for c in cells]
+        assert all(s is not None for s in slots), f"some unassigned: {slots}"
+        # No two cells share a slot.
+        assert len(set(slots)) == 3, f"slot collision: {slots}"
+        # Cells are positioned at the slot world coords (not the
+        # stale (100, 100) starting positions).
+        for c in cells:
+            assert c.pos().x() != 100 or c.pos().y() != 100, (
+                f"{c._id[:8]} still at stale pos {c.pos()}"
+            )
+
+        for c in cells:
+            c.close()
+        master.close()
+
+    def test_compute_layout_skips_floating_cells(self) -> None:
+        """A cell with ``_floating_intent=True`` should NOT be
+        reassigned a slot — it keeps the pos the user gave it."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+
+        cell = CellWindow(load_branding())
+        cell.show()
+        cell.move(200, 200)
+        cell._floating_intent = True
+        cell._group_master_id = master._id
+        master._members[cell._id] = QPoint(200, 200)
+
+        master._compute_layout(instant=True)
+
+        assert cell._slot is None, "floating cell got an unwanted slot"
+        # Position unchanged.
+        assert cell.pos().x() == 200 and cell.pos().y() == 200
+
+        cell.close()
+        master.close()
+
+    def test_compute_layout_idempotent(self) -> None:
+        """Running ``_compute_layout`` twice in a row produces the
+        same result the second time."""
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+
+        cells = []
+        for i in range(4):
+            c = CellWindow(load_branding())
+            c.show()
+            c.move(100 + i * 10, 100)
+            master._members[c._id] = QPoint(c.pos())
+            master._positioned.add(c._id)
+            c._group_master_id = master._id
+            cells.append(c)
+
+        master._compute_layout(instant=True)
+        first_slots = [c._slot for c in cells]
+        first_pos = [(c.pos().x(), c.pos().y()) for c in cells]
+
+        master._compute_layout(instant=True)
+        second_slots = [c._slot for c in cells]
+        second_pos = [(c.pos().x(), c.pos().y()) for c in cells]
+
+        assert first_slots == second_slots
+        assert first_pos == second_pos
+
+        for c in cells:
+            c.close()
+        master.close()
+
+
 class TestAutoClassifiedIcon:
     """v0.6.33 — when a cell is bound to a catalog that has no
     explicit ``cell.icon_data`` / ``cell.icon`` and no

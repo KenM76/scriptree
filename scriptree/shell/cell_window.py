@@ -3015,6 +3015,17 @@ class CellWindow(QMainWindow):
         #                      (touching honeycomb edges). Cleared on break-free.
         self._group_master_id: str | None = None
         self._docked_to: set[str] = set()
+        # v0.6.35 — slot-based scene-graph layout (see
+        # ``scriptree/shell/layout.py``).  When the cell is docked to
+        # a master, ``_slot`` is the master's ring slot it occupies
+        # (``("inner", N)`` or ``("outer", N)``).  When the user
+        # drags the cell out of its dock cluster it goes floating
+        # (``_slot = None``, ``_floating_intent = True``); the link
+        # to the master via ``_group_master_id`` is preserved so
+        # collapse / forest-click still pulls the cell back.
+        # See ``help/LLM/scenegraph_layout_plan.md`` for the model.
+        self._slot: tuple[str, int] | None = None
+        self._floating_intent: bool = False
 
         # Legacy shim — kept so SnapEngine's dock_group_of call (which reads
         # _dock_partners on some code paths) does not crash in-flight.
@@ -3547,6 +3558,181 @@ class CellWindow(QMainWindow):
             and tl_x < right and tl_y < bottom
         )
 
+    def _compute_layout(self, *, instant: bool = True) -> None:
+        """The single slot-based layout authority (v0.6.35).
+
+        Walks every member id in ``self._members`` and:
+
+          1. If the member's ``_slot`` is None and
+             ``_floating_intent`` is False, assigns a free slot
+             via :func:`scriptree.shell.layout.find_free_slot`,
+             with the back-toward-parent slot excluded and a
+             global collision check against every other placed
+             cell in the workspace.
+          2. Computes the world position from the assigned slot
+             and writes it back into ``self._members[mid]``
+             (the canonical "where the member is now" map).
+          3. Moves the widget — instant ``move()`` when
+             ``instant=True`` (used at startup so the user never
+             sees a glide from stale positions), eased
+             ``_smooth_move`` otherwise.
+
+        Floating members (``_slot is None`` AND
+        ``_floating_intent`` True) are skipped — they own their
+        own ``pos``, set by the user via drag.
+
+        Off-screen members (slot computed lies outside the screen
+        rect) get ``_auto_hidden`` and ``setVisible(False)``;
+        slots that come back on-screen drop the hide.
+
+        O(n) in the member count.  Called from ``_repack_members``
+        (startup + spawn) and (in a future commit) from
+        ``moveEvent`` during master drag.  Never on a timer.
+        """
+        if self.role != "master" or not self._members:
+            return
+
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.layout import (
+            find_free_slot, slot_world_pos, is_on_screen,
+        )
+
+        registry = CellRegistry.instance()
+        app_inst = QGuiApplication.instance()
+        if app_inst is None:
+            return
+
+        # Screen rect: prefer the screen the master sits on; fall
+        # back to the primary screen.
+        screen = app_inst.screenAt(self.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        screen_rect = (
+            avail.left(), avail.top(),
+            avail.right() + 1, avail.bottom() + 1,
+        )
+
+        master_pos = (self.pos().x(), self.pos().y())
+
+        # Build the "globally occupied centres" snapshot, plus the
+        # set of slots already taken on this master.  Both are
+        # passed to find_free_slot so a freshly-assigned slot
+        # respects every other placed cell in the workspace.
+        occupied_centres: set[tuple[int, int]] = set()
+        for c in registry.all():
+            if c._id == self._id:
+                continue
+            # Forest hub + any docked cell anywhere counts.
+            if c.isVisible():
+                occupied_centres.add((
+                    c.pos().x() + c._size_px // 2,
+                    c.pos().y() + c._size_px // 2,
+                ))
+        # Also count this master's centre (a child should not
+        # land on it).
+        occupied_centres.add((
+            self.pos().x() + self._size_px // 2,
+            self.pos().y() + self._size_px // 2,
+        ))
+
+        taken_slots: set[tuple[str, int]] = set()
+        for mid in self._members:
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if m._slot is not None:
+                taken_slots.add(m._slot)
+
+        # Pass 1: assign slots to any member that doesn't have one
+        # and isn't floating.
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if m._slot is not None:
+                continue
+            if m._floating_intent:
+                continue
+            slot = find_free_slot(
+                master_pos=master_pos,
+                master_size=self._size_px,
+                master_slot=self._slot,
+                child_size=m._size_px,
+                taken_slots=taken_slots,
+                occupied_centres=occupied_centres,
+                screen_rect=screen_rect,
+            )
+            if slot is not None:
+                m._slot = slot
+                taken_slots.add(slot)
+                # Update occupied_centres immediately so the next
+                # cell in the loop sees this one as a collider.
+                tl = slot_world_pos(
+                    master_pos, self._size_px, slot, m._size_px,
+                )
+                occupied_centres.add(
+                    (tl[0] + m._size_px // 2, tl[1] + m._size_px // 2),
+                )
+
+        # Pass 2: compute world positions, write them through to
+        # ``_members[mid]`` and the widget, handle visibility.
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+
+            if m._slot is None:
+                # Floating — leave widget alone, just sync the
+                # _members map to the cell's owned pos.
+                if m._floating_intent:
+                    self._members[mid] = QPoint(m.pos().x(), m.pos().y())
+                # If neither slot nor floating intent, the member
+                # is in limbo (no free slot was found).  Auto-hide.
+                else:
+                    self._auto_hidden.add(mid)
+                    if m.isVisible():
+                        m.setVisible(False)
+                continue
+
+            tl = slot_world_pos(
+                master_pos, self._size_px, m._slot, m._size_px,
+            )
+            new_x, new_y = tl
+            self._members[mid] = QPoint(new_x, new_y)
+
+            on = is_on_screen(tl, m._size_px, screen_rect)
+            if on:
+                if mid in self._auto_hidden:
+                    self._auto_hidden.discard(mid)
+                    m.setVisible(True)
+                # Move widget if drift > 1 px.
+                if (
+                    abs(m.pos().x() - new_x) > 1
+                    or abs(m.pos().y() - new_y) > 1
+                ):
+                    if instant:
+                        prior = getattr(m, "_pos_anim", None)
+                        if prior is not None:
+                            try:
+                                prior.stop()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            m._pos_anim = None
+                        m.move(new_x, new_y)
+                    else:
+                        m._smooth_move(new_x, new_y, duration_ms=180)
+            else:
+                if mid not in self._auto_hidden:
+                    self._auto_hidden.add(mid)
+                    if m.isVisible():
+                        m.setVisible(False)
+
+        self.update()
+
     def _repack_members(
         self,
         *,
@@ -3579,6 +3765,26 @@ class CellWindow(QMainWindow):
         reflects the new visibility state.
         """
         if self.role != "master" or not self._members:
+            return
+
+        # v0.6.35 — canonical mode (no ``fixed`` set) now delegates
+        # to the proven slot-based layout algorithm in
+        # ``_compute_layout``.  Members without a ``_slot`` get one
+        # assigned via the global-collision-aware ``find_free_slot``;
+        # members with a ``_slot`` get their world position derived
+        # from it.  This replaces the older centre-distance repack
+        # that didn't account for honeycomb aliasing across
+        # adjacent clusters (the "ring members floating off-axis
+        # from their ring at startup" bug).
+        #
+        # Surgical mode (``fixed != None``) — used by
+        # ``_reflow_members_after_master_move`` — keeps the older
+        # path for now; that one is a tight in-drag inner loop and
+        # the slot model + on-demand recompute haven't been wired
+        # into it yet.  Listed in
+        # ``help/LLM/scenegraph_layout_plan.md`` as a follow-up.
+        if fixed is None:
+            self._compute_layout(instant=instant)
             return
 
         from scriptree.shell.cell_registry import CellRegistry
