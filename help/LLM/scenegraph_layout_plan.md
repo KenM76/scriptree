@@ -78,6 +78,63 @@ ALL of these become unnecessary and get deleted:
 - The drag-snap engine (assigns a `_slot` on commit instead of mutating absolute coords)
 - `_start_collapse` / `_start_expand` — but they no longer mutate `_members`; they trigger an animation overlay that visually moves children to master.pos(), and on expand the layout tick puts them back automatically because `_slot` never changed.
 
+## Idle-CPU contract (must not regress)
+
+**Hard rule:** the app must use effectively zero CPU when no input
+is happening.  Any periodic timer is a debug-hours-eating trap and
+the user will notice it immediately ("my fan is spinning and
+nothing is happening").  Audit (v0.6.34) shows the current state
+is good:
+
+* Every `QTimer.setInterval` is paired with `setSingleShot(True)`
+  — except the snap engine's 16 ms drag-snap detector, which has
+  explicit `_timer.start()` in `attach_drag` and `_timer.stop()`
+  in `detach_drag` / `_on_hex_closed`.
+* `QTimer.singleShot(N, ...)` is used everywhere a "fire once after
+  N ms" semantic is needed.  Fire-and-die.
+* Animations are `QPropertyAnimation`s with a fixed duration; Qt's
+  animation engine sleeps when no animation is active.
+* Paint events are Qt-driven only — never `update()` on a timer.
+
+**Scene-graph refactor must follow the same rule:**
+
+* `_layout_tick` **does NOT** run on a `QTimer`.
+* It's called from event handlers that already fire only on real
+  changes:
+  * Master `moveEvent` (only on actual position change)
+  * `attach_drag` start / `detach_drag` end
+  * `snapCommit` signal
+  * Cell `_break_free_from_cluster`
+  * Catalog binding (Load…, drop)
+* If a "60 Hz smoothing" appearance is needed during drag, ride
+  the snap engine's existing 16 ms timer — it's already running
+  during drag (and only during drag).  Adding a second always-on
+  timer would double the idle cost when the user IS active and
+  burn cycles when they're not.
+* The on-demand model also fits the user's mental model: layout
+  is a consequence of an event, not a continuous process.
+
+If the refactor introduces a new periodic timer, it MUST:
+
+1. Start only when there's work to do.
+2. Stop the moment the work is finished.
+3. Have a test that verifies it's not running at app idle.
+
+A test pattern:
+
+```python
+def test_no_periodic_timers_at_idle(qtbot):
+    """Idle-state contract: no QTimer with non-zero interval may
+    be running 100 ms after the app reaches steady state."""
+    app = make_app_with_forest_and_three_cells()
+    qtbot.wait(100)
+    active = [
+        t for t in app.findChildren(QTimer)
+        if t.isActive() and t.interval() > 0 and not t.isSingleShot()
+    ]
+    assert active == [], f"periodic timer(s) running at idle: {active}"
+```
+
 ## On-disk migration
 
 Currently `.scriptreeforest` and `.scriptreering` store `position: [x, y]` per member.  Migrate:
