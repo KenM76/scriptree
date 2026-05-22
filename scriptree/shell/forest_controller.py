@@ -613,6 +613,22 @@ class ForestController(QObject):
                         if item.position is not None:
                             cell.move(*item.position)
                         self._spawned[_norm(item.path)] = cell
+            # v0.6.37 — run layout immediately after each spawn so
+            # the new member lands on its honeycomb slot, not at
+            # the spawn-time pos (which is typically the master's
+            # own pos + offset).  Previously the cell stayed at
+            # the spawn pos until SOMETHING ELSE triggered the next
+            # _repack_members, which the trace (v0.6.36) showed
+            # could be many seconds later — the user perceived
+            # this as "started off spaced out / stacked".
+            if self.forest_window is not None:
+                try:
+                    self.forest_window._repack_members(instant=True)
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_spawn_item({item.path!r}): "
+                        f"post-spawn _repack_members raised {exc!r}"
+                    )
         except Exception as exc:  # noqa: BLE001
             _log(f"_spawn_item({item.path!r}): {exc!r}")
 

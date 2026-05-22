@@ -180,6 +180,17 @@ def snapshot(label: str, world: Any = None) -> None:
         cid = getattr(c, "_id", "?")[:8]
         role = getattr(c, "role", "?")
         size = getattr(c, "_size_px", "?")
+        # v0.6.37 — also capture the widget's actual rendered size
+        # so a discrepancy between logical _size_px and widget
+        # geometry (e.g. due to DPI scaling, an unexpected resize)
+        # is visible in the trace.  Reported as too-big icons +
+        # overlay in v0.6.36 with no obvious cause in the data.
+        try:
+            widget_w = c.width()
+            widget_h = c.height()
+        except Exception:  # noqa: BLE001
+            widget_w = widget_h = "?"
+        icon_scale = getattr(c, "_icon_scale", "?")
         slot = getattr(c, "_slot", "<no-attr>")
         floating = getattr(c, "_floating_intent", "<no-attr>")
         parent = getattr(c, "_group_master_id", None)
@@ -196,7 +207,8 @@ def snapshot(label: str, world: Any = None) -> None:
         auto_hidden = len(getattr(c, "_auto_hidden", ()) or ())
         drag = getattr(c, "_drag_started", "<no-attr>")
         lines.append(
-            f"  id={cid} role={role} size={size} "
+            f"  id={cid} role={role} size_px={size} "
+            f"widget=({widget_w}x{widget_h}) icon_scale={icon_scale} "
             f"pos=({pos[0]},{pos[1]}) "
             f"slot={slot} floating={floating} "
             f"parent={parent_short} visible={visible} "

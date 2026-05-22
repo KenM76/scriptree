@@ -454,7 +454,35 @@ class SnapEngine(QObject):
 
             best: _SnapCandidate | None = None
 
+            # v0.6.37 — when the dragged source is a master, gather
+            # the set of cells in its own subtree (its members and
+            # any nested-master descendants) so we can exclude them
+            # as snap targets.  Without this, dragging a forest
+            # whose children are moving WITH it (per GROUP_MOVE)
+            # caused the snap engine to repeatedly offer "snap to
+            # the child that's right next to you" — which manifested
+            # as the snap preview being one cell offset from the
+            # forest, and the forest committing to a slot relative
+            # to its own children at drag-end.  See the user trace
+            # at 2026-05-22 13:16:05 in
+            # ``scriptree-layout-trace-20260522-131449-58432.log``.
+            src_descendants: set[str] = set()
+            if src.role == "master":
+                _stack = list(getattr(src, "_members", {}).keys())
+                while _stack:
+                    cid = _stack.pop()
+                    if cid in src_descendants:
+                        continue
+                    src_descendants.add(cid)
+                    sub = self._registry.get(cid)
+                    if sub is not None and getattr(sub, "role", "") == "master":
+                        _stack.extend(getattr(sub, "_members", {}).keys())
+
             for tgt in self._registry.others(src_id):
+                # v0.6.37 — exclude the source's own descendants.
+                if tgt._id in src_descendants:
+                    continue
+
                 # (No group-membership filter here — see Bug 1 fix comment above.)
 
                 # Bug 2 fix — master-of-master guard:
