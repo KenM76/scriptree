@@ -3581,6 +3581,136 @@ class CellWindow(QMainWindow):
             and tl_x < right and tl_y < bottom
         )
 
+    def _audit_membership(self) -> dict:
+        """Defensive consistency check on this master's membership
+        bookkeeping (v0.6.38).
+
+        Symptoms the v0.6.37 trace exposed:
+
+        * **Phantom ids in ``_positioned``** — an id that no longer
+          exists in the registry (a closed pair-master left its
+          id behind in the forest's positioned set).
+        * **Orphaned cells** — cell.``_group_master_id`` is ``None``
+          but ``_slot`` is still set (snap-commit pair-master spawn
+          partially wired up state, then something else cleared the
+          parent without clearing the slot).
+        * **Linked-but-not-positioned cells** — cell.parent matches
+          this master, has a ``_slot`` assigned, but the cell isn't
+          in ``self._positioned``.  These cells SHOULD follow when
+          the master drags but currently don't.
+        * **Stale ``_members`` entries** — id is in ``_members``
+          but the cell either doesn't exist or points its parent
+          elsewhere.
+
+        The helper fixes each case in place and returns a dict
+        summarising what it changed.  Called from ``moveEvent``
+        (before each group-translate) and from
+        ``mousePressEvent`` (on drag start of a master) so the
+        forest self-heals before the user notices a stale id.
+
+        No-op when not a master.
+        """
+        if self.role != "master":
+            return {}
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        report = {
+            "phantom_positioned": 0,
+            "orphaned_cleared": 0,
+            "linked_not_positioned_added": 0,
+            "stale_members_removed": 0,
+        }
+
+        # Step 1 — remove phantom ids from _positioned + _members.
+        # An id with no registry entry is a leftover from a closed
+        # cell / pair-master that wasn't cleaned up.
+        for mid in list(self._members.keys()):
+            if registry.get(mid) is None:
+                self._members.pop(mid, None)
+                self._positioned.discard(mid)
+                self._dock_partners.discard(mid)
+                self._auto_hidden.discard(mid)
+                report["stale_members_removed"] += 1
+                try:
+                    _trace.event(
+                        "AUDIT_STALE_MEMBER",
+                        master=self._id[:8],
+                        cell=mid[:8],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        for pid in list(self._positioned):
+            if pid not in self._members:
+                self._positioned.discard(pid)
+                report["phantom_positioned"] += 1
+                try:
+                    _trace.event(
+                        "AUDIT_PHANTOM_POSITIONED",
+                        master=self._id[:8],
+                        phantom=pid[:8],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # Step 2 — for each member that claims this master as parent
+        # AND has a _slot, ensure it's in _positioned.  Without this
+        # the drag-cascade in moveEvent skips it and the cell gets
+        # left behind when the master moves.
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if m._group_master_id == self._id and m._slot is not None:
+                if mid not in self._positioned:
+                    self._positioned.add(mid)
+                    report["linked_not_positioned_added"] += 1
+                    try:
+                        _trace.event(
+                            "AUDIT_LINKED_REPOSITIONED",
+                            master=self._id[:8],
+                            cell=mid[:8],
+                            slot=m._slot,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        # Step 3 — re-parent orphan cells (parent=None) whose slot
+        # is still set AND who appear in this master's _members.
+        # The membership says "you're mine" — believe that side and
+        # restore the parent pointer.
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if m._group_master_id is None and m._slot is not None:
+                m._group_master_id = self._id
+                if mid not in self._positioned:
+                    self._positioned.add(mid)
+                report["orphaned_cleared"] += 1
+                try:
+                    _trace.event(
+                        "AUDIT_REPARENT_ORPHAN",
+                        master=self._id[:8],
+                        cell=mid[:8],
+                        slot=m._slot,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        if any(report.values()):
+            try:
+                _trace.event(
+                    "AUDIT_SUMMARY",
+                    master=self._id[:8],
+                    **{k: v for k, v in report.items() if v},
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        return report
+
     def _compute_layout(self, *, instant: bool = True) -> None:
         """The single slot-based layout authority (v0.6.35).
 
@@ -5337,6 +5467,18 @@ class CellWindow(QMainWindow):
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._drag_started = False
             _log(f"press @ {self._press_global_pos} id={self._id[:8]}")
+            # v0.6.38 — self-heal any membership inconsistency on the
+            # master before a drag begins.  The v0.6.37 trace
+            # surfaced phantom ids in _positioned + orphan cells +
+            # linked-but-not-positioned cells.  Auditing here means a
+            # corrupt state from a previous interaction can't cause
+            # cells to "go missing" or "not follow" during the NEXT
+            # drag — every press is a fresh consistency point.
+            if self.role == "master":
+                try:
+                    self._audit_membership()
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"mousePressEvent: audit raised {exc!r}")
             # v0.6.36 — trace + snapshot at drag start so the log
             # captures the world state just before any movement.
             try:
@@ -5656,9 +5798,33 @@ class CellWindow(QMainWindow):
                 except Exception:  # noqa: BLE001
                     pass
 
+                # v0.6.38 — drag-target set = UNION of
+                #   (1) ``_positioned`` (the legacy authority), and
+                #   (2) cells in ``_members`` that claim this master
+                #       as parent AND have a slot assigned.
+                # The trace from v0.6.37 surfaced cells in (2) that
+                # had been silently dropped from ``_positioned`` by
+                # a snap-commit pair-master spawn that closed —
+                # those cells need to drag with the master.
+                # Including (1) keeps pre-slot cells (legacy or
+                # synthetic tests) working without modification.
+                drag_targets: set[str] = set(self._positioned)
+                for mid in list(self._members.keys()):
+                    if mid in drag_targets:
+                        continue
+                    m = registry.get(mid)
+                    if m is None:
+                        continue
+                    if (
+                        m._group_master_id == self._id
+                        and m._slot is not None
+                    ):
+                        drag_targets.add(mid)
+                        # Heal _positioned while we're here.
+                        self._positioned.add(mid)
                 _GROUP_MOVE_IN_PROGRESS.add(self._id)
                 try:
-                    for member_id in list(self._positioned):
+                    for member_id in drag_targets:
                         member = registry.get(member_id)
                         if member is None:
                             continue

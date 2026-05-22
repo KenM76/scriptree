@@ -1009,6 +1009,101 @@ class TestComputeLayout:
         master.close()
 
 
+class TestMembershipAudit:
+    """v0.6.38 — ``_audit_membership`` self-heals broken bookkeeping.
+
+    The v0.6.37 trace exposed four kinds of corruption that the
+    snap-commit pair-master spawn path can leave behind:
+
+      * phantom ids in ``_positioned`` (cell no longer in registry)
+      * stale ``_members`` entries (same)
+      * cells with parent set but slot but NOT in ``_positioned``
+      * orphan cells (parent=None but slot still set)
+
+    The audit fixes each in place.
+    """
+
+    def test_phantom_id_in_positioned_removed(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+        # Pretend an old member id is still in _positioned but the
+        # cell has been closed.
+        master._positioned.add("ghost-id-no-longer-exists")
+        master._audit_membership()
+        assert "ghost-id-no-longer-exists" not in master._positioned
+        master.close()
+
+    def test_stale_member_id_removed(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+        # Add a member by id without the cell existing.
+        master._members["ghost-id"] = QPoint(0, 0)
+        master._positioned.add("ghost-id")
+        master._audit_membership()
+        assert "ghost-id" not in master._members
+        assert "ghost-id" not in master._positioned
+        master.close()
+
+    def test_linked_cell_with_slot_added_to_positioned(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        cell = CellWindow(load_branding())
+        for w in (master, cell):
+            w.show()
+        master.move(400, 400)
+        cell.move(500, 400)
+        # Wire membership as the snap-commit pair-master spawn does,
+        # but deliberately leave cell out of _positioned to simulate
+        # the v0.6.37 corruption.
+        master._members[cell._id] = QPoint(cell.pos())
+        cell._group_master_id = master._id
+        cell._slot = ("inner", 0)
+        # NOT in _positioned.
+        assert cell._id not in master._positioned
+
+        master._audit_membership()
+        assert cell._id in master._positioned
+        master.close()
+        cell.close()
+
+    def test_orphan_cell_with_slot_reparented(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        cell = CellWindow(load_branding())
+        for w in (master, cell):
+            w.show()
+        master.move(400, 400)
+        cell.move(500, 400)
+        # cell is in master._members + has a slot, but parent_id is
+        # None (orphaned by a buggy snap-commit cleanup).
+        master._members[cell._id] = QPoint(cell.pos())
+        cell._group_master_id = None
+        cell._slot = ("inner", 0)
+
+        master._audit_membership()
+        # Parent restored to this master, cell added to _positioned.
+        assert cell._group_master_id == master._id
+        assert cell._id in master._positioned
+        master.close()
+        cell.close()
+
+
 class TestAutoClassifiedIcon:
     """v0.6.33 — when a cell is bound to a catalog that has no
     explicit ``cell.icon_data`` / ``cell.icon`` and no
