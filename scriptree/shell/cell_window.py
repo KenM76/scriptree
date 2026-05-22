@@ -5065,6 +5065,18 @@ class CellWindow(QMainWindow):
             self._last_move_log_time = _now
         registry.hexagonMoved.emit(self._id)
 
+        # v0.6.32 — universal overlap watchdog.  Whenever a cell
+        # moves (drag, smooth_move, programmatic, snap-commit), nudge
+        # any other visible cell whose rect now overlaps ours out of
+        # the way.  Throttled per-cell so a stream of moveEvents
+        # doesn't trigger a settle storm; collapse/expand transitions
+        # and active drags on the other cell are skipped.  See
+        # ``_resettle_overlapping_neighbours`` for the rules.
+        try:
+            self._resettle_overlapping_neighbours()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"moveEvent: neighbour watchdog raised {exc!r}")
+
         # Amendment 2 — master group-drag: translate only the POSITIONALLY-DOCKED
         # members (those in self._positioned). Members that have broken free stay
         # where they are on screen; their stored position in self._members is NOT
@@ -5121,6 +5133,30 @@ class CellWindow(QMainWindow):
                                 pass
                             member._pos_anim = None
                         member.move(member.pos().x() + delta_x, member.pos().y() + delta_y)
+                        # v0.6.32 — when a positioned member is ITSELF a
+                        # master with its own positioned members (e.g. a
+                        # ring inside the forest), recursively cascade
+                        # the translation so the nested group moves
+                        # rigidly as one unit.  The ``_drag_started``
+                        # gate on the moveEvent path doesn't fire for
+                        # the inner master (we're not dragging IT), so
+                        # without this explicit call its dock cluster
+                        # stays put and a visible gap opens up between
+                        # the inner master and its members.
+                        if (
+                            member.role == "master"
+                            and member._positioned
+                            and member._id not in _GROUP_MOVE_IN_PROGRESS
+                        ):
+                            try:
+                                member._cascade_translate_positioned(
+                                    delta_x, delta_y,
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                _log(
+                                    f"moveEvent cascade: inner master "
+                                    f"{member._id[:8]} raised {exc!r}"
+                                )
                 finally:
                     _GROUP_MOVE_IN_PROGRESS.discard(self._id)
 
@@ -7054,8 +7090,41 @@ class CellWindow(QMainWindow):
                 continue
             new_tl = new_positions.get(mid)
             if new_tl is None:
-                # No on-screen slot — fall back to the historical
-                # hide so the ring doesn't grow off-screen ghosts.
+                # No on-screen slot on THIS master — v0.6.32: try a
+                # sibling master under the same parent before giving
+                # up and auto-hiding.  This is the "look for a free
+                # position on another cell/ring linked to the same
+                # thing" behaviour the user asked for.
+                redocked = False
+                try:
+                    # Detach from self first so the sibling-redock
+                    # helper sees a clean parent_id for the new
+                    # master.  We restore on failure.
+                    if self._group_master_id and m._group_master_id == self._id:
+                        # Temporarily set m's _group_master_id to
+                        # self's parent so _try_redock_to_sibling
+                        # can find siblings of self at that level.
+                        orig_master_id = m._group_master_id
+                        m._group_master_id = self._group_master_id
+                        try:
+                            redocked = m._try_redock_to_sibling()
+                        finally:
+                            if not redocked:
+                                m._group_master_id = orig_master_id
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_live_edge_reflow_or_fold: sibling-redock "
+                        f"on {mid[:8]} raised {exc!r}"
+                    )
+                if redocked:
+                    # Clean self's bookkeeping for the migrated member.
+                    self._members.pop(mid, None)
+                    self._positioned.discard(mid)
+                    self._dock_partners.discard(mid)
+                    self._auto_hidden.discard(mid)
+                    continue
+                # Fall back to the historical hide so the ring
+                # doesn't grow off-screen ghosts.
                 if mid not in self._auto_hidden:
                     self._auto_hidden.add(mid)
                     m.setVisible(False)
@@ -7378,6 +7447,295 @@ class CellWindow(QMainWindow):
             f"_settle_no_overlap: {self._id[:8]} shifted by "
             f"({dx},{dy}) to clear {len(obstacles)} obstacle(s)"
         )
+
+    # ------------------------------------------------------------------
+    # v0.6.32 — sibling redock + gap resettle + overlap watchdog
+    # ------------------------------------------------------------------
+
+    def _try_redock_to_sibling(self) -> bool:
+        """When this cell can't fit on its current master's ring, try
+        sibling masters linked to the same parent for a free slot
+        (v0.6.32).
+
+        Returns ``True`` iff the member was successfully re-linked to
+        a sibling master and placed on a free on-screen slot.
+
+        "Sibling masters" = other masters present in this cell's
+        ``_group_master_id``'s ``_members`` dict.  A forest with a
+        couple of rings, all linked to the forest, makes those rings
+        siblings of each other; a cell stuck off-screen on one ring
+        can hop to another ring under the same forest.
+
+        Implementation: enumerate each sibling's first-ring then
+        outer-ring slot centres, skip slots occupied by the
+        sibling's existing members, skip slots that don't fit on
+        screen, and dock to the first viable one.  Re-link via
+        ``_group_master_id`` + the new master's ``_members`` /
+        ``_positioned`` sets.  Old master's bookkeeping is cleaned
+        up by the caller before this is invoked (the caller knows
+        the cell is being moved).
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.group_layout import (
+            first_ring_centres, outer_ring_centres,
+            screen_rect_for_master, slot_fits_on_screen,
+            top_left_for_centre,
+        )
+        from PySide6.QtGui import QGuiApplication
+
+        parent_id = getattr(self, "_group_master_id", None)
+        if not parent_id:
+            return False
+
+        registry = CellRegistry.instance()
+        parent = registry.get(parent_id)
+        if parent is None or parent.role != "master":
+            return False
+
+        # Sibling masters: other masters under the same parent.
+        siblings: list["CellWindow"] = []
+        for sid in parent._members:
+            if sid == self._id:
+                continue
+            sib = registry.get(sid)
+            if sib is None or sib.role != "master":
+                continue
+            if not sib.isVisible():
+                continue
+            siblings.append(sib)
+
+        if not siblings:
+            return False
+
+        app_inst = QGuiApplication.instance()
+        if app_inst is None:
+            return False
+
+        sz = self._size_px
+        for sib in siblings:
+            screen_rect = screen_rect_for_master(
+                (sib.pos().x(), sib.pos().y()), sib._size_px,
+            )
+            # Coordinate space: slot centres relative to sib's centre.
+            sib_cx = sib.pos().x() + sib._size_px / 2
+            sib_cy = sib.pos().y() + sib._size_px / 2
+            candidate_centres = (
+                first_ring_centres(
+                    sib_cx, sib_cy, sib._size_px,
+                    sib._shape, sib._orientation,
+                )
+                + outer_ring_centres(
+                    sib_cx, sib_cy, sib._size_px,
+                    sib._shape, sib._orientation,
+                )
+            )
+            # Slots already occupied by sib's existing members (any
+            # of the sib's _members that are within snap distance of
+            # the candidate centre).
+            occupied_tls: set[tuple[int, int]] = set()
+            for mid in sib._members:
+                m = registry.get(mid)
+                if m is None:
+                    continue
+                occupied_tls.add((m.pos().x(), m.pos().y()))
+
+            for ccx, ccy in candidate_centres:
+                if not slot_fits_on_screen(
+                    ccx, ccy, self._size_px, screen_rect,
+                ):
+                    continue
+                tl = top_left_for_centre(ccx, ccy, self._size_px)
+                # Reject if any current sib member sits at this slot.
+                taken = False
+                for (ox, oy) in occupied_tls:
+                    if abs(ox - tl[0]) < sz // 2 and abs(oy - tl[1]) < sz // 2:
+                        taken = True
+                        break
+                if taken:
+                    continue
+                # Found one — re-link.
+                self._group_master_id = sib._id
+                sib._members[self._id] = QPoint(tl[0], tl[1])
+                sib._positioned.add(self._id)
+                sib._dock_partners.add(self._id)
+                if self._id in sib._auto_hidden:
+                    sib._auto_hidden.discard(self._id)
+                    self.setVisible(True)
+                self._smooth_move(tl[0], tl[1], duration_ms=260)
+                _log(
+                    f"_try_redock_to_sibling: {self._id[:8]} "
+                    f"re-docked from {parent_id[:8]} → {sib._id[:8]} "
+                    f"at ({tl[0]},{tl[1]})"
+                )
+                return True
+
+        return False
+
+    def _resettle_positioned_to_home(self) -> None:
+        """Slide every positioned member back to its stored HOME
+        slot (the value in ``self._members[mid]``) — v0.6.32.
+
+        Use this when the master moves *without* the group-drag path
+        running (programmatic move, settle, edit-time
+        repositioning).  Without it, the member widgets stay at
+        their old absolute coords while ``self._members[mid]``
+        already records the new (master-relative) home — a visual
+        gap opens up between the master and its dock cluster until
+        the next manual interaction.
+
+        No-op when the master has no positioned members, or a
+        collapse/expand animation is in flight (the animation owns
+        the positions).
+        """
+        if self.role != "master" or not self._positioned:
+            return
+        if getattr(self, "_collapse_state", "expanded") in (
+            "collapsing", "expanding",
+        ):
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+        for mid in list(self._positioned):
+            if mid in self._auto_hidden:
+                continue
+            home = self._members.get(mid)
+            if home is None:
+                continue
+            m = registry.get(mid)
+            if m is None or not m.isVisible():
+                continue
+            if m.pos() == home:
+                continue
+            m._smooth_move(home.x(), home.y(), duration_ms=180)
+
+    def _cascade_translate_positioned(
+        self, delta_x: int, delta_y: int,
+    ) -> None:
+        """Rigidly translate every positioned member of this master
+        by ``(delta_x, delta_y)`` — v0.6.32 helper invoked by an
+        OUTER master's drag-translate when this master is itself
+        one of its positioned members.
+
+        Mirrors the inline drag-translate inside ``moveEvent`` but
+        is safe to call directly (no event-loop dependency, no
+        ``_drag_started`` gate).  Updates the stored HOME slot
+        positions in ``_members`` so collapse / expand targets
+        track too, kills any in-flight eased moves on each member,
+        then ``move``s the member widget by the delta.  Recurses
+        into nested masters so the whole sub-tree drags as one
+        rigid unit.
+
+        Re-entry is guarded by ``_GROUP_MOVE_IN_PROGRESS`` (a
+        module-level set) just like the inline path.
+        """
+        if delta_x == 0 and delta_y == 0:
+            return
+        if self.role != "master" or not self._positioned:
+            return
+        if self._id in _GROUP_MOVE_IN_PROGRESS:
+            return
+
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        # Update stored HOME slots for the cascade target master too,
+        # so collapse / expand math stays accurate.
+        self._shift_positioned_members(delta_x, delta_y)
+
+        _GROUP_MOVE_IN_PROGRESS.add(self._id)
+        try:
+            for member_id in list(self._positioned):
+                member = registry.get(member_id)
+                if member is None:
+                    continue
+                prior = getattr(member, "_pos_anim", None)
+                if prior is not None:
+                    try:
+                        prior.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    member._pos_anim = None
+                member.move(
+                    member.pos().x() + delta_x,
+                    member.pos().y() + delta_y,
+                )
+                if (
+                    member.role == "master"
+                    and member._positioned
+                    and member._id not in _GROUP_MOVE_IN_PROGRESS
+                ):
+                    try:
+                        member._cascade_translate_positioned(
+                            delta_x, delta_y,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        _log(
+                            f"_cascade_translate_positioned: nested "
+                            f"{member._id[:8]} raised {exc!r}"
+                        )
+        finally:
+            _GROUP_MOVE_IN_PROGRESS.discard(self._id)
+
+    def _resettle_overlapping_neighbours(self) -> None:
+        """Settle any other visible cell whose rect overlaps this
+        one (v0.6.32 — universal overlap watchdog).
+
+        Two cells in the workspace can land overlapping for reasons
+        the snap engine doesn't catch — a programmatic move,
+        bringing the forest back from a saved layout, a redock to
+        sibling.  This nudges the OTHER cells out of the way so the
+        cell that just moved (self) stays put.
+
+        Throttled to once per ~200 ms per cell so a rapid sequence
+        of moves doesn't trigger a settle storm.
+        """
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, "_last_neighbour_settle_time", 0.0)
+        if now - last < 0.2:
+            return
+        self._last_neighbour_settle_time = now
+
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+        sz = self._size_px
+        my_rect = QRect(self.pos().x(), self.pos().y(), sz, sz)
+        my_cx = my_rect.center().x()
+        my_cy = my_rect.center().y()
+        threshold = sz * 0.75
+
+        for h in registry.all():
+            if h._id == self._id:
+                continue
+            if not h.isVisible():
+                continue
+            # Don't fight masters that are tracking their group —
+            # the master's drag/move IS the user's intent.
+            if getattr(h, "_drag_started", False):
+                continue
+            # Skip collapse/expand animations — overlap is
+            # temporary by design there.
+            if getattr(h, "_collapse_state", "expanded") in (
+                "collapsing", "expanding",
+            ):
+                continue
+            other_rect = QRect(
+                h.pos().x(), h.pos().y(),
+                h._size_px, h._size_px,
+            )
+            ocx = other_rect.center().x()
+            ocy = other_rect.center().y()
+            if (
+                abs(my_cx - ocx) < threshold
+                and abs(my_cy - ocy) < threshold
+            ):
+                try:
+                    h._settle_no_overlap()
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_resettle_overlapping_neighbours: settle "
+                        f"on {h._id[:8]} raised {exc!r}"
+                    )
 
     # ------------------------------------------------------------------
     # Harness-driveable public hooks (ADR-001 Â§harness-driveable contract)

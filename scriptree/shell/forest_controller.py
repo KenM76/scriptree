@@ -425,6 +425,34 @@ class ForestController(QObject):
         if self.forest_window is not None:
             try:
                 self.forest_window._repack_members()
+                # v0.6.32 — recursive repack into rings.  The call
+                # above places the forest's direct members (rings +
+                # standalone cells) on free slots around the hub,
+                # but each RING is itself a master whose own
+                # members were loaded at stale absolute positions
+                # via ``load_ring``.  After the forest moved a ring,
+                # the ring's members are now offset from the ring;
+                # repacking the ring brings its cells back onto the
+                # ring's honeycomb slots.  Without this recursion
+                # the user saw "ring members floating off-axis from
+                # their ring" at startup.
+                from scriptree.shell.cell_registry import CellRegistry
+                registry = self._registry
+                for ring_id in list(self.forest_window._members):
+                    ring = registry.get(ring_id)
+                    if ring is None:
+                        continue
+                    if ring.role != "master":
+                        continue
+                    if not ring._members:
+                        continue
+                    try:
+                        ring._repack_members()
+                    except Exception as exc:  # noqa: BLE001
+                        _log(
+                            f"startup recursive _repack_members on "
+                            f"ring {ring_id[:8]} failed: {exc!r}"
+                        )
             except Exception as exc:  # noqa: BLE001
                 _log(
                     f"startup _repack_members failed: {exc!r} — "
