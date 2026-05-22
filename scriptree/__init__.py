@@ -33,7 +33,7 @@ pulled?" at a glance).
 # so the user always sees the same number the package advertises),
 # the other is consumed by build / package tooling that walks
 # ``pyproject.toml`` directly.
-__version__ = "0.6.32"
+__version__ = "0.6.33"
 
 # When this version was cut.  Bumped together with ``__version__``
 # in the same commit.  Format: ``"YYYY-MM-DD HH:MM UTC"`` — UTC so
@@ -41,4 +41,4 @@ __version__ = "0.6.32"
 # cut.  Shown in the About dialogs alongside the version number so
 # the user can tell which build they're running when revisions
 # happen quickly.
-__build_date__ = "2026-05-22 14:05 UTC"
+__build_date__ = "2026-05-22 14:16 UTC"

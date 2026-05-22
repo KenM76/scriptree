@@ -4205,12 +4205,29 @@ class CellWindow(QMainWindow):
         if self.role != "master":
             self._paint_cell_label(painter, size, cx, cy)
         else:
+            # v0.6.33 — masters auto-classify too: forest hub →
+            # icon-forest, ring hub → icon-ring, catalog-bound
+            # master → classified glyph.  ``_paint_cell_label``
+            # short-circuits to the centre-dot fallback when even
+            # the auto-classifier yields nothing (e.g. icon set is
+            # missing from the install), so the historical
+            # "blank master → centre dot" behaviour is preserved
+            # for that edge case.
+            self._paint_cell_label(painter, size, cx, cy)
+            # Detect whether the paint actually drew an icon by
+            # re-checking the same resolution path the paint code
+            # used; we suppress the centre-dot fallback only when
+            # something was painted.
             has_icon = bool(
                 getattr(self, "_icon_data_b64", "")
                 or getattr(self, "_icon_path", None)
             )
+            if not has_icon:
+                try:
+                    has_icon = self._auto_classified_pixmap() is not None
+                except Exception:  # noqa: BLE001
+                    has_icon = False
             if has_icon:
-                self._paint_cell_label(painter, size, cx, cy)
                 master_painted_icon = True
 
         # ---- Master centre dot ------------------------------------------
@@ -4338,13 +4355,180 @@ class CellWindow(QMainWindow):
                     )
             return
 
-        # Priority 2 / 3: text — explicit override or auto-derived.
-        text = self._text_label
-        if not text:
-            text = self._auto_label_text()
+        # Priority 2: explicit text label — the user typed it, paint it.
+        if self._text_label:
+            self._paint_label_text(painter, size, cx, cy, self._text_label)
+            return
+
+        # Priority 3 (v0.6.33+): auto-classified bundled icon.  Picks a
+        # sensible glyph for the bound catalog from
+        # ``icon_assets.classify_icon`` so a fresh ``.scriptree`` /
+        # ``.scriptreetree`` shows the right kind of icon on its cell
+        # without the user opening Settings → Library.  Falls through
+        # to auto-letters when there's no catalog (unbound standalone
+        # cell) or the bundled icon set is missing.
+        try:
+            classified = self._auto_classified_pixmap()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_paint_cell_label: auto-classify raised {exc!r}")
+            classified = None
+        if classified is not None:
+            target = max(8, int(size * 0.7 * self._icon_scale))
+            scaled = classified.scaled(
+                target, target,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            effective_op = max(
+                0.0, min(1.0, self._transparency * self._label_opacity),
+            )
+            if effective_op < 0.999:
+                painter.save()
+                painter.setOpacity(effective_op)
+                painter.drawPixmap(
+                    int(cx - scaled.width() / 2),
+                    int(cy - scaled.height() / 2),
+                    scaled,
+                )
+                painter.restore()
+            else:
+                painter.drawPixmap(
+                    int(cx - scaled.width() / 2),
+                    int(cy - scaled.height() / 2),
+                    scaled,
+                )
+            return
+
+        # Priority 4: auto-derived letters from the bound catalog's
+        # name.  Final fallback for unbound or unclassifiable cells.
+        text = self._auto_label_text()
         if not text:
             return  # nothing to paint
         self._paint_label_text(painter, size, cx, cy, text)
+
+    def _auto_classified_pixmap(self):  # noqa: ANN202 — QPixmap | None
+        """Return the bundled-icon pixmap for the cell's bound catalog
+        when the user hasn't picked an explicit one — v0.6.33.
+
+        The lookup uses ``icon_assets.classify_icon`` against the
+        loaded catalog's name + the file's stem, so a tool named
+        "build-and-push" picks up ``icon-build.png`` automatically.
+        For unbound cells (no ``_catalog_path``) the role-default
+        glyph is used:
+
+          * forest master → ``icon-forest``
+          * ring master   → ``icon-ring``
+          * standalone    → no auto-icon (paint falls through to
+                             text-label / auto-letters as before)
+
+        Result is cached by (catalog_path, mtime) so paintEvent
+        doesn't re-read the catalog + re-decode the PNG on every
+        repaint.  The cache key tracks mtime so an edit to the
+        catalog's name (which can change classification) invalidates
+        next paint.
+
+        Returns ``None`` when nothing applies — paint code falls
+        through to the existing text-label / auto-letters branches.
+        """
+        # Cell with no catalog: only masters get a role-default
+        # auto-icon; standalone bare cells stay bare per the
+        # existing "icon → text-label → auto-letters → nothing"
+        # contract.
+        catalog_path = self._catalog_path
+        is_master = (self.role == "master")
+        is_forest = bool(
+            getattr(self, "_is_forest_master", False)
+        )
+
+        if not catalog_path and not is_master:
+            return None
+
+        # Per-instance pixmap cache.  Re-use the existing
+        # ``_classified_icon_cache`` slot if present, otherwise
+        # initialise here.
+        cache = getattr(self, "_classified_icon_cache", None)
+
+        # Build the cache key.  For an unbound master the key is
+        # the role default; otherwise it's the catalog path + mtime.
+        from pathlib import Path
+        cache_key: tuple
+        chosen_name: str = ""
+        if catalog_path:
+            try:
+                p = Path(catalog_path)
+                if not p.is_file():
+                    return None
+                try:
+                    mtime = p.stat().st_mtime_ns
+                except OSError:
+                    mtime = 0
+                cache_key = ("catalog", str(p.resolve()), mtime)
+            except Exception:  # noqa: BLE001
+                return None
+        else:
+            cache_key = (
+                "master-default",
+                "forest" if is_forest else "ring",
+            )
+
+        if cache is not None and cache[0] == cache_key:
+            return cache[1]
+
+        # Cache miss — resolve the bundled-icon name.
+        if catalog_path:
+            try:
+                from scriptree.shell.icon_assets import classify_icon
+                p = Path(catalog_path)
+                name = ""
+                ext = p.suffix.lower()
+                if ext == ".scriptreetree":
+                    from scriptree.core.io import load_tree
+                    name = load_tree(str(p)).name or p.stem
+                elif ext == ".scriptree":
+                    from scriptree.core.io import load_tool
+                    name = load_tool(str(p)).name or p.stem
+                else:
+                    name = p.stem
+                # The master that's a ring or forest still uses the
+                # catalog's classification IF a catalog is bound —
+                # the user bound a tool here, that beats the
+                # role-default.
+                chosen_name = classify_icon(
+                    name=name, filename=p.stem,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"_auto_classified_pixmap: classify_icon failed "
+                    f"for {catalog_path!r}: {exc!r}"
+                )
+                return None
+        else:
+            # Unbound master — role default.
+            chosen_name = "forest" if is_forest else "ring"
+
+        # Decode the PNG into a QPixmap.
+        pix = None
+        try:
+            from PySide6.QtGui import QPixmap
+            from scriptree.shell.icon_assets import (
+                bundled_icon_png_path,
+            )
+            path = bundled_icon_png_path(chosen_name)
+            if path is not None:
+                cand = QPixmap(str(path))
+                if not cand.isNull():
+                    pix = cand
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"_auto_classified_pixmap: pixmap load failed "
+                f"for {chosen_name!r}: {exc!r}"
+            )
+            pix = None
+
+        # Cache miss-or-hit either way; missing pix caches None so
+        # we don't retry on every paint.
+        self._classified_icon_cache = (cache_key, pix)
+        return pix
 
     def _auto_label_text(self) -> str | None:
         """Derive a label from the loaded catalog's name.

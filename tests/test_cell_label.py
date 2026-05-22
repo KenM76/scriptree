@@ -890,6 +890,135 @@ class TestResolveMemberStacking:
         master.close(); a.close(); b.close()
 
 
+class TestAutoClassifiedIcon:
+    """v0.6.33 — when a cell is bound to a catalog that has no
+    explicit ``cell.icon_data`` / ``cell.icon`` and no
+    ``cell.text_label`` override, the paint code falls back to
+    ``icon_assets.classify_icon`` on the catalog's name to pick a
+    sensible bundled glyph (the same heuristic the popup-menu rows
+    use).  The Settings → Library override still wins because the
+    explicit-icon branch fires before this one.
+    """
+
+    def _saved_tool(self, tmp_path: Path, name: str) -> tuple[ToolDef, str]:
+        from scriptree.core.io import save_tool
+        from scriptree.core.model import ToolDef
+        tool = ToolDef(name=name, executable="/bin/echo")
+        path = tmp_path / f"{name.replace(' ', '_')}.scriptree"
+        save_tool(tool, path)
+        return tool, str(path)
+
+    def test_keyword_match_returns_classified_pixmap(
+        self, tmp_path: Path,
+    ) -> None:
+        """A tool named ``"compile-and-build"`` classifies to
+        ``icon-build.png`` — auto-classify returns its QPixmap."""
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        _tool, path = self._saved_tool(tmp_path, "compile-and-build")
+        c = CellWindow(load_branding())
+        c._catalog_path = path
+        try:
+            pix = c._auto_classified_pixmap()
+            assert pix is not None
+            assert not pix.isNull()
+        finally:
+            c.close()
+
+    def test_generic_default_for_unclassifiable(
+        self, tmp_path: Path,
+    ) -> None:
+        """A tool whose name doesn't match any rule lands at the
+        ``"tool"`` default — still a real bundled pixmap."""
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        _tool, path = self._saved_tool(tmp_path, "zzqq")
+        c = CellWindow(load_branding())
+        c._catalog_path = path
+        try:
+            pix = c._auto_classified_pixmap()
+            assert pix is not None
+            assert not pix.isNull()
+        finally:
+            c.close()
+
+    def test_unbound_standalone_returns_none(self) -> None:
+        """A standalone cell with no catalog binding has no
+        catalog name to classify against — auto-classify returns
+        None and paint falls through to the existing auto-letters
+        / nothing path."""
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        c = CellWindow(load_branding())
+        try:
+            assert c._auto_classified_pixmap() is None
+        finally:
+            c.close()
+
+    def test_master_default_forest(self) -> None:
+        """An unbound forest master gets ``icon-forest`` so the
+        forest hub draws an icon out of the box without a
+        catalog."""
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        c = CellWindow(load_branding(), role="master")
+        c._is_forest_master = True
+        try:
+            pix = c._auto_classified_pixmap()
+            assert pix is not None
+            assert not pix.isNull()
+        finally:
+            c.close()
+
+    def test_master_default_ring(self) -> None:
+        """An unbound ring master gets ``icon-ring`` for the
+        same reason — never a blank master."""
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        c = CellWindow(load_branding(), role="master")
+        # Default _is_forest_master is False → ring.
+        try:
+            pix = c._auto_classified_pixmap()
+            assert pix is not None
+            assert not pix.isNull()
+        finally:
+            c.close()
+
+    def test_cache_is_mtime_keyed(self, tmp_path: Path) -> None:
+        """Editing the catalog (mtime change) invalidates the
+        cache so a re-classify picks up a name change next paint.
+        """
+        import time
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        _tool, path = self._saved_tool(tmp_path, "old-name")
+        c = CellWindow(load_branding())
+        c._catalog_path = path
+        try:
+            first = c._auto_classified_pixmap()
+            assert first is not None
+            cache_after_first = c._classified_icon_cache
+            assert cache_after_first is not None
+
+            # Rewrite the catalog with a different name so the
+            # mtime changes (and so would the classification).
+            time.sleep(0.05)  # ensure mtime resolution doesn't tie
+            self._saved_tool(tmp_path, "old-name")  # same path, fresh mtime
+
+            second = c._auto_classified_pixmap()
+            # Cache must have been refreshed (key changed).
+            assert c._classified_icon_cache[0] != cache_after_first[0]
+            assert second is not None
+        finally:
+            c.close()
+
+
 class TestCascadeTranslateNestedMaster:
     """v0.6.32 — when an OUTER master drags rigidly with positioned
     members, and one of those positioned members is itself a master
