@@ -33,12 +33,15 @@ pulled?" at a glance).
 # so the user always sees the same number the package advertises),
 # the other is consumed by build / package tooling that walks
 # ``pyproject.toml`` directly.
-__version__ = "0.6.35"
+__version__ = "0.6.36"
 
 # When this version was cut.  Bumped together with ``__version__``
-# in the same commit.  Format: ``"YYYY-MM-DD HH:MM UTC"`` — UTC so
-# every build has a comparable timestamp regardless of where it was
-# cut.  Shown in the About dialogs alongside the version number so
-# the user can tell which build they're running when revisions
+# in the same commit.  Format: ``"YYYY-MM-DD HH:MM TZ"`` where TZ
+# is the abbreviation of the build machine's local timezone (e.g.
+# ``EDT`` / ``EST`` for the project author).  v0.6.36 switched
+# from UTC at user request — the user wants the timestamp they see
+# in the About dialog to match their wall clock, not a converted
+# value.  Shown in the About dialogs alongside the version number
+# so the user can tell which build they're running when revisions
 # happen quickly.
-__build_date__ = "2026-05-22 16:11 UTC"
+__build_date__ = "2026-05-22 12:25 EDT"

@@ -413,6 +413,21 @@ def main() -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
 
+    # v0.6.36 — layout diagnostic tracing.  Opens the log file
+    # eagerly so the path is printed before any cell event fires;
+    # the user can ``tail -f`` it during interaction.  Tracing is
+    # on by default; disable with ``SCRIPTREE_LAYOUT_TRACE=0``.
+    try:
+        from scriptree.shell import layout_trace as _trace
+        _trace.log_path()
+        # Flush on app quit so the log isn't truncated on close.
+        app.aboutToQuit.connect(_trace.close)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[ring_main] layout_trace init failed: {exc!r}",
+            file=sys.stderr,
+        )
+
     # ---- Single-instance handoff ---------------------------------------
     #
     # Default behaviour: if another ScripTreeRing process is already

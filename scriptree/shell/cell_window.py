@@ -135,6 +135,13 @@ def _log(msg: str) -> None:
     print(f"[CellWindow] {msg}", file=sys.stderr)
 
 
+# Layout trace — diagnostic event log written to a temp file.  See
+# ``scriptree/shell/layout_trace.py`` for the format.  Imported here
+# so every CellWindow event path can emit trace lines without each
+# call site needing its own import.  v0.6.36.
+from scriptree.shell import layout_trace as _trace  # noqa: E402
+
+
 # ---------------------------------------------------------------------------
 # Custom hover-tooltip (v0.6.27)
 # ---------------------------------------------------------------------------
@@ -3190,6 +3197,18 @@ class CellWindow(QMainWindow):
             f"size={self._size_px}px shape={self._shape} orient={self._orientation} "
             f"transparency={self._transparency:.2f} aot={self._always_on_top}"
         )
+        # v0.6.36 — trace cell construction.
+        try:
+            _trace.event(
+                "CREATE",
+                id=self._id[:8],
+                role=self.role,
+                size=self._size_px,
+                shape=self._shape,
+                orient=self._orientation,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         # Bug 2 — OS double-click interval verification.
         # QApplication.doubleClickInterval() reads GetDoubleClickTime() on Win11
         # (typically 500 ms), so this should reflect the OS setting.
@@ -3204,6 +3223,10 @@ class CellWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         from scriptree.shell.cell_registry import CellRegistry
         _log(f"closeEvent id={self._id}")
+        try:
+            _trace.event("CLOSE", id=self._id[:8], role=self.role)
+        except Exception:  # noqa: BLE001
+            pass
         # Close the snap overlay if present.
         if self._snap_overlay is not None:
             self._snap_overlay.hide()
@@ -3592,6 +3615,19 @@ class CellWindow(QMainWindow):
         if self.role != "master" or not self._members:
             return
 
+        # v0.6.36 — trace entry.
+        try:
+            _trace.event(
+                "LAYOUT_RUN",
+                master=self._id[:8],
+                pos=(self.pos().x(), self.pos().y()),
+                size=self._size_px,
+                members=len(self._members),
+                instant=instant,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         from PySide6.QtGui import QGuiApplication
         from scriptree.shell.cell_registry import CellRegistry
         from scriptree.shell.layout import (
@@ -3677,6 +3713,17 @@ class CellWindow(QMainWindow):
                 occupied_centres.add(
                     (tl[0] + m._size_px // 2, tl[1] + m._size_px // 2),
                 )
+                # v0.6.36 — trace the slot assignment.
+                try:
+                    _trace.event(
+                        "SLOT_ASSIGN",
+                        master=self._id[:8],
+                        cell=m._id[:8],
+                        slot=slot,
+                        target_pos=tl,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
         # Pass 2: compute world positions, write them through to
         # ``_members[mid]`` and the widget, handle visibility.
@@ -3709,11 +3756,30 @@ class CellWindow(QMainWindow):
                 if mid in self._auto_hidden:
                     self._auto_hidden.discard(mid)
                     m.setVisible(True)
+                    try:
+                        _trace.event(
+                            "AUTO_SHOW",
+                            cell=m._id[:8],
+                            master=self._id[:8],
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 # Move widget if drift > 1 px.
                 if (
                     abs(m.pos().x() - new_x) > 1
                     or abs(m.pos().y() - new_y) > 1
                 ):
+                    try:
+                        _trace.event(
+                            "LAYOUT_MOVE",
+                            cell=m._id[:8],
+                            master=self._id[:8],
+                            from_=(m.pos().x(), m.pos().y()),
+                            to=(new_x, new_y),
+                            instant=instant,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     if instant:
                         prior = getattr(m, "_pos_anim", None)
                         if prior is not None:
@@ -3730,6 +3796,16 @@ class CellWindow(QMainWindow):
                     self._auto_hidden.add(mid)
                     if m.isVisible():
                         m.setVisible(False)
+                    try:
+                        _trace.event(
+                            "AUTO_HIDE",
+                            cell=m._id[:8],
+                            master=self._id[:8],
+                            slot=m._slot,
+                            attempted_pos=tl,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
         self.update()
 
@@ -5261,6 +5337,22 @@ class CellWindow(QMainWindow):
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._drag_started = False
             _log(f"press @ {self._press_global_pos} id={self._id[:8]}")
+            # v0.6.36 — trace + snapshot at drag start so the log
+            # captures the world state just before any movement.
+            try:
+                _trace.event(
+                    "PRESS",
+                    id=self._id[:8],
+                    role=self.role,
+                    pos=(self.pos().x(), self.pos().y()),
+                    press=(
+                        self._press_global_pos.x(),
+                        self._press_global_pos.y(),
+                    ),
+                )
+                _trace.snapshot(f"press-{self._id[:8]}")
+            except Exception:  # noqa: BLE001
+                pass
         elif event.button() == Qt.RightButton:
             # Bug 3 — double-right-click detection:
             # Qt only fires mouseDoubleClickEvent for the left button, so we
@@ -5377,6 +5469,17 @@ class CellWindow(QMainWindow):
         if event.button() == Qt.LeftButton:
             _log(f"release drag_started={self._drag_started} id={self._id[:8]}")
             was_dragging = self._drag_started
+            # v0.6.36 — trace release with current state.
+            try:
+                _trace.event(
+                    "RELEASE",
+                    id=self._id[:8],
+                    role=self.role,
+                    pos=(self.pos().x(), self.pos().y()),
+                    was_dragging=was_dragging,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             if was_dragging:
                 # End the drag — notify SnapEngine so it can commit a snap.
                 self._drag_started = False
@@ -5394,6 +5497,12 @@ class CellWindow(QMainWindow):
             else:
                 # No drag threshold crossed — pure click.
                 self.click("single")
+            # v0.6.36 — snapshot post-release so we can compare to
+            # the press-time snapshot for any drag.
+            try:
+                _trace.snapshot(f"release-{self._id[:8]}")
+            except Exception:  # noqa: BLE001
+                pass
         super().mouseReleaseEvent(event)
         # Master-drag end: reflow members onto valid on-screen slots.
         # During the drag, members translate rigidly with the master
@@ -5476,6 +5585,29 @@ class CellWindow(QMainWindow):
                 f"drag_started={self._drag_started} id={self._id[:8]}"
             )
             self._last_move_log_time = _now
+        # v0.6.36 — diagnostic trace.  Every moveEvent is logged so
+        # the user-reported "they move randomly" can be analysed
+        # post-hoc by tail-ing the trace file.
+        try:
+            old = event.oldPos()
+            new = event.pos()
+            _trace.event(
+                "MOVE",
+                id=self._id[:8],
+                role=self.role,
+                from_=(old.x(), old.y()),
+                to=(new.x(), new.y()),
+                delta=(new.x() - old.x(), new.y() - old.y()),
+                drag=self._drag_started,
+                slot=self._slot,
+                floating=self._floating_intent,
+                parent=(
+                    self._group_master_id[:8]
+                    if self._group_master_id else None
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         registry.hexagonMoved.emit(self._id)
 
         # Amendment 2 — master group-drag: translate only the POSITIONALLY-DOCKED
@@ -5511,6 +5643,18 @@ class CellWindow(QMainWindow):
                         f"by ({delta_x},{delta_y})"
                     )
                     self._last_groupmove_log_time = _now
+                # v0.6.36 — trace the group-move (every frame, not
+                # throttled, so we can see jitter in the trace).
+                try:
+                    _trace.event(
+                        "GROUP_MOVE",
+                        master=self._id[:8],
+                        delta=(delta_x, delta_y),
+                        positioned=len(self._positioned),
+                        member_ids=[m[:8] for m in self._positioned],
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
                 _GROUP_MOVE_IN_PROGRESS.add(self._id)
                 try:
@@ -8303,6 +8447,19 @@ class CellWindow(QMainWindow):
 
         pending = [m._id for m in members]
 
+        # v0.6.36 — trace collapse start.
+        try:
+            _trace.event(
+                "COLLAPSE_START",
+                master=self._id[:8],
+                pos=(target.x(), target.y()),
+                member_count=len(members),
+                member_ids=[m._id[:8] for m in members],
+            )
+            _trace.snapshot(f"collapse-start-{self._id[:8]}")
+        except Exception:  # noqa: BLE001
+            pass
+
         # v0.6.34 — safety watchdog.  If any animation's ``finished``
         # signal is lost (e.g. the animation is interrupted by a
         # later ``_smooth_move`` that replaces it) the collapse state
@@ -8402,6 +8559,19 @@ class CellWindow(QMainWindow):
         self._collapse_state = "expanding"
 
         pending = [m._id for m in members]
+
+        # v0.6.36 — trace expand start.
+        try:
+            _trace.event(
+                "EXPAND_START",
+                master=self._id[:8],
+                pos=(self.pos().x(), self.pos().y()),
+                member_count=len(members),
+                member_ids=[m._id[:8] for m in members],
+            )
+            _trace.snapshot(f"expand-start-{self._id[:8]}")
+        except Exception:  # noqa: BLE001
+            pass
 
         # v0.6.34 — safety watchdog (matches _start_collapse).  If any
         # animation's ``finished`` signal is lost, force-clear the

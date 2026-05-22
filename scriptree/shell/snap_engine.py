@@ -325,6 +325,16 @@ class SnapEngine(QObject):
             f"dragging={[h[:8] for h in self._dragging]} "
             f"timer_active={self._timer.isActive()}"
         )
+        # v0.6.36 — diagnostic trace.
+        try:
+            from scriptree.shell import layout_trace as _trace
+            _trace.event(
+                "SNAP_ATTACH",
+                cell=hex_id[:8],
+                active_drags=len(self._dragging),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def detach_drag(self, hex_id: str) -> None:
         """Called when a hex drag ends. Commits snap if preview was active.
@@ -338,6 +348,17 @@ class SnapEngine(QObject):
             f"already_committed={hex_id in self._committed_ids} "
             f"previews={[k[:8] for k in self._active_previews]}"
         )
+        # v0.6.36 — diagnostic trace.
+        try:
+            from scriptree.shell import layout_trace as _trace
+            _trace.event(
+                "SNAP_DETACH",
+                cell=hex_id[:8],
+                had_preview=hex_id in self._active_previews,
+                already_committed=hex_id in self._committed_ids,
+            )
+        except Exception:  # noqa: BLE001
+            pass
         self._dragging.discard(hex_id)
 
         if hex_id in self._committed_ids:
@@ -362,6 +383,17 @@ class SnapEngine(QObject):
                     f"snapCommit emit: {candidate.source_id[:8]} â†’ "
                     f"{candidate.target_id[:8]} at ({new_x},{new_y})"
                 )
+                # v0.6.36 — trace the snap commit.
+                try:
+                    from scriptree.shell import layout_trace as _trace
+                    _trace.event(
+                        "SNAP_COMMIT",
+                        src=candidate.source_id[:8],
+                        target=candidate.target_id[:8],
+                        target_pos=(new_x, new_y),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 self._committed_ids.add(hex_id)  # mark BEFORE emit (Bug A)
                 self.snapCommit.emit(
                     candidate.source_id,
