@@ -671,6 +671,7 @@ class ForestController(QObject):
         forest._positioned.add(ring_master._id)
         forest._dock_partners.add(ring_master._id)
         ring_master._group_master_id = forest._id
+        ring_master._link_parent_id = forest._id  # v0.8.0 P1 mirror
         # Refresh the ring-master's own outline (its
         # _compute_stroke_color is unchanged but the assoc state
         # paint code reads _group_master_id).

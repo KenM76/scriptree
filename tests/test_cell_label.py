@@ -1008,6 +1008,249 @@ class TestComputeLayout:
             c.close()
         master.close()
 
+    def test_compute_layout_excludes_own_members_from_occupied(
+        self,
+    ) -> None:
+        """v0.6.39 — regression: the first member spawned on a fresh
+        master MUST be allowed to land at slot ``(inner, 0)`` (East),
+        even though the member's pre-layout widget position is right
+        next to the master.
+
+        v0.6.38 build had a bug where the layout's
+        ``occupied_centres`` snapshot included the member being
+        placed at its stale spawn position.  Slot inner,0 (East)
+        sits very close to that spawn position, so the 42 px global
+        collision threshold flagged it as occupied (by the cell
+        itself).  ``find_free_slot`` then cascaded to inner,1 NE,
+        and subsequent members filled NE/NW/SW/SE — leaving the
+        ring with empty E/W slots and visible gaps where tiled
+        honeycomb neighbours should sit.
+
+        The fix excludes ``self._members`` from the initial
+        occupied snapshot; this test makes sure it stays excluded.
+        """
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+
+        # Spawn a single member with its stale pre-layout position
+        # right at the master's east shoulder — the exact place
+        # slot inner,0 will sit after layout.  Pre-fix, the member
+        # would self-collide and end up at inner,1 (NE).
+        size = master._size_px
+        cell = CellWindow(load_branding())
+        cell.show()
+        cell.move(400 + size, 400)
+        master._members[cell._id] = QPoint(cell.pos())
+        master._positioned.add(cell._id)
+        cell._group_master_id = master._id
+
+        master._compute_layout(instant=True)
+
+        # v0.7.0 — assertion relaxed to "got SOME slot in the eastern
+        # hemisphere" because nearest_free_slot now binds to the
+        # nearest slot to the cell's spawn centre, not the first free
+        # slot index.  Cell spawned east lands at NE (slot 1) or SE
+        # (slot 2), tied, lexicographic tiebreak picks slot 1.  The
+        # original v0.6.39 fix (no self-collision) is what this test
+        # is really pinning.
+        assert cell._slot is not None, (
+            "first member got no slot — v0.6.38 self-collision bug "
+            "regressed"
+        )
+        assert cell._slot in (("inner", 1), ("inner", 2)), (
+            f"cell spawned east should bind to slot 1 (NE) or 2 (SE) "
+            f"via nearest_free_slot — got {cell._slot!r}"
+        )
+
+        cell.close()
+        master.close()
+
+    def test_inner_slot_neighbour_distance_is_R_sqrt3(self) -> None:
+        """v0.6.40 — slot ``inner,0`` must place the child so its
+        centre sits ``size_px × √3/2`` from the master's centre
+        (the apothem-doubled edge-touching distance).
+
+        v0.6.39 and earlier placed the child at distance
+        ``size_px`` (1 × size_px) which is the tip-to-tip
+        vertex-touching distance for flat-top hexes, not
+        edge-to-edge.  This test pins the corrected geometry from
+        Red Blob Games's hexagonal-grid reference.
+        """
+        import math as _m
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+        size = master._size_px
+
+        cell = CellWindow(load_branding())
+        cell.show()
+        cell.move(400 + size, 400)
+        master._members[cell._id] = QPoint(cell.pos())
+        master._positioned.add(cell._id)
+        cell._group_master_id = master._id
+
+        master._compute_layout(instant=True)
+
+        # Master centre.
+        mcx = master.pos().x() + size / 2
+        mcy = master.pos().y() + size / 2
+        # Cell centre.
+        ccx = cell.pos().x() + cell._size_px / 2
+        ccy = cell.pos().y() + cell._size_px / 2
+
+        d = _m.hypot(ccx - mcx, ccy - mcy)
+        expected = size * _m.sqrt(3) / 2
+        # 1 px tolerance for integer rounding (slot_world_pos rounds).
+        assert abs(d - expected) <= 1.0, (
+            f"first member centre is {d:.2f} px from master centre; "
+            f"edge-touching honeycomb wants {expected:.2f} px "
+            f"(= size_px × √3/2)"
+        )
+
+        cell.close()
+        master.close()
+
+    def test_flat_top_slot_0_is_north(self) -> None:
+        """v0.6.40 — slot ``(inner, 0)`` for a flat-top master sits
+        due north (positive math-y, negative screen-y).  Matches
+        ``snap_engine._FLAT_TOP_OFFSETS`` so a cell that snaps to
+        slot 0 doesn't get re-positioned on the first layout
+        pass.
+        """
+        from scriptree.shell.layout import slot_offset
+
+        size = 56
+        dx, dy = slot_offset(("inner", 0), size, "flat-top")
+        # North in Qt coords: dx ≈ 0, dy strongly negative.
+        assert abs(dx) <= 1, f"slot 0 not due north — dx={dx}"
+        assert dy < -size / 2, (
+            f"slot 0 not above master — dy={dy}, "
+            f"expected dy < -{size / 2}"
+        )
+
+    def test_pointy_top_slot_0_is_east(self) -> None:
+        """v0.6.40 — slot ``(inner, 0)`` for a pointy-top master
+        sits due east.  Matches snap_engine's
+        ``_POINTY_TOP_OFFSETS``.
+        """
+        from scriptree.shell.layout import slot_offset
+
+        size = 56
+        dx, dy = slot_offset(("inner", 0), size, "pointy-top")
+        assert abs(dy) <= 1, f"slot 0 not due east — dy={dy}"
+        assert dx > size / 2, (
+            f"slot 0 not to the right — dx={dx}, "
+            f"expected dx > {size / 2}"
+        )
+
+    def test_snap_committed_position_binds_to_correct_slot(self) -> None:
+        """v0.7.0 — when the snap engine commits a cell to a
+        specific edge of the master, the next ``_compute_layout``
+        call must bind that cell to the slot AT THAT EDGE, not to
+        slot 0 in insertion order.
+
+        Pre-v0.7.0 used ``find_free_slot`` which iterates 0, 1, 2, …
+        and picks the first available — so a cell snapped to the
+        S edge of the master got bound to slot 0 (N) instead, and
+        the layout pass then MOVED it from S to N.  This jumbled
+        every snap-committed cell.
+
+        v0.7.0 uses ``nearest_free_slot`` keyed on the cell's
+        current centre, so the slot assigned matches the position
+        the snap engine committed.
+        """
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.tiling import (
+            HEX_FLAT_TOP, slot_world_pos as _swp,
+        )
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+        size = master._size_px
+
+        # Place a cell at the SOUTH slot of the master, simulating
+        # what the snap engine would commit to.  Snap commits the
+        # cell at slot world position; we recreate that.
+        s_tl = _swp(
+            (master.pos().x(), master.pos().y()),
+            HEX_FLAT_TOP, size, "inner", 3,  # slot 3 = S for flat-top
+        )
+        cell = CellWindow(load_branding())
+        cell.show()
+        cell.move(*s_tl)
+        master._members[cell._id] = QPoint(cell.pos())
+        master._positioned.add(cell._id)
+        cell._group_master_id = master._id
+
+        master._compute_layout(instant=True)
+
+        assert cell._slot == ("inner", 3), (
+            f"snap-committed cell at S slot should bind to "
+            f"('inner', 3) S — got {cell._slot!r}.  Without "
+            f"v0.7.0's nearest_free_slot, this is ('inner', 0) N "
+            f"and the cell gets moved from S to N."
+        )
+
+        cell.close()
+        master.close()
+
+    def test_compute_layout_fills_full_inner_ring(self) -> None:
+        """v0.6.39 — regression: spawning six members one-by-one
+        (each created at the master's spawn position before
+        layout runs) must fill every inner slot 0..5, not leave
+        E/W gaps.
+
+        Mimics the forest auto-populate path that initially showed
+        the bug: each new cell is born next to the master, layout
+        runs with that cell's stale center in scope, and (pre-fix)
+        the East/West slots were skipped because the freshly-born
+        cell was treated as already occupying them.
+        """
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.cell_window import CellWindow
+
+        master = CellWindow(load_branding(), role="master")
+        master.show()
+        master.move(400, 400)
+
+        size = master._size_px
+        cells = []
+        for _ in range(6):
+            c = CellWindow(load_branding())
+            c.show()
+            # Spawn right next to the master, as the forest
+            # auto-populate path does.
+            c.move(400 + size, 400)
+            master._members[c._id] = QPoint(c.pos())
+            master._positioned.add(c._id)
+            c._group_master_id = master._id
+            cells.append(c)
+            master._compute_layout(instant=True)
+
+        slot_set = {c._slot for c in cells}
+        expected = {("inner", i) for i in range(6)}
+        assert slot_set == expected, (
+            f"inner ring not fully filled — got {sorted(slot_set)}"
+            f", expected {sorted(expected)}"
+        )
+
+        for c in cells:
+            c.close()
+        master.close()
+
 
 class TestMembershipAudit:
     """v0.6.38 — ``_audit_membership`` self-heals broken bookkeeping.

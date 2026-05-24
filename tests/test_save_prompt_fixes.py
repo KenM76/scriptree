@@ -136,6 +136,18 @@ class TestF1ExitAllPrompt:
 # F3 — Quorum-loss save prompt
 # ===========================================================================
 
+import pytest as _pytest
+
+
+@_pytest.mark.skip(reason=(
+    "v0.8.0 spec change: auto-close on quorum-loss is disabled per user "
+    "request ('I think we should not remove them automatically anymore - "
+    "shake to close and have a box come up then to close, save or cancel'). "
+    "Rings now persist with 0 or 1 members; the save prompt fires only via "
+    "explicit close gestures (shake, context menu).  These F3 tests "
+    "exercised the v0.6.x quorum-loss auto-close path which no longer "
+    "exists."
+))
 class TestF3QuorumLossPrompt:
 
     def test_member_close_drops_master_below_quorum_prompts(

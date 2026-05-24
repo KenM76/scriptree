@@ -1,11 +1,11 @@
-"""Diagnostic tracing for cell layout (v0.6.36).
+"""Diagnostic tracing for cell layout (v0.6.41 — default OFF).
 
-Always-on detailed logging of every event that affects cell
-positions or slot state: moves, drags, layout calculations, slot
-assignments, snap events, collapse animations.  Writes to a
-plain-text log under ``%TEMP%/scriptree-layout-trace.log``
-(rotated per process) so a user-reported issue can be analysed
-from the actual sequence of events.
+Detailed logging of every event that affects cell positions or
+slot state: moves, drags, layout calculations, slot assignments,
+snap events, collapse animations.  Writes to a plain-text log
+under ``%TEMP%/scriptree-layout-trace.log`` (rotated per process)
+so a user-reported issue can be analysed from the actual sequence
+of events.
 
 The user's instruction (v0.6.36):
 
@@ -14,13 +14,22 @@ The user's instruction (v0.6.36):
     if you have to just to do the tracking and logging. get all
     the data you think you need and can use to solve the problem."
 
-CPU budget: this module deliberately ignores the idle-CPU contract
-that the rest of the shell holds to.  Each trace call serialises
-state, formats a line, and appends to a buffered file.  When idle
-(no events) the trace generates nothing — it's event-driven, so
-there's no continuous overhead.
+That instruction stood while we were chasing the slot-self-collision
+(v0.6.39) and tip-to-tip tiling (v0.6.40) bugs.  Now that those
+issues are fixed and pinned by tests, the trace's interactive
+overhead — every moveEvent flushes a line to disk, every drag
+SNAPSHOT walks the whole registry — degraded the UI to where the
+user couldn't right-click to close the app.  v0.6.41 flips the
+default to OFF so the live app stays snappy; the trace is
+**opt-in** via the env var.
 
-Disable with the env var ``SCRIPTREE_LAYOUT_TRACE=0``.
+Enable with ``SCRIPTREE_LAYOUT_TRACE=1`` (the launcher script can
+set this) — useful when a new layout regression appears and we
+want to capture a session.  Per-event cost when enabled is still
+event-driven (idle = no events = no CPU), but each event flushes
+a buffered line; for very-high-frequency events (drag MOVE at 60
+Hz × N cascade members) it can dominate.  Tracing is intended for
+diagnosis sessions, not steady-state use.
 
 Log format
 ----------
@@ -50,7 +59,11 @@ from typing import Any, Optional
 _log_path: Optional[Path] = None
 _log_handle = None
 _log_lock = threading.Lock()
-_enabled: bool = os.environ.get("SCRIPTREE_LAYOUT_TRACE", "1") != "0"
+# v0.6.41 — default OFF.  The earlier default-ON tanked UI
+# responsiveness during drag (per-frame trace writes + full-world
+# SNAPSHOT walks).  Opt in with SCRIPTREE_LAYOUT_TRACE=1 in the
+# environment before launching the shell.
+_enabled: bool = os.environ.get("SCRIPTREE_LAYOUT_TRACE", "0") == "1"
 
 
 def _log_file() -> Optional[Path]:

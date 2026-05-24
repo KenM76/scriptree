@@ -485,14 +485,28 @@ class SnapEngine(QObject):
 
                 # (No group-membership filter here — see Bug 1 fix comment above.)
 
-                # Bug 2 fix — master-of-master guard:
-                # Masters are anchors, not honeycomb cells; they have no
-                # edges to dock to.  Allowing a master as a snap target
-                # causes _try_spawn_master(src, master) to run, which either
-                # absorbs the master as a member or spawns a second master
-                # between them — both paths are wrong.  Skip all masters.
-                if tgt.role == "master":
-                    continue
+                # v0.8.0 — master-filter removed.  Under the v0.8.0
+                # link/dock split, masters (rings + forest) ARE
+                # dock-able cells with 6 edges (4 for square).  Per
+                # the user's spec:
+                # * A cell can dock onto a ring or onto the forest
+                #   directly — that establishes link-to-ring (cell
+                #   takes the ring as its link parent) or link-to-
+                #   forest (cell remains forest-linked).
+                # * A ring can spatially dock onto another ring,
+                #   onto a cell, or onto the forest — purely spatial
+                #   adjacency, no link change (rings stay forest-
+                #   linked regardless).
+                # The case-selection logic in ``_try_spawn_master``
+                # (renamed in v0.8.0 P3) handles the link-side of
+                # the commit; the snap engine just supplies the
+                # dock-target candidate.
+                #
+                # The pre-v0.8.0 guard prevented `_try_spawn_master`
+                # from absorbing a master as a member or spawning a
+                # nested master — those failure modes are addressed
+                # by the v0.8.0 case rewrites instead of by blocking
+                # the snap entirely.
 
                 # Rule 3: cross-shape/orientation â†’ no snap.
                 if tgt._shape != src_shape or tgt._orientation != src_orient:

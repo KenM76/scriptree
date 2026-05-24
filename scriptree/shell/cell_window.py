@@ -2677,6 +2677,22 @@ class _ShakeDetector:
 _GROUP_MOVE_IN_PROGRESS: set[str] = set()
 
 
+# v0.8.0a1+ramps Bug 8 — monotonic counter for auto-naming freshly
+# spawned rings ("Ring 1", "Ring 2", …) so the user can tell them
+# apart in the merged-menu header and hover-tooltip before they
+# bind a catalog or save a file.  Process-lifetime; resets on
+# restart (loaded rings keep their on-disk filename so they don't
+# need a serial).
+_RING_SERIAL: int = 0
+
+
+def _next_ring_serial() -> int:
+    """Allocate the next per-session ring serial."""
+    global _RING_SERIAL
+    _RING_SERIAL += 1
+    return _RING_SERIAL
+
+
 # ---------------------------------------------------------------------------
 # CellWindow
 # ---------------------------------------------------------------------------
@@ -2904,6 +2920,15 @@ class CellWindow(QMainWindow):
         # ----------------------------------------------------------------
         self._icon_path: str | None = None
         self._text_label: str | None = None
+        # v0.8.0a1+ramps Bug 8 — process-lifetime auto-name for ring
+        # masters that haven't been bound to a catalog or saved to a
+        # ``.scriptreering`` yet.  Assigned in ``_try_spawn_master``
+        # via ``_next_ring_serial()``; left None for cells and for
+        # loaded rings (those derive their display name from their
+        # file path).  Read by ``_popup_header_text`` and
+        # ``_update_hover_tooltip`` so the user sees "Ring 3" instead
+        # of the generic "Tree Ring" label.
+        self._auto_ring_name: str | None = None
         # Embedded icon (base64 string + format) — populated when the
         # bound catalog has ``cell_icon_data`` set instead of an
         # external ``cell_icon`` path.  Both empty when no icon /
@@ -3022,6 +3047,36 @@ class CellWindow(QMainWindow):
         #                      (touching honeycomb edges). Cleared on break-free.
         self._group_master_id: str | None = None
         self._docked_to: set[str] = set()
+
+        # v0.8.0 Phase 1 — the corrected link-tree relationship.  The
+        # LINK graph (forest → rings → cells) is distinct from the DOCK
+        # graph (spatial edge-adjacency).  ``_link_parent_id`` is the
+        # link parent — the ring this cell belongs to, or the forest
+        # for top-level cells, or None for the forest cell itself.
+        # During Phase 1 this field is mirror-written alongside the
+        # legacy ``_group_master_id`` so both stay in sync; readers
+        # still use the legacy field.  Phase 4 swaps readers over to
+        # ``_link_parent_id`` and Phase 9 deletes the legacy.  Always
+        # write through :meth:`_set_link_parent` so the mirror is
+        # never accidentally bypassed.
+        self._link_parent_id: str | None = None
+
+        # v0.8.0 Phase 3 — the DOCK graph: spatial edge-adjacency,
+        # distinct from LINK.  ``_dock_partner_id`` is the single
+        # cell/ring/forest this cell is currently sitting at the edge
+        # of.  ``_dock_edge`` is the edge index of THE PARTNER (0..5
+        # for hex, 0..3 for square) where this cell sits.  Both are
+        # None when the cell is floating (not edge-adjacent to anyone).
+        # ``_dock_children_by_edge`` is the reverse index: which cells
+        # are docked TO me, keyed by edge of mine.  Used at drag-end
+        # of a single cell to find which children's dock target was
+        # just yanked away, so the Phase 5 re-find heuristic can fire.
+        # Phase 3 writes these fields at snap-commit.  Phase 5 reads
+        # them to drive dock break + re-find.
+        self._dock_partner_id: str | None = None
+        self._dock_edge: int | None = None
+        self._dock_children_by_edge: dict[int, str] = {}
+
         # v0.6.35 — slot-based scene-graph layout (see
         # ``scriptree/shell/layout.py``).  When the cell is docked to
         # a master, ``_slot`` is the master's ring slot it occupies
@@ -3581,6 +3636,27 @@ class CellWindow(QMainWindow):
             and tl_x < right and tl_y < bottom
         )
 
+    def _set_link_parent(self, parent_id: "str | None") -> None:
+        """v0.8.0 P1 — write the cell's link-parent pointer to both
+        the legacy ``_group_master_id`` and the new
+        ``_link_parent_id`` in lockstep.
+
+        Phase 1 of the v0.8.0 link/dock split keeps both fields in
+        sync so existing readers (which still use the legacy field)
+        observe identical behaviour while the new field becomes
+        available for Phase 2's link-driven cascade and Phase 3's
+        snap-commit rewrite.  Phase 4 switches readers to the new
+        field; Phase 9 deletes the legacy.
+
+        Always route link-parent writes through this method.  A
+        direct ``self._group_master_id = X`` (or ``= None``) that
+        bypasses the mirror would create a state where one field
+        is stale relative to the other, and Phase 4 tests would
+        find the discrepancy.
+        """
+        self._group_master_id = parent_id
+        self._link_parent_id = parent_id
+
     def _audit_membership(self) -> dict:
         """Defensive consistency check on this master's membership
         bookkeeping (v0.6.38).
@@ -3686,6 +3762,7 @@ class CellWindow(QMainWindow):
                 continue
             if m._group_master_id is None and m._slot is not None:
                 m._group_master_id = self._id
+                m._link_parent_id = self._id  # v0.8.0 P1 mirror
                 if mid not in self._positioned:
                     self._positioned.add(mid)
                 report["orphaned_cleared"] += 1
@@ -3710,6 +3787,69 @@ class CellWindow(QMainWindow):
                 pass
 
         return report
+
+    def _cancel_member_smooth_moves(self) -> None:
+        """v0.7.1 — stop any in-flight ``_smooth_move``
+        animations on this master's members, snapping each to its
+        animation's end value.
+
+        Why this exists: ``_smooth_move`` runs a 180-260 ms
+        QPropertyAnimation on a member's ``pos`` whenever the
+        layout settles after a drag-release.  If the user starts
+        ANOTHER master-drag before that animation finishes, the
+        moveEvent GROUP_MOVE cascade adds per-frame deltas to a
+        position that's simultaneously being eased toward an
+        old target — the two forces fight, and members end up
+        drifting away from the slot world position they were
+        supposed to occupy.  This is the "icons out of alignment
+        after a quick movement" symptom in the v0.7.0 ship.
+
+        Cancelling the animation AND snapping to its end value
+        gives the cascade a stable starting point: the cluster
+        is at its final settled position when the new drag
+        begins, so per-frame deltas keep relative positions
+        intact.
+
+        Cheap to call (a few dict lookups + maybe an animation
+        stop per member); safe when no animations are running
+        (just a no-op).
+        """
+        if self.role != "master":
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+        cancelled = 0
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            anim = getattr(m, "_pos_anim", None)
+            if anim is None:
+                continue
+            try:
+                end = anim.endValue()
+            except Exception:  # noqa: BLE001
+                end = None
+            try:
+                anim.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            m._pos_anim = None
+            if end is not None:
+                try:
+                    m.move(end)
+                except Exception:  # noqa: BLE001
+                    pass
+            cancelled += 1
+        if cancelled:
+            try:
+                _trace.event(
+                    "CANCEL_ANIMS",
+                    master=self._id[:8],
+                    cancelled=cancelled,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _compute_layout(self, *, instant: bool = True) -> None:
         """The single slot-based layout authority (v0.6.35).
@@ -3761,8 +3901,29 @@ class CellWindow(QMainWindow):
         from PySide6.QtGui import QGuiApplication
         from scriptree.shell.cell_registry import CellRegistry
         from scriptree.shell.layout import (
-            find_free_slot, slot_world_pos, is_on_screen,
+            find_free_slot, nearest_free_slot, slot_world_pos, is_on_screen,
         )
+
+        # v0.7.4 — cancel any in-flight member smooth-move animations
+        # before computing layout.  Without this, the legacy
+        # ``_reflow_members_after_master_move`` (called immediately
+        # before this from mouseReleaseEvent) starts smooth_move
+        # animations toward stale ``_members[mid]`` HOMEs.  Pass 2
+        # below only stops those animations when it needs to move
+        # the widget (drift > 1 px); for cells already at their slot
+        # world position via cascade, no move = no stop, and the
+        # stale-target animations continue, pulling cells uniformly
+        # off their slots.  Trace at 13:43:27 in
+        # ``scriptree-layout-trace-20260523-134000-4432.log``:
+        # every cell got a uniform (25, 25) drift from the legacy
+        # reflow's smooth_move targets, producing visible overlap
+        # at master in the bottom-right corner.  Pinned by
+        # ``test_chaos_movement.py::
+        # test_compute_layout_cancels_pending_smooth_moves``.
+        try:
+            self._cancel_member_smooth_moves()
+        except Exception:  # noqa: BLE001
+            pass
 
         registry = CellRegistry.instance()
         app_inst = QGuiApplication.instance()
@@ -3788,9 +3949,28 @@ class CellWindow(QMainWindow):
         # set of slots already taken on this master.  Both are
         # passed to find_free_slot so a freshly-assigned slot
         # respects every other placed cell in the workspace.
+        #
+        # v0.6.39 — exclude this master's own members from the
+        # snapshot.  Their current world positions are stale until
+        # Pass 2 writes the slot-derived positions through.  When
+        # the first member of a fresh master ran the layout, its
+        # own pre-layout center (just east of the master, where it
+        # was spawned) blocked slot ``inner,0`` (East) because the
+        # 42 px collision threshold treated the cell as if it
+        # already owned that slot.  ``find_free_slot`` then
+        # cascaded through inner,1 NE, inner,2 NW, … leaving the
+        # East/West slots empty and the ring with visible gaps
+        # instead of an edge-tiled honeycomb.  Sibling collisions
+        # among this master's own members are handled by
+        # ``taken_slots`` + the incremental ``occupied_centres``
+        # update in Pass 1, so excluding them from the initial
+        # snapshot is safe and correct.
+        my_member_ids = set(self._members.keys())
         occupied_centres: set[tuple[int, int]] = set()
         for c in registry.all():
             if c._id == self._id:
+                continue
+            if c._id in my_member_ids:
                 continue
             # Forest hub + any docked cell anywhere counts.
             if c.isVisible():
@@ -3813,6 +3993,42 @@ class CellWindow(QMainWindow):
             if m._slot is not None:
                 taken_slots.add(m._slot)
 
+        # v0.7.3 — Pre-pass: any member whose CURRENT slot world
+        # position is off-screen gets its slot cleared so Pass 1
+        # below can reassign it via ``nearest_free_slot`` to a
+        # free on-screen slot (typically an outer-ring slot in the
+        # available quadrant).  Without this, a cluster dragged
+        # to a screen edge leaves cells permanently auto-hidden
+        # at slots whose world position falls off-screen, even
+        # when there's plenty of free space in the on-screen
+        # quadrant of the outer ring.  Symptom: user dragged
+        # forest to bottom-right corner; NE/SE/S inner cells
+        # got auto-hidden at attempted_pos like (1905, 945) past
+        # screen right, instead of being reassigned to NW outer
+        # slots in the upper-left direction where space existed.
+        # The trace at 13:33:39.000-13:33:39.003 in
+        # ``scriptree-layout-trace-20260523-133300-23204.log``
+        # shows three AUTO_HIDE events with no corresponding
+        # reassignment attempt.  Pinned by
+        # ``test_chaos_movement.py::test_master_at_corner_uses_all_visible_slots``
+        # and ``::test_off_screen_slot_gets_reassigned_to_on_screen``.
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if m._slot is None:
+                continue
+            if m._floating_intent:
+                continue
+            slot_tl = slot_world_pos(
+                master_pos, self._size_px, m._slot, m._size_px,
+                master_orientation=self._orientation,
+            )
+            if not is_on_screen(slot_tl, m._size_px, screen_rect):
+                # Release the slot so this cell can be reassigned.
+                taken_slots.discard(m._slot)
+                m._slot = None
+
         # Pass 1: assign slots to any member that doesn't have one
         # and isn't floating.
         for mid in list(self._members.keys()):
@@ -3823,14 +4039,29 @@ class CellWindow(QMainWindow):
                 continue
             if m._floating_intent:
                 continue
-            slot = find_free_slot(
+            # v0.7.0 — bind to the slot NEAREST the cell's current
+            # widget centre, not the first free index.  This fixes
+            # the "snap committed cell to NE but layout reassigned
+            # to N" jumble bug: the snap engine put the cell at a
+            # specific edge of the master, and the next layout call
+            # should keep it there.  For freshly-spawned cells that
+            # appear at master.pos() (centred on master), all six
+            # inner slots tie at the same distance and slot 0 wins
+            # the lexicographic tiebreak — same behaviour as before.
+            cur_centre = (
+                m.pos().x() + m._size_px / 2.0,
+                m.pos().y() + m._size_px / 2.0,
+            )
+            slot = nearest_free_slot(
                 master_pos=master_pos,
                 master_size=self._size_px,
                 master_slot=self._slot,
+                drop_centre=cur_centre,
                 child_size=m._size_px,
                 taken_slots=taken_slots,
                 occupied_centres=occupied_centres,
                 screen_rect=screen_rect,
+                master_orientation=self._orientation,
             )
             if slot is not None:
                 m._slot = slot
@@ -3839,6 +4070,7 @@ class CellWindow(QMainWindow):
                 # cell in the loop sees this one as a collider.
                 tl = slot_world_pos(
                     master_pos, self._size_px, slot, m._size_px,
+                    master_orientation=self._orientation,
                 )
                 occupied_centres.add(
                     (tl[0] + m._size_px // 2, tl[1] + m._size_px // 2),
@@ -3877,6 +4109,7 @@ class CellWindow(QMainWindow):
 
             tl = slot_world_pos(
                 master_pos, self._size_px, m._slot, m._size_px,
+                master_orientation=self._orientation,
             )
             new_x, new_y = tl
             self._members[mid] = QPoint(new_x, new_y)
@@ -5324,6 +5557,7 @@ class CellWindow(QMainWindow):
         self._positioned.add(new_cell._id)
         self._dock_partners.add(new_cell._id)
         new_cell._group_master_id = self._id
+        new_cell._link_parent_id = self._id  # v0.8.0 P1 mirror
         new_cell.update()  # Bug 5: refresh outline (now associated).
         # Membership changed — flag dirty so the close-prompt fires
         # if the user closes the ring without saving (v0.3.1).
@@ -5479,6 +5713,23 @@ class CellWindow(QMainWindow):
                     self._audit_membership()
                 except Exception as exc:  # noqa: BLE001
                     _log(f"mousePressEvent: audit raised {exc!r}")
+                # v0.7.1 — cancel any in-flight member ``_smooth_move``
+                # animations and snap them to their target.  Without
+                # this, a drag that starts WHILE a post-release
+                # settle animation is still running has the GROUP_MOVE
+                # cascade ADD deltas to a position that's also being
+                # eased toward an old target — net result is members
+                # drift away from their slot positions and the
+                # cluster falls out of alignment with the master.
+                # Trace ``scriptree-layout-trace-20260523-071726-42748.log``
+                # shows the divergence: at 07:17:50.751 (release+22ms)
+                # smooth_move starts; user immediately drags again,
+                # cascade and animation fight, ending with members
+                # at the wrong delta from the master.
+                try:
+                    self._cancel_member_smooth_moves()
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"mousePressEvent: cancel_member_smooth_moves raised {exc!r}")
             # v0.6.36 — trace + snapshot at drag start so the log
             # captures the world state just before any movement.
             try:
@@ -5557,11 +5808,22 @@ class CellWindow(QMainWindow):
             self._shake_detector.reset()
             _log(f"DRAG STARTED (manual) id={self._id[:8]} role={self.role} group_master={self._group_master_id and self._group_master_id[:8]} positioned={len(self._positioned) if self.role == 'master' else len(self._docked_to)}")
 
-            # Amendment 2 — break-free: when a standalone source starts dragging
-            # it leaves the positional cluster (_positioned set) but RETAINS its
-            # group membership (_group_master_id stays set).
-            # The master group-moves positionally-docked members instead.
-            if self.role == "standalone" and self._docked_to:
+            # Amendment 2 — break-free: dragging a cell/ring out of
+            # its positional cluster (forest._positioned) leaves the
+            # cluster but retains link-group membership.
+            #
+            # v0.8.0 — extended to RINGS too.  Per the user's spec:
+            # "once I make a ring that is not docked to the forest
+            # cluster it [shouldn't] move when I move the forest."
+            # Previously break-free was standalone-only, so a dragged
+            # ring stayed in forest._positioned and the cascade gate
+            # picked it up.  Now any non-forest cell (cell or ring)
+            # that's been dragged out of cluster auto-undocks at
+            # drag-start, dropping out of _positioned + clearing
+            # ``_slot`` + ``_dock_partner_id``.  The forest itself
+            # never break-frees (it IS the workspace root).
+            is_forest = getattr(self, "_is_forest_master", False)
+            if not is_forest and (self._docked_to or self._group_master_id is not None):
                 self._break_free_from_cluster()
 
             try:
@@ -5589,13 +5851,30 @@ class CellWindow(QMainWindow):
         # Guard: if _group_master_id is None (not in a group) the shake handler
         # is a no-op anyway, but check explicitly before sampling to avoid
         # burning cycles near the tray.
-        if self.role == "standalone" and self._group_master_id is not None:
+        #
+        # v0.8.0a1+ramps Bug 5 — also fire shake on RING masters so the
+        # user can dispose of a ring (per: "shake to close and have a
+        # box come up then to close, save or cancel").  The forest
+        # master is explicitly excluded — it's the workspace root and
+        # never closes by shake.
+        is_shakeable_standalone = (
+            self.role == "standalone"
+            and self._group_master_id is not None
+        )
+        is_shakeable_ring = (
+            self.role == "master"
+            and not getattr(self, "_is_forest_master", False)
+        )
+        if is_shakeable_standalone or is_shakeable_ring:
             dx = new_top_left.x() - prev_top_left.x()
             dy = new_top_left.y() - prev_top_left.y()
             self._shake_detector.sample(dx, dy)
             if self._shake_detector.is_shaking():
                 self._shake_detector.reset()
-                self._on_shake_detected()
+                if is_shakeable_ring:
+                    self._close_ring_via_shake_with_prompt()
+                else:
+                    self._on_shake_detected()
 
         _now = _time.monotonic()
         if _now - self._last_drag_log_time >= 1.0:
@@ -5658,7 +5937,28 @@ class CellWindow(QMainWindow):
             and self.role == "master"
             and self._members
         ):
-            self._reflow_members_after_master_move()
+            # v0.8.0 P4 — recompute-at-drag-end DISABLED.
+            #
+            # Previously two passes ran here:
+            #   1. ``_reflow_members_after_master_move`` (legacy v0.6.x):
+            #      smooth-moved members toward slot-relative HOMEs,
+            #      potentially reshuffling user-placed cells.
+            #   2. ``_compute_layout(instant=True)`` (v0.7.2): re-derived
+            #      every member's slot world position from the master's
+            #      current pos and snapped them there.
+            # Both passes implemented the slot-recompute behaviour that
+            # the user explicitly does NOT want: "they shouldn't have
+            # moved after I placed them. If they get forced to
+            # rearrange they should move to the nearest entity, not
+            # try to grab the available spot on forest."  Under the
+            # v0.8.0 link/dock model, position is absolute; cells stay
+            # where the cascade put them.  No recompute fires.
+            #
+            # Phase 5 will introduce the targeted "auto-undock for
+            # forest-linked cells dragged away" logic on the
+            # cell-alone-drag path; that's the new dock-break rule
+            # that replaces this blanket recompute.
+            pass
 
         # v0.6.12 — drag-end settle: glide the just-released cell (or
         # the whole master group) to a non-overlapping, fully-on-screen
@@ -5695,10 +5995,30 @@ class CellWindow(QMainWindow):
                     _log(
                         f"_try_absorb_nearby_free_cells raised {exc!r}"
                     )
+            # v0.8.0a1+ramps Bug 3 — when the released cell is a ring
+            # master that just docked to another cell/ring/forest
+            # (master._dock_partner_id set by ``_set_cell_dock`` in
+            # ``_try_spawn_master`` Case M1), don't run the rigid
+            # group-shift settle.  That pushes the master away from
+            # its dock slot whenever even one member overlaps another
+            # cell — the user-visible symptom: "I can't dock the
+            # ring to a position if the cells in the ring are
+            # sitting over other cells".  Instead, leave the master
+            # at its snap-committed position and relocate just the
+            # overlapping members individually to free honeycomb
+            # slots around the ring.
             try:
-                self._settle_no_overlap()
+                if (
+                    self.role == "master"
+                    and self._dock_partner_id is not None
+                ):
+                    self._relocate_overlapping_members_individually()
+                else:
+                    self._settle_no_overlap()
             except Exception as exc:  # noqa: BLE001
-                _log(f"_settle_no_overlap (drag-end) raised {exc!r}")
+                _log(
+                    f"settle/relocate (drag-end) raised {exc!r}"
+                )
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -5769,7 +6089,15 @@ class CellWindow(QMainWindow):
             and self.role == "master"
             and self._id not in _GROUP_MOVE_IN_PROGRESS
             and last is not None
-            and self._positioned
+            # v0.8.0 P2 — gate dropped (was: ``and self._positioned``).
+            # Phase 2's link-driven cascade has to fire whenever the
+            # master has ANY link children, not just when it has
+            # ``_positioned`` membership.  A forest with a single
+            # loose-linked ring (ring's link_parent_id = forest but
+            # ring not in forest._positioned) was the regression
+            # this gate caused — the cascade was skipped and the
+            # ring didn't follow.  Body handles an empty drag_targets
+            # case as a no-op.
         ):
             delta_x = current_pos.x() - last.x()
             delta_y = current_pos.y() - last.y()
@@ -5822,6 +6150,42 @@ class CellWindow(QMainWindow):
                         drag_targets.add(mid)
                         # Heal _positioned while we're here.
                         self._positioned.add(mid)
+
+                # v0.8.0 P2 — extend drag_targets per the link-driven
+                # cascade rule.
+                #
+                # v0.8.0a1+ramps Bug 10 — under the latest user spec,
+                # BOTH forest and ring cascades gate on the dock-
+                # path proxy (``_positioned`` membership).  The cell
+                # has to actually be in the cluster to follow.
+                #
+                # Originally P2 made ring drag unconditional for any
+                # link-child of the ring ("cells linked with the
+                # ring move with the ring, they do not have to be
+                # docked with it"), then v0.8.0a1+ramps gated the
+                # forest case too.  This iteration generalises the
+                # gate to rings.  User: "when I drag a cell off the
+                # ring, it should stay put when I drag the ring."
+                # ``_break_free_from_cluster`` drops the dragged
+                # cell from ``_positioned`` at the 4 px drag
+                # threshold (preserving link membership), so cells
+                # the user has pulled out of the ring are excluded
+                # from this cascade — they stay put when the ring
+                # later moves.  The loop body below is now a no-op
+                # for both cases; the legacy ``_positioned`` union
+                # above is the sole authority on what moves.
+                is_self_forest = getattr(
+                    self, "_is_forest_master", False,
+                )
+                for mid in registry.link_children_of(self._id):
+                    if mid in drag_targets:
+                        continue
+                    m = registry.get(mid)
+                    if m is None:
+                        continue
+                    # Both forest and ring cases: no-op.  Cells the
+                    # user dragged out (no longer in _positioned)
+                    # stay put.
                 _GROUP_MOVE_IN_PROGRESS.add(self._id)
                 try:
                     for member_id in drag_targets:
@@ -6891,6 +7255,7 @@ class CellWindow(QMainWindow):
                 member = registry.get(member_id)
                 if member is not None:
                     member._group_master_id = None
+                    member._link_parent_id = None  # v0.8.0 P1 mirror
                     member._docked_to.clear()
                     member._dock_partners.clear()
                     member.update()  # Bug 5: refresh outline (now unassociated â†’ green)
@@ -6918,6 +7283,8 @@ class CellWindow(QMainWindow):
             master._ring_dirty = True
 
         self._group_master_id = None
+
+        self._link_parent_id = None  # v0.8.0 P1 mirror
         self._docked_to.clear()
         self._dock_partners.clear()
         self.update()  # Bug 5: refresh outline (now unassociated â†’ green)
@@ -6972,6 +7339,8 @@ class CellWindow(QMainWindow):
                 )
 
         self._group_master_id = None
+
+        self._link_parent_id = None  # v0.8.0 P1 mirror
         # Don't clear self._docked_to / _dock_partners across the
         # board — those track the ring's INTERNAL dock graph, not
         # the forest membership.  We only severed the forest tie.
@@ -7007,6 +7376,17 @@ class CellWindow(QMainWindow):
             return  # already unassociated — no-op
 
         master = registry.get(mid)
+        # v0.8.0 — per user spec: "shake only removes them from a
+        # ring."  If the cell is already linked directly to the
+        # forest, shake is a no-op (use drag-away to undock from
+        # forest cluster instead).
+        if master is not None and getattr(master, "_is_forest_master", False):
+            _log(
+                f"shake on {self._id[:8]} — already forest-linked, "
+                f"shake is a no-op (drag-away to undock from forest)"
+            )
+            return
+
         if master is not None:
             master._members.pop(self._id, None)
             master._positioned.discard(self._id)
@@ -7015,12 +7395,48 @@ class CellWindow(QMainWindow):
             master._ring_dirty = True
 
         old_master_short = mid[:8]
-        self._group_master_id = None
+        # v0.8.0 — per user spec: "Cells will always be linked with
+        # the forest or ring."  When shaken out of a ring, the cell
+        # re-links to the forest (NOT to None).  Find the forest
+        # via the registry — the ring's link parent is the forest.
+        forest_id: "str | None" = None
+        if master is not None:
+            forest_id = getattr(master, "_link_parent_id", None) or getattr(
+                master, "_group_master_id", None,
+            )
+        # Fallback: find the forest cell in the registry by flag.
+        if forest_id is None:
+            for c in registry.all():
+                if getattr(c, "_is_forest_master", False):
+                    forest_id = c._id
+                    break
+        self._group_master_id = forest_id
+        self._link_parent_id = forest_id  # v0.8.0 P1 mirror
+        # Also wire the cell into the forest's _members so the forest
+        # cascade can find it via legacy paths.
+        if forest_id is not None:
+            forest = registry.get(forest_id)
+            if forest is not None:
+                forest._members[self._id] = QPoint(self.pos())
+                # Do NOT add to forest._positioned — the cell is now
+                # loose forest-linked (no dock path), so it stays
+                # put when the forest is dragged.
         self._docked_to.clear()
         self._dock_partners.clear()
+        # Clear dock fields — cell is now floating relative to the
+        # forest, no longer docked to its former ring.
+        self._slot = None
+        if self._dock_partner_id is not None and self._dock_edge is not None:
+            partner = registry.get(self._dock_partner_id)
+            if partner is not None:
+                partner._dock_children_by_edge.pop(self._dock_edge, None)
+        self._dock_partner_id = None
+        self._dock_edge = None
 
         _log(
-            f"shake detected — {self._id[:8]} unassociated from master {old_master_short}"
+            f"shake detected — {self._id[:8]} unlinked from ring "
+            f"{old_master_short}, re-linked to forest "
+            f"{forest_id and forest_id[:8]}"
         )
 
         # Visual feedback: briefly flash highlight colour for 200 ms then
@@ -7041,8 +7457,8 @@ class CellWindow(QMainWindow):
             _check_master_validity(master, registry)
 
     def _break_free_from_cluster(self) -> None:
-        """Break-free drag path (Amendment 2): standalone source leaves the
-        POSITIONAL CLUSTER but retains group membership.
+        """Break-free drag path: cell leaves the POSITIONAL CLUSTER
+        but retains link-group membership.
 
         Called at the 4 px drag threshold in mouseMoveEvent when
         self.role == 'standalone' and self._docked_to is non-empty.
@@ -7053,7 +7469,15 @@ class CellWindow(QMainWindow):
         3. Update master._members[self._id] to the current position so
            collapse/expand knows where this member last was.
         4. Clear self._docked_to.
-        5. _group_master_id is PRESERVED — still a group member.
+        5. v0.8.0 — clear ``_slot``, ``_dock_partner_id``,
+           ``_dock_edge``.  Without this, the v0.6.38 cascade union
+           loop in master.moveEvent picks up this cell via the
+           "linked + has slot" rule, and the cell follows the master
+           even though the user just dragged it off the cluster.
+           Per the user's spec, forest-linked cells need only a drag
+           to undock — no shake required.
+        6. ``_link_parent_id`` / ``_group_master_id`` PRESERVED —
+           still a group member.
         """
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
@@ -7067,6 +7491,18 @@ class CellWindow(QMainWindow):
         self._docked_to.clear()
         self._dock_partners.clear()   # keep shim clear too
 
+        # v0.8.0 — clear slot + dock partner so the cascade union
+        # loop ("linked + has slot" rule) skips this cell on the
+        # next master drag.  The cell is now "loose forest-linked"
+        # in the v0.8.0 sense.
+        self._slot = None
+        if self._dock_partner_id is not None and self._dock_edge is not None:
+            partner = registry.get(self._dock_partner_id)
+            if partner is not None:
+                partner._dock_children_by_edge.pop(self._dock_edge, None)
+        self._dock_partner_id = None
+        self._dock_edge = None
+
         # Remove from master's positioned set; update stored position.
         mid = self._group_master_id
         if mid is not None:
@@ -7079,7 +7515,8 @@ class CellWindow(QMainWindow):
 
         _log(
             f"break-free: {self._id[:8]} left cluster "
-            f"(group_master={mid and mid[:8]} preserved)"
+            f"(group_master={mid and mid[:8]} preserved, "
+            f"slot+dock cleared)"
         )
 
     def _spawn_another(self) -> None:
@@ -7219,12 +7656,25 @@ class CellWindow(QMainWindow):
           re-save (or pick Discard with full awareness that the
           saved-path-they-trusted is gone).
 
-        Returns False for non-masters (a standalone cell carries no
-        ring file) and for empty masters (which are mid-teardown
-        from quorum loss — F3's separate prompt path handles that).
+        Returns False for:
+
+        * Non-masters (a standalone cell carries no ring file).
+        * Empty masters (mid-teardown from quorum loss — F3's
+          separate prompt path handles that).
+        * **The forest master** (v0.8.0a1+ramps Bug 11) — the
+          forest is the workspace singleton; it isn't persisted to
+          a ``.scriptreering`` file (the autoload config tracks the
+          cluster instead).  Without this skip, exit-all / close-all
+          on the forest fired one prompt for the forest itself and
+          a second prompt for an unsaved ring member, both reading
+          identically ("This ring has not been saved yet") — user
+          reported as "asks me to save the unsaved ring twice
+          instead of just once."
         """
         from pathlib import Path
         if self.role != "master":
+            return False
+        if getattr(self, "_is_forest_master", False):
             return False
         if not self._members:
             return False
@@ -7324,11 +7774,151 @@ class CellWindow(QMainWindow):
             # Clear the member's link back to this master so it
             # behaves as a standalone again.
             member._group_master_id = None
+            member._link_parent_id = None  # v0.8.0 P1 mirror
             member._docked_to.discard(self._id)
         registry.masterDespawned.emit(self._id)
         _log(
             f"Closed ring {self._id[:8]} — {len(member_ids)} member(s) "
             f"reverted to standalone"
+        )
+        self.close()
+
+    def _close_ring_via_shake_with_prompt(self) -> None:
+        """v0.8.0a1+ramps Bug 5 — shake-on-ring close path.
+
+        Per user: "shake to close and have a box come up then to
+        close, save or cancel."  Replaces the v0.6.x auto-close-on-
+        quorum-loss path (now disabled per v0.8.0 spec) with an
+        explicit user-confirmed disposal gesture.
+
+        Behaviour:
+        * Forest master → no-op (the forest is the workspace root).
+        * Non-master cell → no-op (shake-to-disassociate handled
+          elsewhere; this method is only meaningful for rings).
+        * Ring master → always prompt with Save / Close / Cancel.
+            - Cancel → no change.
+            - Save   → write file (save-as if no path); if save was
+              cancelled or failed, abort the close.
+            - Close  → disband immediately, members re-link to the
+              forest per the v0.8.0 spec ("Cells will always be
+              linked with the forest or ring").
+        """
+        if self.role != "master":
+            _log(
+                f"_close_ring_via_shake_with_prompt on non-master "
+                f"{self._id[:8]} — ignored"
+            )
+            return
+        if getattr(self, "_is_forest_master", False):
+            _log(
+                f"_close_ring_via_shake_with_prompt on FOREST "
+                f"{self._id[:8]} — forest never closes by shake"
+            )
+            return
+
+        # Build prompt text — distinguish dirty/clean for context.
+        needs_save = self._ring_needs_save_prompt()
+        if needs_save:
+            path = getattr(self, "_saved_ring_path", None)
+            if path is None:
+                text = (
+                    "Close this ring?\n\n"
+                    "It has not been saved yet."
+                )
+            else:
+                from pathlib import Path as _Path
+                try:
+                    short = _Path(path).name
+                except (TypeError, ValueError):
+                    short = str(path)
+                text = (
+                    f"Close this ring?\n\n"
+                    f"It has unsaved changes since '{short}'."
+                )
+        else:
+            text = (
+                "Close this ring?\n\n"
+                "Members will re-link to the forest."
+            )
+
+        reply = QMessageBox.question(
+            None,
+            "Close ring",
+            text,
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            _log(
+                f"shake-close ring {self._id[:8]} — cancelled by user"
+            )
+            return
+
+        if reply == QMessageBox.StandardButton.Save:
+            self._save_ring_dialog()
+            # If the user cancelled the save-as dialog or save
+            # otherwise failed, the ring is still dirty / unsaved —
+            # abort the close instead of silently discarding data.
+            if self._ring_needs_save_prompt():
+                _log(
+                    f"shake-close ring {self._id[:8]} — save failed/"
+                    f"cancelled; close aborted"
+                )
+                return
+
+        # Save succeeded OR user picked Discard → disband.
+        self._disband_ring_relinking_members_to_forest()
+
+    def _disband_ring_relinking_members_to_forest(self) -> None:
+        """Tear down this ring and re-link its members to the forest.
+
+        Mirrors ``_close_ring_undock_all`` but follows the v0.8.0
+        spec where cells are ALWAYS linked to either a ring or the
+        forest (never unlinked).  Called from the shake-to-close
+        path after the user has already confirmed at the prompt —
+        do NOT re-prompt here.
+        """
+        from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
+
+        # Find the forest (link parent of this ring, or any cell
+        # flagged ``_is_forest_master`` in the registry).
+        forest_id: "str | None" = getattr(
+            self, "_link_parent_id", None,
+        ) or getattr(self, "_group_master_id", None)
+        if forest_id is None:
+            for c in registry.all():
+                if getattr(c, "_is_forest_master", False):
+                    forest_id = c._id
+                    break
+        forest = registry.get(forest_id) if forest_id else None
+
+        member_ids = list((self._members or {}).keys())
+        for mid in member_ids:
+            member = registry.get(mid)
+            if member is None:
+                continue
+            # Re-link to forest (or None if no forest exists).
+            member._group_master_id = forest_id
+            member._link_parent_id = forest_id  # v0.8.0 P1 mirror
+            member._docked_to.discard(self._id)
+            # Clear dock relationship to the disbanded master.
+            if member._dock_partner_id == self._id:
+                member._dock_partner_id = None
+                member._dock_edge = None
+            # Wire into forest._members (NOT _positioned — they're
+            # now loose forest-linked, no dock path).
+            if forest is not None:
+                forest._members[member._id] = QPoint(member.pos())
+
+        registry.masterDespawned.emit(self._id)
+        _log(
+            f"shake-close ring {self._id[:8]} — disbanded "
+            f"({len(member_ids)} member(s) re-linked to forest "
+            f"{forest_id and forest_id[:8]})"
         )
         self.close()
 
@@ -7338,12 +7928,21 @@ class CellWindow(QMainWindow):
         Use case: "I'm done with this whole group of tools — make it
         all go away."  After this, only cells that weren't members of
         the ring remain.  If the entire desktop becomes empty, quit.
+
+        v0.8.0a1+ramps Bug 11 — pre-walk every master member and
+        prompt for its unsaved ring before touching anything.  Under
+        v0.8.0 the forest contains rings as members; the forest
+        itself never prompts (it's not persisted) but each unsaved
+        ring inside it must.  Cancel on any prompt aborts the whole
+        close so the user can keep working.
         """
         from scriptree.shell.cell_registry import CellRegistry
         if self.role != "master":
             _log("_close_all_related on non-master — falling back to _close_this")
             self._close_this()
             return
+        # Self prompt (forest skips per the Bug 11 forest guard in
+        # _ring_needs_save_prompt).
         if self._ring_needs_save_prompt():
             if not self._confirm_discard_unsaved_ring():
                 _log(
@@ -7353,6 +7952,23 @@ class CellWindow(QMainWindow):
                 return
         registry = CellRegistry.instance()
         member_ids = list((self._members or {}).keys())
+        # Pre-walk: prompt for any unsaved ring member (Bug 11).  Done
+        # BEFORE any actual close so the user can cancel without
+        # losing partial state.
+        for mid in member_ids:
+            member = registry.get(mid)
+            if member is None:
+                continue
+            if member.role != "master":
+                continue
+            if not member._ring_needs_save_prompt():
+                continue
+            if not member._confirm_discard_unsaved_ring():
+                _log(
+                    f"_close_all_related: cancelled by user during "
+                    f"pre-walk for member ring {member._id[:8]}"
+                )
+                return
         _log(
             f"Closing ring + members: master={self._id[:8]} "
             f"+ {len(member_ids)} member(s)"
@@ -7506,6 +8122,7 @@ class CellWindow(QMainWindow):
         forest._positioned.add(self._id)
         forest._dock_partners.add(self._id)
         self._group_master_id = forest._id
+        self._link_parent_id = forest._id  # v0.8.0 P1 mirror
         forest._ring_dirty = True
         forest.update()
         # Repack the forest so the new member lands on a real
@@ -7620,6 +8237,7 @@ class CellWindow(QMainWindow):
             self._positioned.add(c._id)
             self._dock_partners.add(c._id)
             c._group_master_id = self._id
+            c._link_parent_id = self._id  # v0.8.0 P1 mirror
             c._docked_to.discard(prior_id) if prior_id else None
             c.update()  # outline refresh
 
@@ -7635,6 +8253,7 @@ class CellWindow(QMainWindow):
                 forest._positioned.add(self._id)
                 forest._dock_partners.add(self._id)
                 self._group_master_id = forest_link_to_inherit
+                self._link_parent_id = forest_link_to_inherit  # v0.8.0 P1 mirror
                 forest._ring_dirty = True
                 forest.update()
 
@@ -8153,6 +8772,169 @@ class CellWindow(QMainWindow):
             f"({dx},{dy}) to clear {len(obstacles)} obstacle(s)"
         )
 
+    def _relocate_overlapping_members_individually(self) -> None:
+        """v0.8.0a1+ramps Bug 3 — for a master that just docked to
+        a target, leave the master at its snap-committed position
+        and move each individual member that overlaps another cell
+        to a free honeycomb slot around the master.
+
+        Per the user's spec: "I should be able to dock and the
+        cells should find new dock positions, if none available
+        that are linked to their cell, then dock to the nearest
+        available dock location on another cell or tree or ring,
+        but stay linked to their current ring."
+
+        Differs from ``_settle_no_overlap`` which shifts the entire
+        master+members group rigidly — that approach pushes the
+        master away from its dock slot when only some members
+        overlap.
+
+        Currently implements the first strategy (free slot around
+        the master).  The "fall back to slot on another cell/tree/
+        ring" strategy is a follow-up — for v0.8.0a1+ramps we
+        leave overlapping members at their current position when
+        no slot is free around the master (visually imperfect but
+        the ring stays docked).  Link membership is never changed.
+        """
+        if self.role != "master":
+            return
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell.layout import nearest_free_slot
+        from scriptree.shell import tiling as _tiling
+
+        registry = CellRegistry.instance()
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+
+        # Build the obstacle spec list: every visible cell EXCEPT
+        # the master itself.  We use this both for detecting which
+        # members overlap and for the slot-collision check.
+        obstacles_by_id: dict[str, tuple] = {}
+        for h in registry.all():
+            if h._id == self._id:
+                continue
+            if not h.isVisible():
+                continue
+            sz = h._size_px
+            cx = h.pos().x() + sz / 2.0
+            cy = h.pos().y() + sz / 2.0
+            shape = _tiling.shape_from_legacy(h._shape, h._orientation)
+            obstacles_by_id[h._id] = (shape, sz, (cx, cy))
+
+        # Identify overlapping positioned members.
+        members_to_relocate: list = []
+        for mid in list(self._positioned):
+            if mid in self._auto_hidden:
+                continue
+            member = registry.get(mid)
+            if member is None or not member.isVisible():
+                continue
+            m_shape = _tiling.shape_from_legacy(
+                member._shape, member._orientation,
+            )
+            m_cx = member.pos().x() + member._size_px / 2.0
+            m_cy = member.pos().y() + member._size_px / 2.0
+            others = [
+                v for k, v in obstacles_by_id.items() if k != mid
+            ]
+            if _tiling.any_polygon_collides(
+                m_shape, member._size_px, (m_cx, m_cy),
+                others, slop_px=0.5,
+            ):
+                members_to_relocate.append(member)
+
+        if not members_to_relocate:
+            return
+
+        # Build screen rect.
+        screen = app.screenAt(self.pos())
+        if screen is None:
+            screen = app.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        screen_rect = (
+            avail.left(), avail.top(),
+            avail.right(), avail.bottom(),
+        )
+        master_pos = (self.pos().x(), self.pos().y())
+
+        # Track slots already used by members staying put so we
+        # don't double-assign.
+        taken_slots: set[tuple[str, int]] = set()
+        ids_to_relocate = {m._id for m in members_to_relocate}
+        for mid in list(self._positioned):
+            if mid in ids_to_relocate:
+                continue
+            member = registry.get(mid)
+            if member is None:
+                continue
+            slot = getattr(member, "_slot", None)
+            if slot is not None:
+                taken_slots.add(tuple(slot))
+
+        for member in members_to_relocate:
+            drop_centre = (
+                int(member.pos().x() + member._size_px / 2.0),
+                int(member.pos().y() + member._size_px / 2.0),
+            )
+            other_specs = [
+                v for k, v in obstacles_by_id.items() if k != member._id
+            ]
+            slot = nearest_free_slot(
+                master_pos=master_pos,
+                master_size=self._size_px,
+                master_slot=None,
+                drop_centre=drop_centre,
+                child_size=member._size_px,
+                taken_slots=taken_slots,
+                occupied_centres=set(),
+                screen_rect=screen_rect,
+                master_orientation=self._orientation,
+                master_shape=self._shape,
+                child_shape=member._shape,
+                child_orientation=member._orientation,
+                other_specs=other_specs,
+            )
+            if slot is None:
+                _log(
+                    f"_relocate_overlapping_members: no free slot "
+                    f"around ring {self._id[:8]} for member "
+                    f"{member._id[:8]} — leaving in place (follow-up: "
+                    f"search slots on other cells/rings)"
+                )
+                continue
+            kind, idx = slot
+            tl = _tiling.slot_world_pos(
+                master_pos,
+                _tiling.shape_from_legacy(self._shape, self._orientation),
+                self._size_px,
+                kind, idx,
+                _tiling.shape_from_legacy(
+                    member._shape, member._orientation,
+                ),
+                member._size_px,
+            )
+            member.move_to(int(tl[0]), int(tl[1]))
+            member._slot = slot
+            taken_slots.add(slot)
+            self._members[member._id] = QPoint(int(tl[0]), int(tl[1]))
+            # Update obstacles_by_id so subsequent relocates see
+            # this member at its new position.
+            new_cx = tl[0] + member._size_px / 2.0
+            new_cy = tl[1] + member._size_px / 2.0
+            obstacles_by_id[member._id] = (
+                _tiling.shape_from_legacy(member._shape, member._orientation),
+                member._size_px,
+                (new_cx, new_cy),
+            )
+            _log(
+                f"_relocate_overlapping_members: moved {member._id[:8]} "
+                f"to slot {slot} at ({tl[0]:.0f},{tl[1]:.0f})"
+            )
+
     # ------------------------------------------------------------------
     # Harness-driveable public hooks (ADR-001 Â§harness-driveable contract)
     # These are PRODUCTION methods — real input handlers delegate to them.
@@ -8164,8 +8946,40 @@ class CellWindow(QMainWindow):
 
         Identical effect to a user drag-end at that position.
         Fires CellRegistry.hexagonMoved (via moveEvent).
+
+        v0.8.0a1+ramps Bug 4 — additionally cascade the delta to
+        every cell in this cell's ``_dock_children_by_edge``.  Snap-
+        commit (``snap_engine.detach_drag``) and ``dock_with`` both
+        funnel through here, and the user expects "the cells docked
+        to it" to follow when the parent shifts to its snap slot.
+        Children's own ``move_to`` re-cascades, so a dock-chain
+        A→B→C→… all follows.
         """
+        prev = self.pos()
+        delta_x = x - prev.x()
+        delta_y = y - prev.y()
         self.move(x, y)
+        if (delta_x or delta_y) and self._dock_children_by_edge:
+            from scriptree.shell.cell_registry import CellRegistry
+            registry = CellRegistry.instance()
+            # Guard: mark self in flight so a child whose own
+            # cascade somehow tries to re-enter via us is a no-op.
+            _GROUP_MOVE_IN_PROGRESS.add(self._id)
+            try:
+                for child_id in list(self._dock_children_by_edge.values()):
+                    if child_id in _GROUP_MOVE_IN_PROGRESS:
+                        continue
+                    child = registry.get(child_id)
+                    if child is None:
+                        continue
+                    # Recursive: chain-children carry their own
+                    # grandchildren via this same code path.
+                    child.move_to(
+                        child.pos().x() + delta_x,
+                        child.pos().y() + delta_y,
+                    )
+            finally:
+                _GROUP_MOVE_IN_PROGRESS.discard(self._id)
 
     def click(self, mode: Literal["single", "double", "right", "double-right"] = "single") -> None:
         """Programmatically fire the same handler a real click would.
@@ -9035,6 +9849,112 @@ def _honeycomb_master_pos(
     return (cand_x, cand_y)
 
 
+# ---------------------------------------------------------------------------
+# v0.8.0 P3 — dock relationship helpers
+# ---------------------------------------------------------------------------
+
+def _compute_dock_edge(
+    child_centre: tuple[float, float],
+    partner: "CellWindow",
+    tolerance_px: float = 4.0,
+) -> "int | None":
+    """Find which of ``partner``'s edges ``child_centre`` is sitting at.
+
+    Returns the edge index (0..5 for hex, 0..3 for square) of the
+    partner's neighbour slot closest to the child centre.  Returns
+    None if no slot is within ``tolerance_px`` — child isn't actually
+    edge-adjacent.
+
+    Used at snap-commit time to record which edge of the snap target
+    the dragged cell landed at, so the new ``_dock_partner_id`` /
+    ``_dock_edge`` fields point at the right slot.
+    """
+    import math as _math
+    from scriptree.shell.snap_engine import _neighbour_slot_centres
+    p_geo = partner.geometry()
+    p_cx = p_geo.x() + p_geo.width() / 2.0
+    p_cy = p_geo.y() + p_geo.height() / 2.0
+    slots = _neighbour_slot_centres(
+        p_cx, p_cy, partner._size_px,
+        partner._shape, partner._orientation,
+    )
+    best_idx: "int | None" = None
+    best_dist = float("inf")
+    for i, (sx, sy) in enumerate(slots):
+        d = _math.hypot(sx - child_centre[0], sy - child_centre[1])
+        if d < best_dist:
+            best_dist = d
+            best_idx = i
+    if best_dist > tolerance_px:
+        return None
+    return best_idx
+
+
+def _set_cell_dock(
+    child: "CellWindow", partner: "CellWindow",
+    *,
+    child_centre: "tuple[float, float] | None" = None,
+) -> None:
+    """v0.8.0 P3 — atomically wire the dock relationship between
+    ``child`` and ``partner``.
+
+    Computes the edge index of ``partner`` where ``child`` currently
+    sits, sets ``child._dock_partner_id`` + ``child._dock_edge``,
+    and updates ``partner._dock_children_by_edge`` reciprocally.
+
+    If ``child`` was already docked elsewhere, the old partner's
+    reverse index is cleared first (no orphan back-references).
+
+    If ``child`` is not actually edge-adjacent to ``partner``
+    (no slot within 4 px tolerance), the dock pointer is left
+    unset and a debug line is logged — the snap engine emits
+    snapCommit only after positioning ``child`` at a slot of
+    ``partner``, so this case implies a programmer error in the
+    caller, not user input.
+
+    ``child_centre`` (v0.8.0a1+ramps Bug 6 fix) — when provided,
+    use this (cx, cy) instead of ``child.geometry()`` to compute
+    the edge.  Callers that wire dock pointers immediately after
+    triggering an animated ``_repack_members`` (e.g.
+    ``_try_spawn_master``) need to pass the TARGET position
+    because ``child.geometry()`` still returns the stale pre-
+    animation position.
+    """
+    from scriptree.shell.cell_registry import CellRegistry
+    if child_centre is None:
+        c_geo = child.geometry()
+        c_cx = c_geo.x() + c_geo.width() / 2.0
+        c_cy = c_geo.y() + c_geo.height() / 2.0
+    else:
+        c_cx, c_cy = child_centre
+    edge = _compute_dock_edge((c_cx, c_cy), partner)
+    if edge is None:
+        _log(
+            f"_set_cell_dock: {child._id[:8]} not edge-adjacent to "
+            f"{partner._id[:8]} — dock pointer left unset"
+        )
+        return
+    registry = CellRegistry.instance()
+    # Clear any prior dock relationship on this child.
+    if child._dock_partner_id is not None and child._dock_edge is not None:
+        old_partner = registry.get(child._dock_partner_id)
+        if old_partner is not None:
+            old_partner._dock_children_by_edge.pop(child._dock_edge, None)
+    # If the partner's target edge is already taken by some other cell,
+    # clear that cell's dock pointer to keep the invariant
+    # (one child per edge).
+    prior_child_id = partner._dock_children_by_edge.get(edge)
+    if prior_child_id is not None and prior_child_id != child._id:
+        prior_child = registry.get(prior_child_id)
+        if prior_child is not None:
+            prior_child._dock_partner_id = None
+            prior_child._dock_edge = None
+    # Wire the new dock.
+    child._dock_partner_id = partner._id
+    child._dock_edge = edge
+    partner._dock_children_by_edge[edge] = child._id
+
+
 def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     """Snap-commit handler: wire a and b into the group-association model.
 
@@ -9048,6 +9968,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         a joins b's master's group. master._members[a._id] = a.pos().
         a added to master._positioned (it just snapped into the cluster).
         a._group_master_id = master._id. Master does NOT move.
+        a._link_parent_id = master._id. Master does NOT move.  # v0.8.0 P1 mirror
 
     Case 3 — src (a) is in a group, tgt (b) is standalone:
         b joins a's master's group. Same as Case 2 mirrored.
@@ -9058,6 +9979,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         If old master drops below 2 members, close it.
         Add a to new master's _members/_positioned.
         a._group_master_id = new master._id.
+        a._link_parent_id = new master._id.  # v0.8.0 P1 mirror
 
     Case 5 — both in the SAME group:
         This is a positional re-snap (member moved and snapped back).
@@ -9076,10 +9998,46 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     # group members.  SnapEngine._tick now filters them out at source, but if
     # a race or future code path delivers a master here, reject immediately
     # instead of recursing into Case 1/2/3/4 with a master object.
-    if a.role == "master" or b.role == "master":
+    # v0.8.0 — the pre-v0.8.0 reject is replaced with explicit case
+    # handling.  The link/dock split allows rings and the forest
+    # to be dock targets:
+    #
+    #   Case M1 — src IS a master (ring): per user Q2=(b), a ring
+    #             docking onto anything is purely spatial — no link
+    #             change.  Rings always stay forest-linked.  Set
+    #             dock fields and return.
+    #   Case M2 — src is a cell, tgt is a master (ring or forest):
+    #             cell links to the master and docks at the snapped
+    #             edge.  This is the cell-onto-ring or cell-onto-
+    #             forest case the user described.
+    if a.role == "master":
+        # Case M1
+        _set_cell_dock(a, b)
         _log(
-            f"rejected master-of-master attempt: "
-            f"a={a._id[:8]} role={a.role} b={b._id[:8]} role={b.role}"
+            f"Case M1 (master src dock): {a._id[:8]} role={a.role} "
+            f"dock-attaches to {b._id[:8]} role={b.role} (no link change)"
+        )
+        return
+    if b.role == "master":
+        # Case M2 — cell docks onto a master (ring or forest).
+        master = b
+        a._group_master_id = master._id
+        a._link_parent_id = master._id  # v0.8.0 P1 mirror
+        master._members[a._id] = QPoint(a.pos())
+        master._positioned.add(a._id)
+        a._docked_to.clear()
+        try:
+            _update_docked_to(a, b, registry)
+        except Exception:  # noqa: BLE001
+            pass
+        a.update()
+        if not master.isVisible():
+            master.show()
+        master._ring_dirty = True
+        _set_cell_dock(a, master)
+        _log(
+            f"Case M2 (cell-to-master dock): {a._id[:8]} links to "
+            f"{master._id[:8]} (role={master.role})"
         )
         return
 
@@ -9146,6 +10104,12 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             master._members[a._id] = QPoint(a.pos())
             master._positioned.add(a._id)
             _update_docked_to(a, b, registry)
+            # v0.8.0 P3 — Case 5 dock update: ``a`` re-snapped
+            # against ``b`` within the same group.  Dock partner is
+            # ``b``, which may differ from any previous partner ``a``
+            # had (it could have been the master, or a different
+            # sibling cell).
+            _set_cell_dock(a, b)
             # V3 v0.3.17 — DO NOT repack.  Per user contract:
             # moving one element within a group must NOT reshift
             # the others.  ``a`` is at the position the snap engine
@@ -9181,9 +10145,13 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             # Member added — new ring is dirty (membership changed).
             new_master._ring_dirty = True
         a._group_master_id = tgt_master_id
+        a._link_parent_id = tgt_master_id  # v0.8.0 P1 mirror
         a._docked_to.clear()
         _update_docked_to(a, b, registry)
         a.update()  # Bug 5: refresh outline colour (now associated)
+        # v0.8.0 P3 — Case 4 dock write: ``a`` transferred to ``b``'s
+        # group, snapped against ``b``'s edge.  Dock partner is ``b``.
+        _set_cell_dock(a, b)
         _log(
             f"Case 4 (transfer): {a._id[:8]} from {src_master_id[:8]} "
             f"to {tgt_master_id[:8]}"
@@ -9206,6 +10174,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             master._positioned.add(a._id)
             master._dock_partners.add(a._id)
             a._group_master_id = tgt_master_id
+            a._link_parent_id = tgt_master_id  # v0.8.0 P1 mirror
             a._docked_to.clear()
             _update_docked_to(a, b, registry)
             a.update()  # Bug 5: refresh outline colour (now associated)
@@ -9215,6 +10184,11 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             # snap-committed edge of ``b``; existing members of
             # the ring keep their positions.
             master._ring_dirty = True
+            # v0.8.0 P3 — write the dock relationship.  ``a`` was
+            # snapped against ``b``'s edge by the snap engine, so the
+            # dock partner is ``b`` (not the master).  This is the
+            # chain-dock case the user described.
+            _set_cell_dock(a, b)
         _log(f"Case 2 (src joins tgt group): {a._id[:8]} -> group {tgt_master_id[:8]}")
         return
 
@@ -9227,6 +10201,7 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
             master._positioned.add(b._id)
             master._dock_partners.add(b._id)
             b._group_master_id = src_master_id
+            b._link_parent_id = src_master_id  # v0.8.0 P1 mirror
             b._docked_to.clear()
             _update_docked_to(a, b, registry)
             b.update()  # Bug 5: refresh outline colour (now associated)
@@ -9234,6 +10209,10 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
                 master.show()
             # V3 v0.3.17 — DO NOT repack (same rationale as Case 2).
             master._ring_dirty = True
+            # v0.8.0 P3 — Case 3 mirror of Case 2: ``b`` is the cell
+            # that got pulled into ``a``'s group; ``a`` is its dock
+            # partner.
+            _set_cell_dock(b, a)
         _log(f"Case 3 (tgt joins src group): {b._id[:8]} -> group {src_master_id[:8]}")
         return
 
@@ -9307,6 +10286,12 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         source_b_id=b._id,
         hexagon_id=master_id,
     )
+    # v0.8.0a1+ramps Bug 8 — give the fresh ring a session-unique
+    # auto-name ("Ring 1", "Ring 2", …) so the user can tell rings
+    # apart in the menu header / hover tooltip before they save or
+    # bind a catalog.  Cleared whenever the ring is later bound to
+    # a file (the file's stem takes over).
+    master._auto_ring_name = f"Ring {_next_ring_serial()}"
     # Master inherits the source cells' shape, orientation, and size so the
     # whole group renders identically.  ``a`` and ``b`` already share these
     # values (Rule 3 in SnapEngine rejects cross-shape pairs), but their
@@ -9341,10 +10326,13 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
     master._collapse_state = "expanded"
 
     a._group_master_id = master_id
+    a._link_parent_id = master_id  # v0.8.0 P1 mirror
     b._group_master_id = master_id
+    b._link_parent_id = master_id  # v0.8.0 P1 mirror
     a._docked_to.clear()
     b._docked_to.clear()
     _update_docked_to(a, b, registry)
+
     # Bug 5: refresh outline colour — both are now associated; green â†’ normal.
     a.update()
     b.update()
@@ -9360,10 +10348,51 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         master._fade_in()
     except Exception:  # noqa: BLE001
         pass
+    # v0.8.0a1 — wire the freshly-spawned master to the snap engine
+    # so the snap-preview overlay shows when the user drags the new
+    # ring as a source.  ``ring_io.load_ring`` already wires loaded
+    # masters; ``_try_spawn_master`` is the dynamic-spawn path that
+    # was missing the wire — the master could be dragged (attach_drag
+    # fires) but the ``snapPreview`` signal had no listener whose
+    # ``listening_hex._id`` matched the master's id, so the preview
+    # overlay never fired.  User-reported symptom: "Docking the ring
+    # to a cell or forest does work, but it doesn't outline the
+    # docking area like the cells do (it should)."
+    try:
+        from scriptree.shell.ring_main import _wire_hex_to_snap
+        _wire_hex_to_snap(master)
+    except Exception as exc:  # noqa: BLE001
+        _log(
+            f"_try_spawn_master: snap-engine wire for master {master_id[:8]} "
+            f"failed: {exc!r} — drag-snap preview will not show for this ring"
+        )
     # Canonicalise positions: both sources adopt their nearest free
     # honeycomb slots around the master so a non-canonical drag-release
     # (e.g. dropped slightly off-slot) snaps to a clean ring layout.
     master._repack_members()
+
+    # v0.8.0 P3 — Case 1 dock writes (v0.8.0a1+ramps Bug 6 fix:
+    # use the TARGET centre stored in master._members so the dock
+    # edge resolves even while the cells are still smooth-moving
+    # toward their final slot positions).  A fresh master was
+    # placed at a honeycomb slot adjacent to BOTH ``a`` and ``b``;
+    # _repack_members above started an animated slide of ``a`` and
+    # ``b`` to those slots.  Reading ``child.geometry()`` here
+    # returns the stale pre-animation pixel position (often ≥ 4 px
+    # off from the slot centre) and ``_set_cell_dock``'s 4 px
+    # tolerance would silently leave the dock pointer unset —
+    # then the master.move_to cascade (Bug 4) wouldn't carry these
+    # members when the ring docked elsewhere ("ring left its
+    # linked cells behind").  Passing the target centre via the
+    # ``child_centre`` kwarg sidesteps the animation race.
+    for src_cell in (a, b):
+        home = master._members.get(src_cell._id)
+        if home is None:
+            _set_cell_dock(src_cell, master)
+            continue
+        tgt_cx = home.x() + src_cell._size_px / 2.0
+        tgt_cy = home.y() + src_cell._size_px / 2.0
+        _set_cell_dock(src_cell, master, child_centre=(tgt_cx, tgt_cy))
     # v0.6.12 — fresh master + ring must not overlap any cell that
     # already lived on screen before the dock fired.
     try:
@@ -9423,9 +10452,27 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
         if forest is not None and forest._id != master_id:
             try:
                 forest._members[master._id] = QPoint(master.pos())
-                forest._positioned.add(master._id)
-                forest._dock_partners.add(master._id)
+                # v0.8.0a1+ramps Bug 7 — do NOT add the fresh ring to
+                # forest._positioned / forest._dock_partners.  Those
+                # two sets are the forest cascade's dock-path gate,
+                # and the new ring sits wherever the two source
+                # cells happened to dock — typically NOT at a slot
+                # adjacent to the forest cluster.  Per the user
+                # spec ("once I make a ring that is not docked to
+                # the forest cluster it [shouldn't] move when I
+                # move the forest"), a loose-linked ring is link-
+                # attached only.  If the user later docks this ring
+                # to the forest cluster, the snap-commit path adds
+                # it to _positioned then.
+                #
+                # User-reported symptom of the prior (wrong) write:
+                # "the separated ring still drags when forest drags
+                # but only under this specific condition: I drag a
+                # cell away from the group, then I drag another cell
+                # from the group directly to dock with the other
+                # cell and form a ring."
                 master._group_master_id = forest_id_for_link
+                master._link_parent_id = forest_id_for_link  # v0.8.0 P1 mirror
                 # Drop the two source cells from forest's direct
                 # membership — they're now reachable via the new
                 # ring.  Membership change → forest dirty.
@@ -9439,9 +10486,9 @@ def _try_spawn_master(a: CellWindow, b: CellWindow) -> None:
                 forest.update()  # refresh badge / count
                 _log(
                     f"forest-link preserved: new ring {master_id[:8]} "
-                    f"promoted to forest {forest._id[:8]} member; "
-                    f"sources {a._id[:8]} + {b._id[:8]} now ring "
-                    f"members under that ring"
+                    f"promoted to forest {forest._id[:8]} link-child "
+                    f"(NOT dock-positioned); sources {a._id[:8]} + "
+                    f"{b._id[:8]} now ring members under that ring"
                 )
             except Exception as exc:  # noqa: BLE001
                 _log(
@@ -9570,13 +10617,16 @@ def _check_master_validity(master: CellWindow, registry) -> None:
         f"member_count={member_count} (need >= 2)"
     )
 
-    if member_count < 2:
-        # F3 (v0.3.8+) — save prompt for dirty/unsaved rings about
-        # to vanish from quorum loss.  Save / Discard only; no
-        # Cancel because the triggering member-close has already
-        # happened (we'd have nothing to roll back to).  The prompt
-        # fires BEFORE we clear ``_members`` so the save captures
-        # the last-known-good state.
+    # v0.8.0 — auto-close on quorum-loss DISABLED.  Per the user:
+    # "I think we should not remove them automatically anymore -
+    # shake to close and have a box come up then to close, save
+    # or cancel."  Rings now persist with 0 or 1 members.  Explicit
+    # close gestures (shake on ring, context menu) will surface
+    # the save prompt and handle teardown — that's a separate code
+    # path.  Keeping the legacy quorum-loss save prompt below as
+    # dead code commented out for reference; if you uncomment,
+    # restore the `if member_count < 2:` outer condition too.
+    if False and member_count < 2:
         if (
             master._ring_needs_save_prompt()
             and member_count >= 1  # something to save
@@ -9620,6 +10670,7 @@ def _check_master_validity(master: CellWindow, registry) -> None:
             member = reg.get(member_id)
             if member is not None:
                 member._group_master_id = None
+                member._link_parent_id = None  # v0.8.0 P1 mirror
                 member._docked_to.clear()
                 member._dock_partners.clear()
                 member.update()  # Bug 5: refresh outline (now unassociated → green)

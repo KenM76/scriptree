@@ -67,36 +67,66 @@ from typing import Literal, Optional
 
 
 # ---------------------------------------------------------------------------
-# Geometry -- flat-top hex honeycomb
+# Geometry -- flat-top hex honeycomb (v0.6.40 — edge-touching tiling)
 # ---------------------------------------------------------------------------
-
-# Inner ring: 6 slots at 60deg intervals around the master centre,
-# distance = size_px (centre-to-centre, which is the flat-top hex
-# adjacency distance).  Indices start at East, walk counter-clockwise.
 #
-# For a master at centre (mx, my) with size_px = s, the centre of
-# inner-slot i is at:
-#   (mx + s * cos(i*60deg), my - s * sin(i*60deg))
-# (subtract sin because screen Y grows downward).
-INNER_RING = [
-    (math.cos(math.radians(60 * i)), -math.sin(math.radians(60 * i)))
-    for i in range(6)
-]
+# Inner ring: 6 slots at 60° intervals around the master centre.
+# For a hex inscribed in a size_px × size_px box, the circumradius
+# R = size_px/2 and apothem (centre-to-edge) = R × √3/2.  Two hexes
+# share an edge when their centres sit ``R√3 = size_px × √3/2``
+# apart — ≈ 0.866 × size_px, NOT 1.0 × size_px.  Earlier sims used
+# the wrong distance and the cells docked tip-to-tip (vertex
+# touching vertex).
+#
+# Outer ring: 12 slots at 30° intervals, alternating between
+# **axial** outer (past an inner slot, distance R·2√3) and
+# **corner** outer (opposite a vertex of the master, distance 3R).
+# Together they complete the second concentric ring of the
+# honeycomb.
+#
+# This sim mirrors ``scriptree/shell/layout.py``.  Keep the two in
+# lockstep — the Qt widget code uses the layout module, and
+# ``tests/test_layout_algorithm.py`` runs these scenarios as a
+# regression net against it.
 
-# Outer ring: 12 slots at 30deg intervals, distance ≈ 2 * size_px.
-OUTER_RING = [
-    (2 * math.cos(math.radians(30 * i)), -2 * math.sin(math.radians(30 * i)))
-    for i in range(12)
-]
+_SQRT3 = math.sqrt(3)
+_SQRT3_HALF = _SQRT3 / 2
+# v0.6.40 — start_offset = 90° for flat-top so slot 0 sits due north
+# (the top edge midpoint); 0° for pointy-top so slot 0 sits due east.
+# Subsequent slots walk clockwise in math (= CCW visually), matching
+# snap_engine._FLAT_TOP_OFFSETS / _POINTY_TOP_OFFSETS indices.
+_START_DEG = {"flat-top": 90.0, "pointy-top": 0.0}
 
 
-def slot_offset(slot: tuple[str, int], size_px: int) -> tuple[int, int]:
+def _inner_factor(slot_idx: int, orientation: str = "flat-top") -> tuple[float, float]:
+    start = _START_DEG.get(orientation, 90.0)
+    angle = math.radians(start - slot_idx * 60.0)
+    d = _SQRT3_HALF  # R√3 with R = 1/2 (size_px units)
+    return (d * math.cos(angle), -d * math.sin(angle))
+
+
+def _outer_factor(slot_idx: int, orientation: str = "flat-top") -> tuple[float, float]:
+    start = _START_DEG.get(orientation, 90.0)
+    angle = math.radians(start - slot_idx * 30.0)
+    d = _SQRT3 if slot_idx % 2 == 0 else 1.5
+    return (d * math.cos(angle), -d * math.sin(angle))
+
+
+# Legacy constants, populated for flat-top (the deployed orientation).
+INNER_RING = [_inner_factor(i, "flat-top") for i in range(6)]
+OUTER_RING = [_outer_factor(i, "flat-top") for i in range(12)]
+
+
+def slot_offset(
+    slot: tuple[str, int], size_px: int,
+    orientation: str = "flat-top",
+) -> tuple[int, int]:
     """Return (dx, dy) -- offset in pixels from master CENTRE to slot CENTRE."""
     kind, idx = slot
     if kind == "inner":
-        fx, fy = INNER_RING[idx]
+        fx, fy = _inner_factor(idx, orientation)
     elif kind == "outer":
-        fx, fy = OUTER_RING[idx]
+        fx, fy = _outer_factor(idx, orientation)
     else:
         raise ValueError(f"unknown slot kind: {kind!r}")
     return (round(fx * size_px), round(fy * size_px))
@@ -105,6 +135,7 @@ def slot_offset(slot: tuple[str, int], size_px: int) -> tuple[int, int]:
 def slot_world_pos(
     master_pos: tuple[int, int], master_size: int,
     slot: tuple[str, int], child_size: int,
+    master_orientation: str = "flat-top",
 ) -> tuple[int, int]:
     """Return TOP-LEFT world coords for a child docked at ``slot``
     of a master whose top-left is at ``master_pos``.
@@ -115,7 +146,7 @@ def slot_world_pos(
     """
     mcx = master_pos[0] + master_size / 2
     mcy = master_pos[1] + master_size / 2
-    dx, dy = slot_offset(slot, master_size)
+    dx, dy = slot_offset(slot, master_size, master_orientation)
     ccx = mcx + dx
     ccy = mcy + dy
     return (round(ccx - child_size / 2), round(ccy - child_size / 2))
@@ -273,8 +304,14 @@ def find_free_slot(
     3. On-screen -- the resulting world position fits inside the
        screen rect.
     4. Global no-collision -- the resulting world centre doesn't sit
-       within 0.75*size_px of any already-placed cell's centre.
+       within 0.95×edge_touch_distance of any already-placed cell.
        Catches honeycomb-tiling aliasing across adjacent rings.
+
+    v0.6.40 — collision threshold is derived from the actual
+    edge-touch distance for this size pair (= (a+b) × √3/4 for
+    hexes), not a flat 0.75 × child_size.  The 0.95 factor leaves
+    ≈ 5 % rounding slop for adjacent neighbours that sit at exactly
+    the edge-touch distance.
 
     ``occupied_centres`` may be supplied (a set of (cx, cy) integer
     tuples) so callers running a batch can reuse the snapshot; if
@@ -295,7 +332,10 @@ def find_free_slot(
         forbidden.add(("inner", (pi + 3) % 6))
         forbidden.add(("outer", (pi * 2 + 6) % 12))
 
-    threshold_sq = (child_size * 0.75) ** 2
+    # Edge-touch distance for this master+child pair (hex apothem
+    # sum); 0.95 factor lets exact-distance neighbours pass.
+    edge_touch = (master.size + child_size) * _SQRT3 / 4
+    threshold_sq = (edge_touch * 0.95) ** 2
     for kind, count in (("inner", 6), ("outer", 12)):
         for i in range(count):
             slot = (kind, i)
@@ -338,10 +378,14 @@ def assign_initial_slots(world: World) -> None:
     """
     root = world.root()
     occupied_centres: set[tuple[int, int]] = {root.center()}
-    threshold_sq = (root.size * 0.75) ** 2  # same threshold all cells use
 
     def collides_globally(centre: tuple[int, int], size: int) -> bool:
-        t_sq = (size * 0.75) ** 2
+        # v0.6.40 — threshold = 0.95 × (size+size) × √3/4 = size × √3 × 0.95/2.
+        # Assumes equal-size cells (which is the common case here; the
+        # root size is used as a proxy when "occupied" cells may have
+        # different sizes — this is a sanity guard, not the primary
+        # collision check, so an approximate threshold is fine).
+        t_sq = (size * _SQRT3 * 0.95 / 2) ** 2
         for (ox, oy) in occupied_centres:
             dx = centre[0] - ox
             dy = centre[1] - oy
@@ -486,7 +530,9 @@ def _nearest_free_slot(
             continue
         if c.is_forest or (c.parent_id and c.slot is not None):
             occupied_centres.add(c.center())
-    threshold_sq = (child_size * 0.75) ** 2
+    # v0.6.40 — edge-touch-aware threshold (see find_free_slot).
+    edge_touch = (master.size + child_size) * _SQRT3 / 4
+    threshold_sq = (edge_touch * 0.95) ** 2
     candidates: list[tuple[float, Slot]] = []
     for kind, count in (("inner", 6), ("outer", 12)):
         for i in range(count):

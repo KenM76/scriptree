@@ -31,6 +31,8 @@ Tests are written before the fix lands so they fail cleanly first
 """
 from __future__ import annotations
 
+import pytest
+
 from PySide6.QtCore import QPoint
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -82,6 +84,15 @@ def _spawn_pair_master() -> tuple[CellWindow, CellWindow, CellWindow]:
 
 class TestReassociateAfter2MemberDissoc:
 
+    @pytest.mark.skip(reason=(
+        "v0.8.0 spec change: rings no longer auto-close on quorum "
+        "loss.  This test asserted the master was removed from the "
+        "registry when a 2-member ring lost a member; v0.8.0 keeps "
+        "the master alive (per user: 'I think we should not remove "
+        "them automatically anymore - shake to close and have a box "
+        "come up then to close, save or cancel').  Phase 7 will "
+        "rewrite the lifecycle tests."
+    ))
     def test_master_is_unregistered_when_one_of_two_closes(self) -> None:
         """When a 2-member ring loses one member, the master must be
         FULLY removed from the registry — not just hidden — so a
@@ -101,6 +112,15 @@ class TestReassociateAfter2MemberDissoc:
             "_check_master_validity closed it." % master_id[:16]
         )
 
+    @pytest.mark.skip(reason=(
+        "v0.8.0 spec change: rings no longer auto-close on quorum "
+        "loss.  The pre-v0.8.0 path was: member leaves → master "
+        "drops below 2 → _check_master_validity closes master → "
+        "id freed → redock spawns fresh master.  Under v0.8.0 the "
+        "master persists, so 'redock' adds back to the existing "
+        "master rather than spawning a new one.  This test needs "
+        "rewriting for the new lifecycle (planned in Phase 7)."
+    ))
     def test_redocking_same_pair_spawns_fresh_master(self) -> None:
         """Close one of two members, recreate it (or use any cell at
         b's position), redock with a — a NEW master must spawn

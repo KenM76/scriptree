@@ -585,6 +585,7 @@ def load_ring(
 
         # Wire group association on both sides.
         member_win._group_master_id = master_win._id
+        member_win._link_parent_id = master_win._id  # v0.8.0 P1 mirror
         master_win._members[member_win._id] = preferred_qpoint
 
         is_positioned = _coerce_bool(m_raw.get("is_positioned", True))

@@ -175,6 +175,41 @@ class CellRegistry(QObject):
             return set()
         return set(master._members.keys())
 
+    # ---- v0.8.0 link-graph helpers (Phase 1, parallel to legacy) -----------
+
+    def link_parent_of(self, hex_id: str) -> "str | None":
+        """v0.8.0 P1 — return the link parent of ``hex_id``.
+
+        Reads the new ``_link_parent_id`` field.  During the v0.8.0
+        rollout this is mirror-written alongside ``_group_master_id``
+        at every set site (see :meth:`CellWindow._set_link_parent`),
+        so the result matches :meth:`master_of` exactly.  Phase 4
+        swaps consumers over to this method; Phase 9 deletes
+        ``master_of``.
+        """
+        h = self._hexagons.get(hex_id)
+        if h is None:
+            return None
+        return getattr(h, "_link_parent_id", None)
+
+    def link_children_of(self, parent_id: str) -> set[str]:
+        """v0.8.0 P1 — return every cell whose ``_link_parent_id``
+        equals ``parent_id``.
+
+        O(N) scan over the registry — acceptable at our scale (≤ ~100
+        cells in normal use).  Phase 9 may add a cached index if
+        the chaos tests exercise extreme cell counts.
+
+        Used by Phase 2's link-driven cascade (forest / ring drag),
+        Phase 5's re-find heuristic (search "same link parent"
+        siblings), and the audit in :func:`audit_link_graph`.
+        """
+        out: set[str] = set()
+        for hid, h in self._hexagons.items():
+            if getattr(h, "_link_parent_id", None) == parent_id:
+                out.add(hid)
+        return out
+
     # ---- Legacy shim (kept for SnapEngine compatibility) -------------------
 
     def dock_group_of(self, hex_id: str) -> set[str]:

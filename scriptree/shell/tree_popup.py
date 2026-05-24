@@ -792,6 +792,103 @@ def _install_live_search(  # noqa: ANN001
     return edit
 
 
+def _populate_menu_from_member(
+    parent_menu,  # noqa: ANN001 — QMenu
+    member,  # noqa: ANN001 — CellWindow
+    leaves: list,
+    registry,  # noqa: ANN001 — CellRegistry instance
+    _depth: int = 0,
+) -> bool:
+    """v0.8.0a1+ramps Bug 9 — add ``member``'s contribution to
+    ``parent_menu``.  Returns True iff anything was actually added.
+
+    Branches:
+
+    * ``member`` is itself a master (a nested ring inside the forest,
+      or — in future — a nested ring inside a ring): add a sub-menu
+      titled with ``_popup_header_text(member)`` (so it picks up the
+      Bug 8 auto-name or the saved file name), then RECURSE into its
+      members.  Always returns True for masters even when the ring is
+      empty, so a brand-new ring shows up on the forest menu and the
+      user can see it exists.  Empty rings get a single disabled
+      "(empty)" hint inside their sub-menu.
+    * ``member`` is a standalone cell with no catalog: skip silently
+      (per Bug 8 — empty cells shouldn't clutter the menu).
+    * ``member`` is a standalone cell with a catalog: add the
+      catalog's contents as a sub-menu, exactly as the legacy code
+      did.
+
+    Cycle guard: ``_depth`` caps recursion at 8 to avoid runaway in
+    case the link graph ever forms a cycle (the audit module is
+    supposed to prevent this, but we don't want to hang the menu if
+    the audit failed silently).
+    """
+    if _depth > 8:
+        return False
+    role = getattr(member, "role", "")
+    if role == "master":
+        label = _popup_header_text(member)
+        sub = parent_menu.addMenu(label)
+        # Sub-menu icon: use bundled ring/forest glyph if available,
+        # else fall back to a generic folder.
+        try:
+            is_forest = bool(getattr(member, "_is_forest_master", False))
+            glyph_name = "forest" if is_forest else "ring"
+            icon = _bundled_qicon(glyph_name)
+            if icon is not None:
+                sub.setIcon(icon)
+        except Exception:  # noqa: BLE001
+            pass
+        # Recurse into the master's own members.
+        inner_dict = getattr(member, "_members", None) or {}
+        if isinstance(inner_dict, dict):
+            inner_keys = list(inner_dict.keys())
+        else:
+            inner_keys = list(inner_dict)
+        inner_populated = False
+        for ik in inner_keys:
+            inner_member = registry.get(ik) if isinstance(ik, str) else ik
+            if inner_member is None:
+                continue
+            if _populate_menu_from_member(
+                sub, inner_member, leaves, registry, _depth + 1,
+            ):
+                inner_populated = True
+        if not inner_populated:
+            sub.addAction("(empty)").setEnabled(False)
+        # We added the master's sub-menu; the user can SEE the ring
+        # in the parent menu even when it's empty.  That's the point
+        # of Bug 9: "the newly formed tree ring now doesn't show up
+        # on the forest menu at all (it should)."
+        return True
+
+    # Standalone (or unknown) cell — populate from its catalog.
+    cp = getattr(member, "_catalog_path", None)
+    if not cp:
+        # Per Bug 8: skip empty cells silently.
+        return False
+    src = Path(cp).resolve()
+    top_label = src.stem
+    try:
+        if src.suffix.lower() == ".scriptreetree":
+            from scriptree.core.io import load_tree
+            top_label = load_tree(str(src)).name or src.stem
+        elif src.suffix.lower() == ".scriptree":
+            from scriptree.core.io import load_tool
+            top_label = load_tool(str(src)).name or src.stem
+    except Exception:  # noqa: BLE001
+        pass
+    sub = parent_menu.addMenu(top_label)
+    sub.setIcon(_catalog_icon(src))
+    if _build_menu_for_catalog(
+        sub, src,
+        collector=leaves,
+        path_prefix=f"{top_label} / ",
+    ):
+        return True
+    return False
+
+
 def _popup_header_text(hex_win) -> str:  # noqa: ANN001
     """A human title for the popup header: the bound catalog's name,
     else the user's text label, else a role-based default
@@ -825,6 +922,14 @@ def _popup_header_text(hex_win) -> str:  # noqa: ANN001
     tl = getattr(hex_win, "_text_label", None)
     if tl:
         return str(tl)
+    # v0.8.0a1+ramps Bug 8 — ring masters get an auto-name like
+    # "Ring 3" so the menu / tooltip header shows something
+    # distinguishable instead of the generic "Tree Ring" base.  The
+    # forest never gets an auto serial (it's a singleton, "Forest"
+    # is meaningful by itself).
+    auto = getattr(hex_win, "_auto_ring_name", None)
+    if auto and not is_forest:
+        return str(auto)
     return base
 
 
@@ -867,13 +972,8 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     leaves: list = []
 
     if role == "master":
-        # ``_members`` is a ``dict[member_id, QPoint]`` per
-        # CellWindow's data model — iterate keys, look each id up
-        # in the registry to get the actual window, then read its
-        # ``_catalog_path``.  Falling back to iterating the value
-        # directly when _members is something else (lists, tuples)
-        # keeps tests with synthetic data working.
         from scriptree.shell.cell_registry import CellRegistry
+        registry = CellRegistry.instance()
 
         members_dict = getattr(hex_win, "_members", None) or {}
         if isinstance(members_dict, dict):
@@ -884,39 +984,13 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
         if not member_keys:
             menu.addAction("(no members)").setEnabled(False)
         else:
-            registry = CellRegistry.instance()
             populated_any = False
             for mk in member_keys:
                 member = registry.get(mk) if isinstance(mk, str) else mk
                 if member is None:
                     continue
-                cp = getattr(member, "_catalog_path", None)
-                if not cp:
-                    sub = menu.addMenu(
-                        f"Cell {getattr(member, '_id', '?')[:8]} "
-                        f"(no catalog bound)"
-                    )
-                    sub.setEnabled(False)
-                    continue
-                src = Path(cp).resolve()
-                top_label = src.stem
-                # Try to read the .scriptreetree's display name for
-                # nicer top-folder label.
-                try:
-                    if src.suffix.lower() == ".scriptreetree":
-                        from scriptree.core.io import load_tree
-                        top_label = load_tree(str(src)).name or src.stem
-                    elif src.suffix.lower() == ".scriptree":
-                        from scriptree.core.io import load_tool
-                        top_label = load_tool(str(src)).name or src.stem
-                except Exception:  # noqa: BLE001
-                    pass
-                sub = menu.addMenu(top_label)
-                sub.setIcon(_catalog_icon(src))
-                if _build_menu_for_catalog(
-                    sub, src,
-                    collector=leaves,
-                    path_prefix=f"{top_label} / ",
+                if _populate_menu_from_member(
+                    menu, member, leaves, registry,
                 ):
                     populated_any = True
             if not populated_any:

@@ -1,96 +1,117 @@
-"""Pure-logic slot-based layout for the cell shell (v0.6.35).
+"""Slot-based layout planner (v0.7.0 — thin wrapper over tiling.py).
 
-No Qt, no widgets, no side effects.  Mirrors the algorithm proven
-in ``tools/layout_sim.py`` and pinned by
-``tests/test_layout_algorithm.py``.
+All geometry lives in :mod:`scriptree.shell.tiling` now.  This
+module is the *planner*: given a master and a set of members,
+which slot does each member occupy, and where does it go in world
+coords?
 
-The data model:
+The planner exposes the same public surface as v0.6.x
+(``slot_offset``, ``slot_world_pos``, ``find_free_slot``,
+``nearest_free_slot``, ``is_on_screen``) so existing callers in
+``cell_window.py`` keep working.  The behaviour change in v0.7.0:
 
-* Every cell has a ``slot`` of ``("inner", N)`` (N in 0..5) or
-  ``("outer", N)`` (N in 0..11) — or ``None`` (floating).
-* World position of a docked cell = parent's centre + slot offset
-  - child size/2 (centre-to-top-left conversion).
-* Layout is a function of the tree, not an animation timer.  Call
-  ``compute_member_positions`` once per state change.
+* ``slot_offset`` / ``slot_world_pos`` take ``master_orientation``
+  AND optionally ``child_size`` (for variable-size clusters).
+* ``find_free_slot`` collision check uses polygon SAT
+  (``tiling.polygons_collide``) instead of the v0.6.40 circle
+  approximation.
+* **Snap-slot binding fix**: callers that arrive here with a
+  member at a known snap-committed position should call
+  :func:`nearest_free_slot` (not ``find_free_slot``) so the slot
+  assigned matches the visible position.  See ``cell_window.py``
+  ``_compute_layout`` — v0.6.40 used ``find_free_slot`` which
+  picked the first available slot index regardless of where the
+  cell actually sat; cells docked at NE could get re-assigned to
+  N if N was free, jumbling the cluster.
 
-This module is imported by ``cell_window.py`` to compute slot
-assignments + world positions for masters and their members.  The
-existing ``CellWindow._members: dict[id, QPoint]`` stays as the
-canonical "where each member is now" map; this module computes
-what positions go INTO that dict given the tree's slot state.
+Legacy compat: ``INNER_RING`` / ``OUTER_RING`` are still exported
+as ``list[tuple[float, float]]`` factor tables (size_px = 1 unit)
+for any caller that imports them directly.  New code should use
+``tiling.slot_offset`` instead.
 """
 from __future__ import annotations
 
 import math
 from typing import Optional
 
-
-# ---------------------------------------------------------------------------
-# Geometry — flat-top hex honeycomb
-# ---------------------------------------------------------------------------
-
-# Inner ring: 6 slots at 60° increments around the master centre,
-# distance = size_px (the flat-top hex adjacency distance).
-# Indices start at East (slot 0), walk counter-clockwise.
-INNER_RING: list[tuple[float, float]] = [
-    (math.cos(math.radians(60 * i)), -math.sin(math.radians(60 * i)))
-    for i in range(6)
-]
-
-# Outer ring: 12 slots at 30° increments, distance ≈ 2 * size_px.
-OUTER_RING: list[tuple[float, float]] = [
-    (2 * math.cos(math.radians(30 * i)), -2 * math.sin(math.radians(30 * i)))
-    for i in range(12)
-]
+from scriptree.shell import tiling
+from scriptree.shell.tiling import (
+    HEX_FLAT_TOP, HEX_POINTY_TOP,
+    Shape, shape_from_legacy,
+    apothem, edge_touch_distance, polygons_collide, any_polygon_collides,
+    is_on_screen,
+)
 
 
 Slot = Optional[tuple[str, int]]
 
 
-def slot_offset(slot: tuple[str, int], size_px: int) -> tuple[int, int]:
-    """Pixel offset from master centre to slot centre."""
+# ---------------------------------------------------------------------------
+# Legacy compat — INNER_RING / OUTER_RING (unit factors for flat-top hex)
+# ---------------------------------------------------------------------------
+
+def _build_legacy_tables() -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Recover the v0.6.40 list-form factor tables for flat-top hex.
+
+    Each entry is ``(dx_factor, dy_factor)`` such that multiplying
+    by ``size_px`` gives the integer slot offset for that slot.
+    Used only by legacy callers; new code should call
+    ``tiling.slot_offset`` directly.
+    """
+    inner: list[tuple[float, float]] = []
+    for i in range(6):
+        dx, dy = tiling.slot_offset(HEX_FLAT_TOP, 1000, "inner", i)
+        inner.append((dx / 1000.0, dy / 1000.0))
+    outer: list[tuple[float, float]] = []
+    for i in range(12):
+        dx, dy = tiling.slot_offset(HEX_FLAT_TOP, 1000, "outer", i)
+        outer.append((dx / 1000.0, dy / 1000.0))
+    return inner, outer
+
+
+INNER_RING, OUTER_RING = _build_legacy_tables()
+
+
+# ---------------------------------------------------------------------------
+# Forwarders that take legacy string args
+# ---------------------------------------------------------------------------
+
+def slot_offset(
+    slot: tuple[str, int], size_px: int,
+    orientation: str = "flat-top",
+) -> tuple[int, int]:
+    """Pixel offset from master centre to slot centre, with the
+    legacy ``orientation`` string for back-compat."""
+    shape = HEX_FLAT_TOP if orientation == "flat-top" else HEX_POINTY_TOP
     kind, idx = slot
-    if kind == "inner":
-        fx, fy = INNER_RING[idx]
-    elif kind == "outer":
-        fx, fy = OUTER_RING[idx]
-    else:
-        raise ValueError(f"unknown slot kind: {kind!r}")
-    return (round(fx * size_px), round(fy * size_px))
+    return tiling.slot_offset(shape, size_px, kind, idx)
 
 
 def slot_world_pos(
     master_pos: tuple[int, int], master_size: int,
     slot: tuple[str, int], child_size: int,
+    master_orientation: str = "flat-top",
+    master_shape: str = "hexagon",
+    child_shape: str = "hexagon",
+    child_orientation: Optional[str] = None,
 ) -> tuple[int, int]:
     """Top-left world coords for a child docked at ``slot`` of a
-    master whose top-left is at ``master_pos``.
+    master whose top-left is at ``master_pos``.  Variable-size
+    aware via the (sum-of-apothems) edge-touch distance.
     """
-    mcx = master_pos[0] + master_size / 2
-    mcy = master_pos[1] + master_size / 2
-    dx, dy = slot_offset(slot, master_size)
-    ccx = mcx + dx
-    ccy = mcy + dy
-    return (round(ccx - child_size / 2), round(ccy - child_size / 2))
+    m_shape = shape_from_legacy(master_shape, master_orientation)
+    c_shape = shape_from_legacy(
+        child_shape, child_orientation or master_orientation,
+    )
+    kind, idx = slot
+    return tiling.slot_world_pos(
+        master_pos, m_shape, master_size, kind, idx, c_shape, child_size,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Slot allocation
+# Slot allocation (planner)
 # ---------------------------------------------------------------------------
-
-def is_on_screen(
-    pos: tuple[int, int], size: int,
-    screen_rect: tuple[int, int, int, int],
-) -> bool:
-    """More than half of the bounding box visible inside the
-    screen rect ``(left, top, right, bottom)``."""
-    sl, st, sr, sb = screen_rect
-    cl, ct = pos
-    cr, cb = pos[0] + size, pos[1] + size
-    inter_w = max(0, min(cr, sr) - max(cl, sl))
-    inter_h = max(0, min(cb, sb) - max(ct, st))
-    return inter_w * inter_h * 2 >= size * size
-
 
 def find_free_slot(
     master_pos: tuple[int, int], master_size: int,
@@ -99,48 +120,69 @@ def find_free_slot(
     taken_slots: set[tuple[str, int]],
     occupied_centres: set[tuple[int, int]],
     screen_rect: tuple[int, int, int, int],
-    overlap_threshold_factor: float = 0.75,
+    master_orientation: str = "flat-top",
+    overlap_threshold_factor: float = 0.95,  # legacy; ignored — SAT is exact
+    master_shape: str = "hexagon",
+    child_shape: str = "hexagon",
+    child_orientation: Optional[str] = None,
+    other_specs: Optional[list[tuple[Shape, int, tuple[float, float]]]] = None,
 ) -> Slot:
     """Find a slot on the master that is:
 
       1. Not in ``taken_slots`` (no sibling already there).
       2. Not the back-toward-parent slot, when ``master_slot`` is
-         set — inner ``(N+3) % 6`` and outer ``(2N + 6) % 12`` are
-         reserved so a child never lands on the master's parent.
+         set — inner ``(N+n/2) % n`` and outer ``(2N + n) % 2n``
+         are reserved so a child never lands on the master's parent.
       3. On-screen (more than half of the cell visible).
-      4. Globally non-colliding with every occupied centre — guards
-         the honeycomb-tiling aliasing case where two cells in
-         different clusters land on the same world coordinate.
+      4. Globally non-colliding with every other placed cell
+         (polygon SAT against the candidate child polygon at the
+         slot position).
 
     Returns the slot, or None if no candidate qualifies.  Inner
     ring is tried first, then outer.
+
+    The v0.6.x ``occupied_centres`` parameter remains for callers
+    that already snapshotted just centres; pair them with
+    ``other_specs`` (shape + size for each occupied centre) for
+    SAT to do its job.  When ``other_specs`` is None, falls back
+    to a per-occupied-centre uniform-hex assumption.
     """
+    m_shape = shape_from_legacy(master_shape, master_orientation)
+    c_shape = shape_from_legacy(
+        child_shape, child_orientation or master_orientation,
+    )
+
     forbidden: set[tuple[str, int]] = set()
     if master_slot is not None:
-        _, pi = master_slot
-        forbidden.add(("inner", (pi + 3) % 6))
-        forbidden.add(("outer", (pi * 2 + 6) % 12))
+        bs = tiling.back_slot(master_slot[1], "inner", m_shape)
+        forbidden.add(bs)
+        bso = tiling.back_slot(master_slot[1], "outer", m_shape)
+        forbidden.add(bso)
 
-    threshold_sq = (child_size * overlap_threshold_factor) ** 2
+    # Convert occupied centres + optional specs into the SAT-pair list.
+    if other_specs is None:
+        others = [(m_shape, child_size, (float(cx), float(cy)))
+                  for cx, cy in occupied_centres]
+    else:
+        others = other_specs
 
-    for kind, count in (("inner", 6), ("outer", 12)):
+    n_inner = tiling.inner_count(m_shape)
+    n_outer = tiling.outer_count(m_shape)
+    for kind, count in (("inner", n_inner), ("outer", n_outer)):
         for i in range(count):
             slot: tuple[str, int] = (kind, i)
             if slot in taken_slots or slot in forbidden:
                 continue
-            tl = slot_world_pos(master_pos, master_size, slot, child_size)
+            tl = tiling.slot_world_pos(
+                master_pos, m_shape, master_size, kind, i, c_shape, child_size,
+            )
             if not is_on_screen(tl, child_size, screen_rect):
                 continue
-            ccx = tl[0] + child_size // 2
-            ccy = tl[1] + child_size // 2
-            collides = False
-            for (ox, oy) in occupied_centres:
-                dx = ccx - ox
-                dy = ccy - oy
-                if dx * dx + dy * dy < threshold_sq:
-                    collides = True
-                    break
-            if collides:
+            ccx = tl[0] + child_size / 2.0
+            ccy = tl[1] + child_size / 2.0
+            if tiling.any_polygon_collides(
+                c_shape, child_size, (ccx, ccy), others, slop_px=0.5,
+            ):
                 continue
             return slot
     return None
@@ -154,44 +196,66 @@ def nearest_free_slot(
     taken_slots: set[tuple[str, int]],
     occupied_centres: set[tuple[int, int]],
     screen_rect: tuple[int, int, int, int],
-    overlap_threshold_factor: float = 0.75,
+    master_orientation: str = "flat-top",
+    overlap_threshold_factor: float = 0.95,  # legacy; ignored
+    master_shape: str = "hexagon",
+    child_shape: str = "hexagon",
+    child_orientation: Optional[str] = None,
+    other_specs: Optional[list[tuple[Shape, int, tuple[float, float]]]] = None,
 ) -> Slot:
-    """Like :func:`find_free_slot` but picks the slot CLOSEST to
-    ``drop_centre`` rather than the first valid one.  Used for
-    drag-drop / snap targets so the cell snaps to the slot the user
-    aimed at."""
+    """Like :func:`find_free_slot` but picks the slot whose
+    *centre* is closest to ``drop_centre``.
+
+    The v0.7.0 ``_compute_layout`` uses this (with the cell's
+    current widget centre as ``drop_centre``) to bind a
+    snap-committed cell to the slot it physically sits on, instead
+    of letting ``find_free_slot``'s first-available logic shuffle
+    cells into the wrong slots.
+    """
+    m_shape = shape_from_legacy(master_shape, master_orientation)
+    c_shape = shape_from_legacy(
+        child_shape, child_orientation or master_orientation,
+    )
+
     forbidden: set[tuple[str, int]] = set()
     if master_slot is not None:
-        _, pi = master_slot
-        forbidden.add(("inner", (pi + 3) % 6))
-        forbidden.add(("outer", (pi * 2 + 6) % 12))
+        forbidden.add(tiling.back_slot(master_slot[1], "inner", m_shape))
+        forbidden.add(tiling.back_slot(master_slot[1], "outer", m_shape))
 
-    threshold_sq = (child_size * overlap_threshold_factor) ** 2
-    candidates: list[tuple[float, tuple[str, int]]] = []
+    if other_specs is None:
+        others = [(m_shape, child_size, (float(cx), float(cy)))
+                  for cx, cy in occupied_centres]
+    else:
+        others = other_specs
 
-    for kind, count in (("inner", 6), ("outer", 12)):
+    # v0.7.0 — inner-ring-first, nearest-within-ring.  This matches
+    # honeycomb intent: tile inner first, escalate to outer only
+    # when inner is full.  Within a ring, pick the slot the cell
+    # physically sits closest to (so a snap-committed cell stays
+    # at the slot it docked to, not slot 0 in insertion order).
+    n_inner = tiling.inner_count(m_shape)
+    n_outer = tiling.outer_count(m_shape)
+    for kind, count in (("inner", n_inner), ("outer", n_outer)):
+        candidates: list[tuple[float, tuple[str, int]]] = []
         for i in range(count):
             slot: tuple[str, int] = (kind, i)
             if slot in taken_slots or slot in forbidden:
                 continue
-            tl = slot_world_pos(master_pos, master_size, slot, child_size)
+            tl = tiling.slot_world_pos(
+                master_pos, m_shape, master_size, kind, i, c_shape, child_size,
+            )
             if not is_on_screen(tl, child_size, screen_rect):
                 continue
-            ccx = tl[0] + child_size // 2
-            ccy = tl[1] + child_size // 2
-            collides = False
-            for (ox, oy) in occupied_centres:
-                dx = ccx - ox
-                dy = ccy - oy
-                if dx * dx + dy * dy < threshold_sq:
-                    collides = True
-                    break
-            if collides:
+            ccx = tl[0] + child_size / 2.0
+            ccy = tl[1] + child_size / 2.0
+            if tiling.any_polygon_collides(
+                c_shape, child_size, (ccx, ccy), others, slop_px=0.5,
+            ):
                 continue
             dx = ccx - drop_centre[0]
             dy = ccy - drop_centre[1]
             candidates.append((dx * dx + dy * dy, slot))
-    if not candidates:
-        return None
-    candidates.sort()
-    return candidates[0][1]
+        if candidates:
+            candidates.sort()
+            return candidates[0][1]
+    return None
