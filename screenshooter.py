@@ -18,11 +18,27 @@ Usage::
 
 Where ``kind`` is one of:
 
-    cell  — render a single standalone cell bound to ``input``
-            (a ``.scriptree`` / ``.scriptreetree`` catalog file).
-    form  — render the parameter form view of a ``.scriptree``
-            tool (the widget the standalone runner shows).
-    tree  — render the popup menu view of a ``.scriptreetree``.
+    cell    — render a single standalone cell bound to ``input``
+              (a ``.scriptree`` / ``.scriptreetree`` catalog file).
+    form    — render the parameter form view of a ``.scriptree``
+              tool (the widget the standalone runner shows).
+    tree    — render the popup menu view of a ``.scriptreetree``.
+    editor  — full editor (``MainWindow``) with tree / form /
+              output / command-line docks visible.  v0.8.0a2+:
+              shows the same window an end-user gets when they
+              ``run_scriptree.bat`` an existing ``.scriptree`` or
+              ``.scriptreetree`` from the desktop.
+    tabs    — ``StandaloneWindow`` built from a ``.scriptreetree``
+              with one tab per leaf tool.  v0.8.0a2+: the in-window
+              view a user sees when launching a tree from a cell
+              via single-click.
+    forest  — composite image: a forest hub cell with the catalog's
+              cell docked next to it, showing "as it would look
+              attached to the forest on the desktop".  v0.8.0a2+.
+    menu    — composite image: a forest hub cell with its merged
+              tree-popup menu rendered below it, showing the menu
+              the user gets by double-clicking the forest.
+              v0.8.0a2+.
 
 Examples::
 
@@ -64,8 +80,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -249,6 +265,310 @@ def _render_tree(catalog_path: Path, out: Path, width: int, height: int) -> None
 
 
 # ---------------------------------------------------------------------------
+# Kind: editor — the full MainWindow with tree / form / output / cmd-line
+# ---------------------------------------------------------------------------
+
+def _render_editor(
+    catalog_path: Path, out: Path, width: int, height: int,
+) -> None:
+    """Render the full editor (``MainWindow``) with the catalog loaded.
+
+    Matches what the user sees when they double-click a ``.scriptree``
+    / ``.scriptreetree`` and ScripTree opens the editor — tree dock on
+    the left, form panel in the centre, output pane below the form,
+    command-line group at the bottom.
+
+    When ``catalog_path`` is a ``.scriptreetree``, the first leaf tool
+    is auto-selected so the form / output / command-line docks all
+    populate (otherwise the right-hand panel shows just the welcome
+    text).  When the input is a single ``.scriptree`` tool, the
+    runner is loaded directly via ``_show_runner``.
+    """
+    _ensure_app()
+    from scriptree.ui.main_window import MainWindow
+    from scriptree.core.io import load_tool, load_tree
+
+    win = MainWindow()
+    try:
+        win.open_file(str(catalog_path.resolve()))
+    except Exception as exc:  # noqa: BLE001
+        _log(f"editor: open_file({catalog_path}) raised {exc!r}")
+
+    # If a tree was opened, walk to the first leaf and ``_show_runner``
+    # so the right-hand docks populate with a real tool's form, output
+    # pane, and command-line group.  Without this the editor screenshot
+    # captures only the tree on the left + welcome banner on the right.
+    suffix = catalog_path.suffix.lower()
+    if suffix == ".scriptreetree":
+        try:
+            tree = load_tree(str(catalog_path.resolve()))
+
+            def _first_leaf(nodes):  # noqa: ANN001
+                for n in nodes:
+                    if getattr(n, "type", "") == "leaf":
+                        return n
+                    kids = getattr(n, "children", None) or []
+                    found = _first_leaf(kids)
+                    if found is not None:
+                        return found
+                return None
+
+            leaf = _first_leaf(tree.nodes)
+            if leaf is not None:
+                leaf_path = getattr(leaf, "path", None)
+                if leaf_path:
+                    # Resolve the leaf's path relative to the tree
+                    # file's directory (the canonical ScripTree
+                    # convention).
+                    leaf_full = (catalog_path.parent / leaf_path).resolve()
+                    tool = load_tool(str(leaf_full))
+                    win._show_runner(tool, str(leaf_full))
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"editor: tree-leaf auto-select failed: {exc!r} "
+                f"— captured tree-only view"
+            )
+    elif suffix == ".scriptree":
+        try:
+            tool = load_tool(str(catalog_path.resolve()))
+            win._show_runner(tool, str(catalog_path.resolve()))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"editor: tool-load auto-show failed: {exc!r}")
+
+    if width > 0 and height > 0:
+        win.resize(width, height)
+    _capture(win, out)
+
+
+# ---------------------------------------------------------------------------
+# Kind: tabs — StandaloneWindow.from_tree (tabbed leaf-per-tool layout)
+# ---------------------------------------------------------------------------
+
+def _render_tabs(
+    tree_path: Path, out: Path, width: int, height: int,
+) -> None:
+    """Render a ``StandaloneWindow`` built from a ``.scriptreetree`` —
+    one tab per leaf tool, no command-line, no extra-args (the
+    in-window view a user sees when launching a tree from a cell)."""
+    _ensure_app()
+    from scriptree.ui.standalone_window import StandaloneWindow
+
+    if tree_path.suffix.lower() != ".scriptreetree":
+        raise ValueError(
+            f"tabs mode needs a .scriptreetree, got {tree_path.suffix!r}"
+        )
+    win = StandaloneWindow.from_tree(str(tree_path.resolve()))
+    if width > 0 and height > 0:
+        win.resize(width, height)
+    _capture(win, out)
+
+
+# ---------------------------------------------------------------------------
+# Composite helper — grab two-or-more widgets onto a single pixmap.
+# ---------------------------------------------------------------------------
+
+def _capture_composite(
+    placements: "list[tuple[QWidget, QPoint]]",
+    out_path: Path,
+    *,
+    bg: QColor = QColor(245, 245, 248),
+    pad: int = 24,
+) -> None:
+    """Render every widget in ``placements`` (a list of
+    ``(widget, top_left_offset)`` tuples) onto a single PNG.
+
+    The composite canvas is sized to fit every widget plus ``pad`` px
+    of margin on every side.  Background is filled with ``bg`` so the
+    image is not transparent (Word / GitHub READMEs handle solid
+    backgrounds better).  No widget is ever shown — every grab is
+    against an off-screen widget (Qt's grab() drives paintEvent
+    synchronously).
+    """
+    app = _ensure_app()
+    if not placements:
+        raise ValueError("_capture_composite: empty placements list")
+
+    # Settle every widget's layout before sizing the canvas.
+    for w, _pt in placements:
+        if w.size().width() == 0 or w.size().height() == 0:
+            w.adjustSize()
+    for _ in range(3):
+        app.processEvents()
+
+    # Compute canvas bounds.
+    min_x = min(pt.x() for _w, pt in placements)
+    min_y = min(pt.y() for _w, pt in placements)
+    max_x = max(pt.x() + w.width() for w, pt in placements)
+    max_y = max(pt.y() + w.height() for w, pt in placements)
+    cw = (max_x - min_x) + 2 * pad
+    ch = (max_y - min_y) + 2 * pad
+
+    canvas = QPixmap(cw, ch)
+    canvas.fill(bg)
+    painter = QPainter(canvas)
+    try:
+        for w, pt in placements:
+            pm = w.grab()
+            if pm.isNull():
+                _log(
+                    f"_capture_composite: skipping null grab for "
+                    f"{w.__class__.__name__}"
+                )
+                continue
+            painter.drawPixmap(
+                pt.x() - min_x + pad,
+                pt.y() - min_y + pad,
+                pm,
+            )
+    finally:
+        painter.end()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ok = canvas.save(str(out_path), "PNG")
+    if not ok:
+        raise RuntimeError(f"_capture_composite: failed to write {out_path}")
+    _log(f"wrote {out_path} ({canvas.width()}x{canvas.height()} px)")
+
+
+# ---------------------------------------------------------------------------
+# Kind: forest — cell docked to a forest cluster (composite)
+# ---------------------------------------------------------------------------
+
+def _render_forest(
+    catalog_path: Path, out: Path, size_px: int,
+) -> None:
+    """Render a forest hub cell with the catalog's cell docked next
+    to it — composed onto a single PNG.
+
+    Shows the user "this is what your tool looks like when it's a
+    forest member on the desktop": the forest hex (with the bundled
+    forest glyph) plus the tool's cell beside it at an edge-adjacent
+    slot.  Useful for tool-author screenshots that want to convey
+    "yes, this lives in the ScripTreeRing launcher cluster."
+    """
+    _ensure_app()
+    from scriptree.shell.branding_loader import load_branding
+    from scriptree.shell.cell_window import CellWindow
+
+    branding = load_branding()
+
+    forest = CellWindow(branding, role="master")
+    forest._is_forest_master = True
+    if size_px > 0:
+        try:
+            forest.apply_size_change(int(size_px))
+        except Exception:  # noqa: BLE001
+            forest.resize(size_px, size_px)
+    # Give the forest its bundled glyph the same way ring_io does.
+    try:
+        from scriptree.shell.icon_assets import (
+            BUNDLED_FORMAT, bundled_icon_b64,
+        )
+        b64 = bundled_icon_b64("forest")
+        if b64:
+            forest._icon_data_b64 = b64
+            forest._icon_data_format = BUNDLED_FORMAT
+    except Exception as exc:  # noqa: BLE001
+        _log(f"forest: bundled-icon load failed: {exc!r}")
+
+    cell = CellWindow(branding, catalog_path=str(catalog_path.resolve()))
+    if size_px > 0:
+        try:
+            cell.apply_size_change(int(size_px))
+        except Exception:  # noqa: BLE001
+            cell.resize(size_px, size_px)
+
+    # Place the cell at the forest's east edge slot using the
+    # standard neighbour-slot math.  Forest at (0, 0); cell to its
+    # east edge (+size, 0 in widget-coords for flat-top hex).
+    forest_pos = QPoint(0, 0)
+    cell_pos = QPoint(int(size_px * 1.0), 0)
+
+    # Wire link membership so the cell renders with its
+    # forest-linked outline tint (no green free-cell tint).
+    forest._members[cell._id] = QPoint(cell_pos)
+    forest._positioned.add(cell._id)
+    cell._group_master_id = forest._id
+    cell._link_parent_id = forest._id
+
+    _capture_composite(
+        [(forest, forest_pos), (cell, cell_pos)],
+        out,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kind: menu — forest hub + its merged tree-popup menu (composite)
+# ---------------------------------------------------------------------------
+
+def _render_menu(
+    catalog_path: Path, out: Path, size_px: int,
+) -> None:
+    """Render a forest hub cell with the catalog's tree popup menu
+    rendered below it — composed onto a single PNG.
+
+    Shows the user "this is what the user sees when they
+    double-click the forest": the forest hex on top, the merged
+    menu tree below it.  Uses the same ``build_tree_popup_menu``
+    code path the live shell uses, so the menu's content matches
+    runtime exactly (header label, search bar, sub-menus per
+    catalog member).
+    """
+    _ensure_app()
+    from scriptree.shell.branding_loader import load_branding
+    from scriptree.shell.cell_window import CellWindow
+    from scriptree.shell.tree_popup import build_tree_popup_menu
+
+    branding = load_branding()
+
+    forest = CellWindow(branding, role="master")
+    forest._is_forest_master = True
+    if size_px > 0:
+        try:
+            forest.apply_size_change(int(size_px))
+        except Exception:  # noqa: BLE001
+            forest.resize(size_px, size_px)
+    try:
+        from scriptree.shell.icon_assets import (
+            BUNDLED_FORMAT, bundled_icon_b64,
+        )
+        b64 = bundled_icon_b64("forest")
+        if b64:
+            forest._icon_data_b64 = b64
+            forest._icon_data_format = BUNDLED_FORMAT
+    except Exception as exc:  # noqa: BLE001
+        _log(f"menu: bundled-icon load failed: {exc!r}")
+
+    # Add the catalog as a forest member so the merged menu has
+    # content to populate from.  The cell isn't drawn — we only
+    # want the menu render below the forest hex.
+    member = CellWindow(branding, catalog_path=str(catalog_path.resolve()))
+    forest._members[member._id] = QPoint(0, 0)
+    forest._positioned.add(member._id)
+    member._group_master_id = forest._id
+    member._link_parent_id = forest._id
+
+    menu = build_tree_popup_menu(forest)
+    menu.adjustSize()
+    # Force a settle so the QMenu computes its geometry.
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
+
+    # Place the menu just below the forest hub, centred on it.
+    forest_pos = QPoint(0, 0)
+    menu_pos = QPoint(
+        size_px // 2 - menu.width() // 2,
+        size_px + 8,
+    )
+
+    _capture_composite(
+        [(forest, forest_pos), (menu, menu_pos)],
+        out,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Batch mode
 # ---------------------------------------------------------------------------
 
@@ -299,6 +619,17 @@ def _batch(
                     _log(f"  skipping {p} — 'tree' needs .scriptreetree")
                     continue
                 _render_tree(p, out, width, height)
+            elif effective_kind == "editor":
+                _render_editor(p, out, width, height)
+            elif effective_kind == "tabs":
+                if suffix != ".scriptreetree":
+                    _log(f"  skipping {p} — 'tabs' needs .scriptreetree")
+                    continue
+                _render_tabs(p, out, width, height)
+            elif effective_kind == "forest":
+                _render_forest(p, out, size_px)
+            elif effective_kind == "menu":
+                _render_menu(p, out, size_px)
             else:
                 _log(f"  unknown kind {effective_kind!r}; skipping {p}")
                 continue
@@ -323,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "kind",
         nargs="?",
-        choices=["cell", "form", "tree"],
+        choices=["cell", "form", "tree", "editor", "tabs", "forest", "menu"],
         help=(
             "What to capture.  Omit with --batch to auto-pick per file "
             "(.scriptree → form, .scriptreetree → tree)."
@@ -449,6 +780,21 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             _render_tree(inp, out, args.width, args.height)
+        elif args.kind == "editor":
+            _render_editor(inp, out, args.width, args.height)
+        elif args.kind == "tabs":
+            if inp.suffix.lower() != ".scriptreetree":
+                print(
+                    f"screenshooter: kind='tabs' requires a "
+                    f".scriptreetree input.",
+                    file=sys.stderr,
+                )
+                return 2
+            _render_tabs(inp, out, args.width, args.height)
+        elif args.kind == "forest":
+            _render_forest(inp, out, args.cell_size)
+        elif args.kind == "menu":
+            _render_menu(inp, out, args.cell_size)
     except Exception as exc:  # noqa: BLE001
         print(f"screenshooter: FAIL: {exc!r}", file=sys.stderr)
         import traceback as _tb

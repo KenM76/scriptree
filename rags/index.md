@@ -154,3 +154,80 @@ gives the per-topic slice.
   controls in the Settings dialog.  Alpha preserved across
   changes; hue slider always full S/V.
   → `rags/lessons/cell_fill_color_picker.md`
+- [v3-architecture] **link_dock_graph_split**: v0.8.0 split the
+  conflated `_group_master_id` into `_link_parent_id` (group
+  membership: forest→rings→cells) and `_dock_partner_id` /
+  `_dock_edge` / `_dock_children_by_edge` (spatial adjacency).
+  Invariants L1-L5 in `link_dock_audit.py`. Cells always linked
+  to forest-or-ring. → `rags/lessons/link_dock_graph_split.md`
+- [v3-architecture] **repack_animation_race_dock_position**:
+  `_repack_members` animates async (260 ms); calling
+  `_set_cell_dock` immediately after reads stale geometry. Pass
+  `child_centre=` from the post-repack target.
+  → `rags/lessons/repack_animation_race_dock_position.md`
+- [v3-architecture] **forest_never_prompts_save**: forest excluded
+  from `_ring_needs_save_prompt`; `_close_all_related` pre-walks
+  nested rings once to stop double save prompts.
+  → `rags/lessons/forest_never_prompts_save.md`
+- [v3-architecture] **move_to_cascades_dock_children**:
+  `CellWindow.move_to` recursively cascades delta to dock children
+  with re-entry guard `_GROUP_MOVE_IN_PROGRESS`. Used by
+  snap-commit and `dock_with`.
+  → `rags/lessons/move_to_cascades_dock_children.md`
+- [v3-architecture] **per_member_relocation_vs_rigid_settle**: for
+  docked rings, use new
+  `_relocate_overlapping_members_individually` (`cell_window.py:8728`)
+  instead of `_settle_no_overlap` — keeps master at the snap slot,
+  re-slots only overlapping members.
+  → `rags/lessons/per_member_relocation_vs_rigid_settle.md`
+- [v3-architecture] **fresh_ring_not_in_forest_positioned**: fresh
+  ring spawn must NOT add itself to `forest._positioned` or
+  `forest._dock_partners`; link-parent + `_members` entry only.
+  Otherwise forest-drag drags the unattached ring.
+  → `rags/lessons/fresh_ring_not_in_forest_positioned.md`
+- [v3-architecture] **recursive_merged_menu_population**:
+  `tree_popup` master path recurses into members (depth-capped at
+  8); masters become sub-menus titled via `_popup_header_text`.
+  Don't drop non-catalog members — they're rings.
+  → `rags/lessons/recursive_merged_menu_population.md`
+- [v3-architecture] **ring_auto_name_session_serial**: rings get
+  auto-name via `_RING_SERIAL` (`cell_window.py:2677`);
+  `_popup_header_text` fall-through `_catalog_path` →
+  `_text_label` → `_auto_ring_name` (forest excluded). Loaded
+  rings name from filename.
+  → `rags/lessons/ring_auto_name_session_serial.md`
+- [v3-architecture] **ring_cascade_gated_on_positioned**: ring
+  drag uses `_positioned ∩ _members`, not raw link membership —
+  matches forest's existing behaviour, lets a dragged-off cell
+  stay put on subsequent ring drags.
+  → `rags/lessons/ring_cascade_gated_on_positioned.md`
+- [v3-architecture] **shake_to_close_ring_prompt**:
+  `_close_ring_via_shake_with_prompt` (`cell_window.py:7745`)
+  fires Save/Discard/Cancel and re-links members to forest on
+  disband. Forest excluded from shake detection.
+  → `rags/lessons/shake_to_close_ring_prompt.md`
+- [v3-architecture] **snap_engine_wire_on_fresh_master**:
+  `_try_spawn_master` must call
+  `ring_main._wire_hex_to_snap(master)` after `master.show()` —
+  otherwise snap preview never renders on freshly-spawned masters.
+  → `rags/lessons/snap_engine_wire_on_fresh_master.md`
+- [pyside6] **hover_tooltip_screen_clamp**: cell-rect anchor +
+  multi-monitor `screenAt` clamp + flip-above on off-bottom; fixed
+  `(+12, +18)` offset goes off-screen on edges.
+  → `rags/lessons/hover_tooltip_screen_clamp.md`
+- [v3-process] **combridge_bundle_workflow**: stage combridge
+  CLI + plugin subdirs side-by-side then
+  `lib/install_combridge.ps1 -LocalSource`. Verify-Install's flat
+  `Get-ChildItem` is a known false-negative warning.
+  `make_portable.py --bundle-combridge` chains it.
+  → `rags/lessons/combridge_bundle_workflow.md`
+- [v3-process] **make_portable_non_interactive**: non-TTY runners
+  need `--scriptreeapps {keep|overwrite|backup}` explicitly or
+  the script hangs on the disposition prompt. Release recipe:
+  `--force --no-smoke-test --zip --scriptreeapps overwrite`.
+  → `rags/lessons/make_portable_non_interactive.md`
+- [v3-process] **dropbox_slows_python_on_subst**: Python startup
+  from `R:\` (subst into a Dropbox-synced folder) takes 40+ s with
+  Dropbox running, ~70 ms killed. Kill Dropbox before any release
+  build or unattended R:\ work.
+  → `rags/lessons/dropbox_slows_python_on_subst.md`

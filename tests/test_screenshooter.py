@@ -101,6 +101,104 @@ class TestRenders:
         assert out.is_file()
         assert out.stat().st_size > 500
 
+    # ──────────────────────────────────────────────────────────────────
+    # v0.8.0a2+: four new kinds — editor / tabs / forest / menu.
+    # See the docstring at the top of ``screenshooter.py`` for what
+    # each kind captures.  These tests are full subprocess round-trips
+    # to guard against import-time regressions.
+    # ──────────────────────────────────────────────────────────────────
+
+    def test_editor_render_for_tree(self, tmp_path: Path) -> None:
+        """``editor`` mode on a ``.scriptreetree`` should load the
+        editor MainWindow, auto-select the first leaf so the form +
+        output + command-line docks populate, then capture."""
+        out = tmp_path / "editor.png"
+        result = _run(
+            "editor", str(_real_tree_path()),
+            "--out", str(out),
+            "--width", "1200", "--height", "780",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        # Editor frame + populated form should be considerably larger
+        # than a bare cell/form capture.
+        assert out.stat().st_size > 5000
+
+    def test_editor_render_for_tool(self, tmp_path: Path) -> None:
+        """``editor`` mode on a single ``.scriptree`` tool loads the
+        tool directly without the tree-leaf walk."""
+        out = tmp_path / "editor_tool.png"
+        result = _run(
+            "editor", str(_real_tool_path()),
+            "--out", str(out),
+            "--width", "1200", "--height", "780",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 5000
+
+    def test_tabs_render(self, tmp_path: Path) -> None:
+        """``tabs`` mode builds a ``StandaloneWindow.from_tree`` so
+        every leaf gets its own tab; capture the tabbed runner."""
+        out = tmp_path / "tabs.png"
+        result = _run(
+            "tabs", str(_real_tree_path()),
+            "--out", str(out),
+            "--width", "900", "--height", "600",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 3000
+
+    def test_tabs_rejects_scriptree(self, tmp_path: Path) -> None:
+        """A ``.scriptree`` input has no tree structure → ``tabs``
+        must error out cleanly with exit-code 2 (not a crash)."""
+        out = tmp_path / "tabs_bad.png"
+        result = _run(
+            "tabs", str(_real_tool_path()),
+            "--out", str(out),
+        )
+        assert result.returncode == 2, (
+            f"stderr={result.stderr!r}"
+        )
+
+    def test_forest_render(self, tmp_path: Path) -> None:
+        """``forest`` mode composes a forest hub + the catalog's
+        cell into a single PNG so the user can see "what this looks
+        like when docked to the workspace forest"."""
+        out = tmp_path / "forest.png"
+        result = _run(
+            "forest", str(_real_tool_path()),
+            "--out", str(out),
+            "--cell-size", "96",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 1000
+
+    def test_menu_render(self, tmp_path: Path) -> None:
+        """``menu`` mode composes a forest hub + its merged
+        tree-popup menu (the double-click-forest result)."""
+        out = tmp_path / "menu.png"
+        result = _run(
+            "menu", str(_real_tree_path()),
+            "--out", str(out),
+            "--cell-size", "96",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 1000
+
 
 # ===========================================================================
 # Auto-pick by suffix

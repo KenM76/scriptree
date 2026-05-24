@@ -35,7 +35,7 @@
     {
       "id": "kind",
       "label": "What to render",
-      "description": "cell = the hexagonal cell widget bound to the catalog. form = the parameter form view of a .scriptree (what the standalone runner shows). tree = the popup-menu view of a .scriptreetree. Leave on auto with --batch to pick per file: .scriptree -> form, .scriptreetree -> tree.",
+      "description": "cell = the hexagonal cell widget bound to the catalog. form = the parameter form view of a .scriptree (what the standalone runner shows). tree = the popup-menu view of a .scriptreetree. editor = the full editor MainWindow with tree + form + output + command-line docks all visible (auto-selects the first leaf if you give it a .scriptreetree). tabs = the StandaloneWindow built from a .scriptreetree with one tab per leaf tool. forest = a composite image of the workspace forest hub with the catalog's cell docked next to it. menu = a composite image of the forest hub with its merged tree-popup menu rendered below. Leave on auto with --batch to pick per file: .scriptree -> form, .scriptreetree -> tree.",
       "type": "enum",
       "widget": "dropdown",
       "required": false,
@@ -43,12 +43,20 @@
       "choices": [
         "cell",
         "form",
-        "tree"
+        "tree",
+        "editor",
+        "tabs",
+        "forest",
+        "menu"
       ],
       "choice_labels": [
-        "cell  \u2014 hexagonal cell visual",
-        "form  \u2014 parameter form view",
-        "tree  \u2014 tree-popup view"
+        "cell    \u2014 hexagonal cell visual",
+        "form    \u2014 parameter form view",
+        "tree    \u2014 tree-popup view",
+        "editor  \u2014 full editor (tree + form + output + cmd line)",
+        "tabs    \u2014 standalone window with one tab per leaf tool",
+        "forest  \u2014 cell docked to the workspace forest hub",
+        "menu    \u2014 forest hub + double-click merged menu"
       ]
     },
     {

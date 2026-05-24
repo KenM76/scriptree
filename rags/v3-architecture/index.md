@@ -119,3 +119,68 @@ design.
   colour (not a full HSV editor — power users type hex directly).
   +28 tests.
   → `rags/lessons/cell_fill_color_picker.md`
+- [v3-architecture] **link_dock_graph_split**: v0.8.0 split the
+  single `_group_master_id` into two orthogonal graphs:
+  `_link_parent_id` (forest→rings→cells membership) and
+  `_dock_partner_id`/`_dock_edge`/`_dock_children_by_edge`
+  (spatial edge adjacency). Invariants L1-L5 in
+  `link_dock_audit.py`. Always-linked rule: cells link to forest or
+  a ring, never orphan. → `rags/lessons/link_dock_graph_split.md`
+- [v3-architecture] **repack_animation_race_dock_position**:
+  `_repack_members` is async (260 ms QPropertyAnimation); calling
+  `_set_cell_dock` immediately after reads stale `child.geometry()`
+  and silently fails edge detection. Pass `child_centre=` kwarg
+  from `master._members[mid]` instead.
+  → `rags/lessons/repack_animation_race_dock_position.md`
+- [v3-architecture] **forest_never_prompts_save**:
+  `_ring_needs_save_prompt` (`cell_window.py:7657`) must early-
+  return for `_is_forest_master`; `_close_all_related` pre-walks
+  nested rings exactly once to avoid double save prompts.
+  → `rags/lessons/forest_never_prompts_save.md`
+- [v3-architecture] **move_to_cascades_dock_children**:
+  `CellWindow.move_to` cascades delta to every cell in
+  `_dock_children_by_edge`; children's `move_to` re-cascades for
+  chains. `_GROUP_MOVE_IN_PROGRESS` guard prevents re-entry on
+  mutual-dock cycles.
+  → `rags/lessons/move_to_cascades_dock_children.md`
+- [v3-architecture] **per_member_relocation_vs_rigid_settle**:
+  `_settle_no_overlap` shifts a master+positioned set as a rigid
+  block — wrong when master is docked. New
+  `_relocate_overlapping_members_individually` (cell_window.py:8728)
+  fixes the master at the dock slot and re-slots only the
+  overlapping members.
+  → `rags/lessons/per_member_relocation_vs_rigid_settle.md`
+- [v3-architecture] **fresh_ring_not_in_forest_positioned**:
+  spawning a fresh ring while a forest exists must NOT add it to
+  `forest._positioned` or `forest._dock_partners`. Link-parent +
+  `_members` entry only. Otherwise forest-drag drags the
+  unattached ring.
+  → `rags/lessons/fresh_ring_not_in_forest_positioned.md`
+- [v3-architecture] **recursive_merged_menu_population**:
+  `tree_popup.show_tree_popup_for` master path must recurse into
+  members (depth-cap 8) — masters become sub-menus titled via
+  `_popup_header_text`. Filtering "no catalog" was too aggressive
+  and hid rings from the forest menu.
+  → `rags/lessons/recursive_merged_menu_population.md`
+- [v3-architecture] **ring_auto_name_session_serial**: rings get
+  auto-name via session-global `_RING_SERIAL` counter (cell_window.py
+  :2677); `_popup_header_text` fall-through `_catalog_path` →
+  `_text_label` → `_auto_ring_name`. Forest excluded from the
+  fall-through. Loaded rings name from filename.
+  → `rags/lessons/ring_auto_name_session_serial.md`
+- [v3-architecture] **ring_cascade_gated_on_positioned**: ring
+  drag uses the `_positioned` subset of `_members`, not raw link
+  membership — matches forest's existing behaviour and lets a
+  dragged-off cell stay put when the ring later moves.
+  → `rags/lessons/ring_cascade_gated_on_positioned.md`
+- [v3-architecture] **shake_to_close_ring_prompt**: replaces
+  v0.6.x auto-close on quorum loss; `_close_ring_via_shake_with_prompt`
+  (cell_window.py:7745) fires Save/Discard/Cancel, then re-links
+  members to forest on disband per always-linked spec. Forest
+  excluded from shake.
+  → `rags/lessons/shake_to_close_ring_prompt.md`
+- [v3-architecture] **snap_engine_wire_on_fresh_master**:
+  `_try_spawn_master` must call `ring_main._wire_hex_to_snap(master)`
+  after `master.show()` — without it, snap preview never renders on
+  freshly-spawned masters even though the engine still emits.
+  → `rags/lessons/snap_engine_wire_on_fresh_master.md`

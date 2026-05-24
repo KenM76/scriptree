@@ -33,3 +33,7 @@ subprocess oddities encountered while building V3.
   works under a `QMainWindow` ancestor; embed an internal
   `QMainWindow` inside a `QWidget` to host real dockable panels.
   → `rags/lessons/qmainwindow_as_child_widget.md`
+- [pyside6] **hover_tooltip_screen_clamp**: hover tooltips need
+  cell-rect anchor + multi-monitor `screenAt` clamp + flip-above
+  when off-bottom; fixed `(+12, +18)` offset goes off-screen on
+  edges. → `rags/lessons/hover_tooltip_screen_clamp.md`

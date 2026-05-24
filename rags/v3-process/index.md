@@ -31,3 +31,22 @@ diagnostics conventions.
   `_log()` helper; lets a single-tag `findstr` isolate one
   subsystem's activity.
   → `rags/lessons/diagnostics_tagged_stderr_logs.md`
+- [v3-process] **combridge_bundle_workflow**: separate
+  `KenM76/combridge` repo builds CLI + `plugins/<Name>/` subdirs
+  via per-plugin `CopyToPluginsRoot AfterTargets="Build"`; stage
+  side-by-side then `lib/install_combridge.ps1 -LocalSource`.
+  Verify-Install's flat `Get-ChildItem` is a known false-negative
+  warning. `make_portable.py --bundle-combridge` chains it.
+  → `rags/lessons/combridge_bundle_workflow.md`
+- [v3-process] **make_portable_non_interactive**: PowerShell
+  `Start-Process` / non-TTY runners need `--scriptreeapps
+  {keep|overwrite|backup}` explicitly or the script hangs on the
+  ScripTreeApps disposition prompt. Release recipe:
+  `--force --no-smoke-test --zip --scriptreeapps overwrite`.
+  → `rags/lessons/make_portable_non_interactive.md`
+- [v3-process] **dropbox_slows_python_on_subst**: Python startup
+  from `R:\` (subst into `D:\Stanley Dropbox\Resource`) takes 40+
+  seconds with Dropbox running, ~70 ms with it killed (~600×
+  difference). Kill Dropbox before release builds and any
+  unattended R:\ work.
+  → `rags/lessons/dropbox_slows_python_on_subst.md`

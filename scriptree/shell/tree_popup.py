@@ -937,13 +937,20 @@ def _popup_header_text(hex_win) -> str:  # noqa: ANN001
 # Public API
 # ---------------------------------------------------------------------------
 
-def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
-    """Pop up a tree menu of the cell's catalog (or the master's
-    merged catalog list).  Closes when the user picks an action or
-    clicks elsewhere.
+def build_tree_popup_menu(hex_win) -> QMenu:  # noqa: ANN001 — CellWindow
+    """Build (but do not show) the tree-popup ``QMenu`` for ``hex_win``.
 
-    Position: just below the hexagon, horizontally centred on it.
-    Falls back to the cursor position if mapToGlobal fails.
+    Factored out of :func:`show_tree_popup_for` so the menu can be
+    captured by ``screenshooter.py`` (which never calls
+    ``widget.show()``).  The returned menu has its header label,
+    catalog items, search bar, and (for masters) nested-ring
+    sub-menus all attached.  Caller is responsible for ``exec()``-ing
+    or ``popup()``-ing the menu — or for ``grab()``-bing it for a
+    PNG capture.
+
+    The implementation mirrors ``show_tree_popup_for`` exactly up to
+    the show step; ``show_tree_popup_for`` calls this and then
+    positions / pops up.
     """
     role = getattr(hex_win, "role", "standalone")
 
@@ -1017,6 +1024,33 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
         hex_win=hex_win,
     )
 
+    # v0.6.22 — re-apply the menu-appearance scale AFTER the menu
+    # is fully built so submenus added by _add_node_to_menu /
+    # _build_menu_for_catalog get the same font + icon size.
+    # The pre-build call (early in this function) only catches the
+    # top level + the live-search QWidgetAction; the recursive
+    # walk here covers every submenu added by the builders above.
+    try:
+        apply_menu_appearance(menu)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"build_tree_popup_menu: re-apply after build failed: {exc!r}")
+
+    # Stash a reference to the search edit on the menu so callers
+    # that show the menu can focus it after exec() begins.
+    menu._search_edit = search_edit  # type: ignore[attr-defined]
+    return menu
+
+
+def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
+    """Pop up a tree menu of the cell's catalog (or the master's
+    merged catalog list).  Closes when the user picks an action or
+    clicks elsewhere.
+
+    Position: just below the hexagon, horizontally centred on it.
+    Falls back to the cursor position if mapToGlobal fails.
+    """
+    menu = build_tree_popup_menu(hex_win)
+
     # Position: below-centre of the hex.
     try:
         global_pt = hex_win.mapToGlobal(
@@ -1046,18 +1080,8 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     # the user can type immediately (Spotlight/Start-menu feel).
     # QMenu forwards key events to a focused QWidgetAction widget;
     # the 0-ms timer defers until after exec() has shown the menu.
+    search_edit = getattr(menu, "_search_edit", None)
     if search_edit is not None:
         QTimer.singleShot(0, search_edit.setFocus)
-
-    # v0.6.22 — re-apply the menu-appearance scale AFTER the menu
-    # is fully built so submenus added by _add_node_to_menu /
-    # _build_menu_for_catalog get the same font + icon size.
-    # The pre-build call (early in this function) only catches the
-    # top level + the live-search QWidgetAction; the recursive
-    # walk here covers every submenu added by the builders above.
-    try:
-        apply_menu_appearance(menu)
-    except Exception as exc:  # noqa: BLE001
-        _log(f"show_tree_popup_for: re-apply after build failed: {exc!r}")
 
     menu.exec(global_pt)
