@@ -221,7 +221,25 @@ class _CellHoverTip:
         return lbl
 
     @classmethod
-    def show(cls, text: str, global_pt) -> None:  # noqa: ANN001
+    def show(  # noqa: ANN001
+        cls, text: str, global_pt, *, cell_rect=None,
+    ) -> None:
+        """Display the hover tip near ``global_pt``, optionally
+        anchored on a cell's global bounding rect for clamping.
+
+        v0.8.0a2 Bug 12 — earlier revisions used a fixed +12, +18
+        offset from ``global_pt`` (the cell's bottom-centre) which
+        pushed the tip off the right edge of the screen for cells
+        near the right edge and dangled it noticeably below the
+        cell.  When ``cell_rect`` is provided the tip is centred
+        horizontally on the cell and parked 6 px below the cell's
+        bottom edge; both axes are then clamped against the
+        containing screen's available rect.  If clamping would
+        still leave the tip overlapping the cell on the bottom
+        edge, the tip flips ABOVE the cell instead.  When
+        ``cell_rect`` is None (legacy call sites) the old offset is
+        kept as a fallback.
+        """
         if not text:
             cls.hide()
             return
@@ -229,12 +247,50 @@ class _CellHoverTip:
             lbl = cls._widget()
             lbl.setText(text)
             lbl.adjustSize()
-            # Offset 12 px down-right of the cursor so the cursor
-            # doesn't sit on top of the label (and won't generate a
-            # leaveEvent on the cell from us covering it).  We made
-            # the label transparent-for-input anyway, but the offset
-            # is the polite default.
-            lbl.move(global_pt.x() + 12, global_pt.y() + 18)
+            w = lbl.width()
+            h = lbl.height()
+
+            if cell_rect is not None:
+                # Centre under the cell, 6 px below the cell bottom.
+                x = cell_rect.center().x() - w // 2
+                y = cell_rect.bottom() + 6
+            else:
+                # Fallback (cursor-anchored).
+                x = global_pt.x() + 12
+                y = global_pt.y() + 18
+
+            # Clamp to the screen containing (x, y) — using the
+            # tip's intended top-left so we pick the right monitor
+            # for multi-monitor layouts.
+            from PySide6.QtGui import QGuiApplication
+            screen = (
+                QGuiApplication.screenAt(QPoint(x, y))
+                or QGuiApplication.primaryScreen()
+            )
+            if screen is not None:
+                avail = screen.availableGeometry()
+                # Horizontal clamp: if off the right edge, shift
+                # left; if off the left edge, shift right.
+                if x + w > avail.right():
+                    x = avail.right() - w - 4
+                if x < avail.left():
+                    x = avail.left() + 4
+                # Vertical clamp: if off the bottom AND we have the
+                # cell rect, flip above the cell.  Otherwise just
+                # shift the tip back on-screen.
+                if y + h > avail.bottom():
+                    if cell_rect is not None:
+                        flipped = cell_rect.top() - h - 6
+                        if flipped >= avail.top():
+                            y = flipped
+                        else:
+                            y = avail.bottom() - h - 4
+                    else:
+                        y = avail.bottom() - h - 4
+                if y < avail.top():
+                    y = avail.top() + 4
+
+            lbl.move(x, y)
             lbl.show()
             lbl.raise_()
         except Exception as exc:  # noqa: BLE001
@@ -5670,17 +5726,25 @@ class CellWindow(QMainWindow):
             title = _popup_header_text(self)
             if not title:
                 return
-            # Anchor below-centre of the cell.  Falls back to cursor
+            # Anchor below-centre of the cell + pass the cell's
+            # global bounding rect so _CellHoverTip can centre the
+            # tip on the cell and flip / clamp it against screen
+            # edges (v0.8.0a2 Bug 12).  Falls back to cursor
             # position if mapToGlobal raises (unlikely but
             # belt-and-suspenders).
+            cell_rect = None
             try:
+                tl = self.mapToGlobal(QPoint(0, 0))
                 anchor = self.mapToGlobal(
                     QPoint(self.width() // 2, self.height())
+                )
+                cell_rect = QRect(
+                    tl.x(), tl.y(), self.width(), self.height(),
                 )
             except Exception:  # noqa: BLE001
                 from PySide6.QtGui import QCursor
                 anchor = QCursor.pos()
-            _CellHoverTip.show(title, anchor)
+            _CellHoverTip.show(title, anchor, cell_rect=cell_rect)
         except Exception as exc:  # noqa: BLE001
             _log(f"_show_hover_tip_now: {exc!r}")
 
