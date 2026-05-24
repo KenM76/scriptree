@@ -80,14 +80,40 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QWidget
-
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+
+# v0.8.0a4 — inject the vendored ``lib/pypi/`` onto ``sys.path``
+# the same way ``run_scriptreering.py`` does, so the bundled PySide6
+# is picked up when the user double-clicks ``run_screenshooter.bat``
+# (which calls system Python directly without the editor's import
+# prelude).  Mirror the editor launcher's logic in miniature:
+# prepend lib/pypi if it exists and is non-empty, and also set
+# QT_PLUGIN_PATH so Qt finds its bundled platform / image plugins.
+def _inject_vendored_pypi() -> None:
+    pypi = HERE / "lib" / "pypi"
+    if not pypi.is_dir():
+        return
+    entries = [p for p in pypi.iterdir() if p.name != ".gitkeep"]
+    if not entries:
+        return
+    pypi_str = str(pypi)
+    if pypi_str not in sys.path:
+        sys.path.insert(0, pypi_str)
+    import os
+    qt_plugin_dir = pypi / "PySide6" / "plugins"
+    if qt_plugin_dir.is_dir():
+        os.environ.setdefault("QT_PLUGIN_PATH", str(qt_plugin_dir))
+
+
+_inject_vendored_pypi()
+
+
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QPainter, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 
 def _log(msg: str) -> None:
@@ -657,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["cell", "form", "tree", "editor", "tabs", "forest", "menu"],
         help=(
             "What to capture.  Omit with --batch to auto-pick per file "
-            "(.scriptree → form, .scriptreetree → tree)."
+            "(.scriptree -> form, .scriptreetree -> tree)."
         ),
     )
     parser.add_argument(

@@ -2,12 +2,14 @@
 
 A universal GUI generator for command-line tools. Define a tool once — by pointing ScripTree at an executable or building a form from scratch — and run it through a clean GUI with labeled fields, dropdowns, file pickers, and checkboxes.
 
-V3 ships with **two launchers in one installation**:
+V3 ships with **three launchers and a headless screenshot tool in one installation**:
 
 | Launcher | What it does |
 |---|---|
-| **`run_scriptreering.bat`** | The **cell + ring shell**: floating hexagonal launchers on your desktop. Single-click pops up the cell's tool menu; double-click opens the full editor on the cell's catalog. Drag two cells close together to dock them into a *ring* whose menu merges their tools. Save layouts as `.scriptreering` files. See [`help/cell_shell.md`](help/cell_shell.md). |
-| **`run_scriptree.bat`** | The classic **V1 editor**: tool runner, configurations, parser, save/load. Identical behaviour to v0.1.x. The cell shell shells out to this whenever you click a tool — V1 stays the editor; the cell shell is just a launcher. |
+| **`run_scriptreeforest.bat`** | **Primary entry point.** The **forest workspace**: a persistent root cell on your desktop plus every other cell linked under it.  Auto-discovers nearby `.scriptreering` / `.scriptreetree` / `.scriptree` catalogs at startup, restores the saved layout, and adopts new tools as they appear in the workspace folder.  This is what most users double-click after install.  Internally chains into `run_scriptreering.py` with `SCRIPTREE_FOREST_MODE=1` — same Python search, same dependency check, same self-healing.  See [`help/cell_shell.md`](help/cell_shell.md). |
+| **`run_scriptreering.bat`** | The **bare cell + ring shell** (no forest workspace).  Floating hexagonal launchers with no implicit root: each cell stands alone unless you drag two together to dock them into a *ring*.  Single-click pops up the cell's tool menu; double-click opens the full editor on the cell's catalog.  Save layouts as `.scriptreering` files.  Useful when you want a one-off cell on the desktop without the workspace persistence. |
+| **`run_scriptree.bat`** | The classic **V1 editor**: tool runner, configurations, parser, save/load.  Identical behaviour to v0.1.x.  All three shells (forest / ring / cell) shell out to this whenever you click a tool — V1 stays the editor; the shells are just launchers. |
+| **`run_screenshooter.bat`** | The **headless screenshot tool**.  No arguments → opens the screenshooter's GUI form via the V1 editor (labeled fields, dropdowns, file picker — pick what to render and click Run).  With arguments → CLI passthrough to `screenshooter.py` for batch / scripted use.  Captures cells, parameter forms, popup trees, the full editor MainWindow (tree + form + output + cmd-line), the tabbed StandaloneWindow view, the forest hub + cell composite, and the forest hub + merged menu composite — every view ScripTree ships, rendered as PNG without ever flashing a window onto the user's desktop.  Used to generate the per-demo previews on [`scriptree-demos`](https://github.com/KenM76/scriptree-demos) and the documentation screenshots in `help/`. |
 
 ## Installing the portable zip
 
@@ -15,10 +17,14 @@ Download the V3 zip from the Releases page and extract it. The launcher expects 
 
 ```
 <some-folder>/
-├── run_scriptreering.bat   ← cell + ring shell (the usual entry point)
+├── run_scriptreeforest.bat ← forest workspace (PRIMARY — double-click this)
+├── run_scriptreeforest.py
+├── run_scriptreering.bat   ← bare ring shell (no workspace)
 ├── run_scriptreering.py
-├── run_scriptree.bat       ← V1 editor (called as subprocess from the shell)
+├── run_scriptree.bat       ← V1 editor (called as subprocess from the shells)
 ├── run_scriptree.py
+├── run_screenshooter.bat   ← headless screenshot tool (no args → GUI form)
+├── screenshooter.py        ← (CLI; `python screenshooter.py --help` for kinds)
 ├── scriptree/              ← Python package
 │   ├── main.py
 │   ├── shell/              ← cell + ring shell (NEW in V3)
@@ -26,6 +32,9 @@ Download the V3 zip from the Releases page and extract it. The launcher expects 
 ├── branding/
 │   └── branding.config.json
 ├── lib/
+│   ├── combridge/          ← bundled COM-automation runtime
+│   ├── python/             ← portable Python (after install_python.ps1)
+│   └── pypi/               ← vendored PySide6 + deps
 └── ...
 ```
 
@@ -40,16 +49,18 @@ If the launcher still can't find the package, it prints a diagnostic listing exa
 
 # Option A: vendor into the project, trimmed to the ~65 MB minimum (recommended)
 python lib/update_lib.py --trim
-python run_scriptreering.py     # cell shell (preferred entry point)
+python run_scriptreeforest.py    # forest workspace (preferred entry point)
 # or:
-python run_scriptree.py         # V1 editor directly
+python run_scriptreering.py      # bare ring shell (no workspace)
+python run_scriptree.py          # V1 editor directly
+python screenshooter.py --help   # headless screenshot CLI
 
 # Option B: use your system Python environment
 pip install PySide6
-python run_scriptreering.py
+python run_scriptreeforest.py
 ```
 
-Or on Windows, double-click **`run_scriptreering.bat`** for the cell shell, or `run_scriptree.bat` for the editor directly. Either launcher will offer to fetch a portable Python if none is found.
+Or on Windows, double-click **`run_scriptreeforest.bat`** to launch the forest workspace (the usual entry point), `run_scriptreering.bat` for the bare ring shell, `run_scriptree.bat` for the editor directly, or `run_screenshooter.bat` to render PNGs of any tool / tree / cell / forest / popup-menu without ever showing a window on the desktop. Every launcher will offer to fetch a portable Python if none is found.
 
 **Option A makes the folder portable** — after `update_lib.py --trim` runs once, you can zip the entire project folder and drop it on any other machine with the same OS/architecture and Python 3.11+. No pip, no network, no admin rights required. The `--trim` flag strips unused Qt modules (WebEngine, QML, Quick/3D, Multimedia, PDF, Charts, translations, dev tools) — ScripTree only uses `QtCore`/`QtGui`/`QtWidgets`, so you save ~400 MB.
 
@@ -70,22 +81,33 @@ Or on Windows, double-click **`run_scriptreering.bat`** for the cell shell, or `
 
 ```
 ScripTree/
-├── run_scriptree.py        ← main launcher
-├── run_scriptree.bat       ← Windows launcher
-├── run_scriptree.sh        ← Linux / macOS launcher
-├── permissions/            ← capability permission files
-├── lib/                    ← vendored deps (portable install)
-│   ├── requirements.txt    ← pinned versions
-│   ├── update_lib.py       ← install / refresh / audit
-│   ├── _manifests/         ← provenance notes per package
-│   └── pypi/               ← installed packages (gitignored)
-├── ScripTree/              ← application code
-│   ├── scriptree/          ← Python package
-│   ├── tests/              ← test suite (600+ tests)
-│   ├── examples/           ← example tools
-│   ├── help/               ← documentation
-│   └── pyproject.toml
-└── ScripTreeApps/          ← user tools and trees
+├── run_scriptreeforest.bat  ← forest workspace launcher (PRIMARY)
+├── run_scriptreeforest.py
+├── run_scriptreering.bat    ← bare cell + ring shell launcher
+├── run_scriptreering.py
+├── run_scriptree.bat        ← V1 editor launcher (shells out target)
+├── run_scriptree.py
+├── run_screenshooter.bat    ← headless screenshot tool launcher
+├── screenshooter.py         ← screenshot CLI (8 widget kinds — see --help)
+├── permissions/             ← capability permission files
+├── lib/                     ← vendored deps (portable install)
+│   ├── requirements.txt     ← pinned versions
+│   ├── update_lib.py        ← install / refresh / audit
+│   ├── install_python.ps1   ← portable Python downloader
+│   ├── install_combridge.ps1 ← combridge runtime installer
+│   ├── _manifests/          ← provenance notes per package
+│   ├── combridge/           ← bundled COM-automation runtime
+│   ├── python/              ← portable Python (post-install)
+│   └── pypi/                ← installed packages (gitignored)
+├── scriptree/               ← application code
+│   ├── core/                ← schema + IO + runner
+│   ├── shell/               ← cell / ring / forest shell (NEW in V3)
+│   ├── ui/                  ← V1 editor + standalone window
+│   └── plugins/             ← capability plugins
+├── tests/                   ← test suite (1800+ tests)
+├── help/                    ← documentation + LLM authoring docs
+├── pyproject.toml
+└── ScripTreeApps/           ← user tools and trees
 ```
 
 ## Updating vendored dependencies
