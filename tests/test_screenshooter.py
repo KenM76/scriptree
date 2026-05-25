@@ -199,6 +199,88 @@ class TestRenders:
         assert out.is_file()
         assert out.stat().st_size > 1000
 
+    # ── v0.8.0a5: .scriptreeforest input support ──────────────────
+    # The ``forest`` / ``menu`` kinds also accept a full
+    # ``.scriptreeforest`` file (the workspace container).  Forest
+    # mode places one cell per item around the hub; menu mode
+    # populates the merged menu with every item, matching the menu
+    # the live ScripTreeForest pops up on a forest double-click.
+
+    def _write_forest_fixture(self, tmp_path: Path) -> Path:
+        """Write a small valid .scriptreeforest pointing at the
+        public ScripTreeManagement tree + the find-replace tool."""
+        import json
+        fp = tmp_path / "test.scriptreeforest"
+        find_replace = REPO / "ScripTreeApps" / "Demos" / "find-replace" / "find-replace.scriptree"
+        mgmt = REPO / "ScripTreeApps" / "ScripTreeManagement" / "ScripTreeManagement.scriptreetree"
+        fp.write_text(json.dumps({
+            "format": "scriptreeforest",
+            "version": 1,
+            "name": "Test forest",
+            "saved_at": "2026-05-24T00:00:00-04:00",
+            "items": [
+                {
+                    "path": str(mgmt).replace("\\", "/"),
+                    "kind": "tree",
+                    "position": [120, 200],
+                },
+                {
+                    "path": str(find_replace).replace("\\", "/"),
+                    "kind": "tool",
+                    "position": [220, 200],
+                },
+            ],
+            "excluded": [],
+            "auto_discover": {
+                "enabled": False,
+                "roots": [],
+                "include": ["ring", "tree", "tool"],
+                "update_mode": "off",
+            },
+        }, indent=2))
+        return fp
+
+    def test_forest_render_from_scriptreeforest(
+        self, tmp_path: Path,
+    ) -> None:
+        """``forest`` kind on a ``.scriptreeforest`` input docks one
+        cell per item around the hub instead of synthesising a
+        single-member forest from one catalog."""
+        forest_file = self._write_forest_fixture(tmp_path)
+        out = tmp_path / "forest_workspace.png"
+        result = _run(
+            "forest", str(forest_file),
+            "--out", str(out),
+            "--cell-size", "96",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        # A 2-item forest composite is bigger than the single-cell
+        # version (hub + 2 cells vs hub + 1 cell).
+        assert out.stat().st_size > 2000
+
+    def test_menu_render_from_scriptreeforest(
+        self, tmp_path: Path,
+    ) -> None:
+        """``menu`` kind on a ``.scriptreeforest`` populates the
+        merged-menu with every item, so the captured menu matches
+        what the live ScripTreeForest shows on a forest double-
+        click."""
+        forest_file = self._write_forest_fixture(tmp_path)
+        out = tmp_path / "menu_workspace.png"
+        result = _run(
+            "menu", str(forest_file),
+            "--out", str(out),
+            "--cell-size", "96",
+        )
+        assert result.returncode == 0, (
+            f"stderr={result.stderr!r}"
+        )
+        assert out.is_file()
+        assert out.stat().st_size > 1500
+
 
 # ===========================================================================
 # Auto-pick by suffix

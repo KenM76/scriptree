@@ -460,23 +460,15 @@ def _capture_composite(
 # Kind: forest — cell docked to a forest cluster (composite)
 # ---------------------------------------------------------------------------
 
-def _render_forest(
-    catalog_path: Path, out: Path, size_px: int,
-) -> None:
-    """Render a forest hub cell with the catalog's cell docked next
-    to it — composed onto a single PNG.
+def _build_forest_hub(branding, size_px: int):  # noqa: ANN001
+    """Construct a forest master cell with the bundled forest glyph.
 
-    Shows the user "this is what your tool looks like when it's a
-    forest member on the desktop": the forest hex (with the bundled
-    forest glyph) plus the tool's cell beside it at an edge-adjacent
-    slot.  Useful for tool-author screenshots that want to convey
-    "yes, this lives in the ScripTreeRing launcher cluster."
+    Factored out of ``_render_forest`` / ``_render_menu`` so both
+    composite renderers share one configuration path — and so a
+    future ``editor`` render of a ``.scriptreeforest`` file (which
+    needs the same hub) can reuse it without copy-paste.
     """
-    _ensure_app()
-    from scriptree.shell.branding_loader import load_branding
     from scriptree.shell.cell_window import CellWindow
-
-    branding = load_branding()
 
     forest = CellWindow(branding, role="master")
     forest._is_forest_master = True
@@ -485,7 +477,6 @@ def _render_forest(
             forest.apply_size_change(int(size_px))
         except Exception:  # noqa: BLE001
             forest.resize(size_px, size_px)
-    # Give the forest its bundled glyph the same way ring_io does.
     try:
         from scriptree.shell.icon_assets import (
             BUNDLED_FORMAT, bundled_icon_b64,
@@ -495,32 +486,111 @@ def _render_forest(
             forest._icon_data_b64 = b64
             forest._icon_data_format = BUNDLED_FORMAT
     except Exception as exc:  # noqa: BLE001
-        _log(f"forest: bundled-icon load failed: {exc!r}")
+        _log(f"forest hub: bundled-icon load failed: {exc!r}")
+    return forest
 
-    cell = CellWindow(branding, catalog_path=str(catalog_path.resolve()))
-    if size_px > 0:
-        try:
-            cell.apply_size_change(int(size_px))
-        except Exception:  # noqa: BLE001
-            cell.resize(size_px, size_px)
 
-    # Place the cell at the forest's east edge slot using the
-    # standard neighbour-slot math.  Forest at (0, 0); cell to its
-    # east edge (+size, 0 in widget-coords for flat-top hex).
-    forest_pos = QPoint(0, 0)
-    cell_pos = QPoint(int(size_px * 1.0), 0)
+def _forest_member_catalog_paths(forest_path: Path) -> "list[Path]":
+    """Read a ``.scriptreeforest`` and return the absolute catalog
+    paths of every item — same set the live forest auto-loader
+    would expand into cells when ScripTreeForest opens this file."""
+    from scriptree.shell.forest_io import load_forest
 
-    # Wire link membership so the cell renders with its
-    # forest-linked outline tint (no green free-cell tint).
-    forest._members[cell._id] = QPoint(cell_pos)
-    forest._positioned.add(cell._id)
-    cell._group_master_id = forest._id
-    cell._link_parent_id = forest._id
+    forest_def = load_forest(forest_path)
+    paths: list[Path] = []
+    for item in forest_def.items:
+        # Prefer ``catalog_path`` (when set for tree / tool items
+        # to disambiguate from the wrapping ``path``); fall back
+        # to ``path`` which IS the catalog for ring items.
+        cat = item.catalog_path or item.path
+        if not cat:
+            continue
+        p = Path(cat)
+        if not p.exists():
+            _log(f"forest item missing on disk: {p}")
+            continue
+        paths.append(p)
+    return paths
 
-    _capture_composite(
-        [(forest, forest_pos), (cell, cell_pos)],
-        out,
-    )
+
+def _render_forest(
+    catalog_path: Path, out: Path, size_px: int,
+) -> None:
+    """Render a forest hub cell with one or more catalog cells docked
+    around it — composed onto a single PNG.
+
+    Two input modes:
+
+    * ``.scriptree`` / ``.scriptreetree``: synthesise a forest hub and
+      dock the catalog's cell next to it.  Shows "this is what this
+      tool looks like when added to the workspace".
+
+    * ``.scriptreeforest`` (v0.8.0a5+): load the actual forest file
+      and place a cell for EVERY item around the hub at honeycomb
+      neighbour slots.  Shows the user's real workspace layout as
+      a single image — same composition the live forest launcher
+      produces at startup, just rendered off-screen as a PNG.
+    """
+    _ensure_app()
+    from scriptree.shell.branding_loader import load_branding
+    from scriptree.shell.cell_window import CellWindow
+
+    branding = load_branding()
+    forest = _build_forest_hub(branding, size_px)
+
+    # Decide what catalog paths become cells around the hub.
+    if catalog_path.suffix.lower() == ".scriptreeforest":
+        member_paths = _forest_member_catalog_paths(catalog_path)
+        if not member_paths:
+            _log(
+                f"forest: {catalog_path} has no items on disk — "
+                f"capturing the bare hub"
+            )
+    else:
+        member_paths = [catalog_path.resolve()]
+
+    # Place the hub at (0, 0).  Members land at the 6 honeycomb
+    # neighbour slots around it; if there are >6, additional cells
+    # spiral out onto the second ring.
+    placements: list = [(forest, QPoint(0, 0))]
+
+    # Slot offsets in widget-local coordinates relative to the
+    # hub's top-left — flat-top hex with neighbour cells centred
+    # on (cx + dx, cy + dy) where dy uses sqrt(3)/2 vertical stride.
+    import math
+    SQRT3_HALF = math.sqrt(3.0) / 2.0
+    inner_offsets = [
+        (0, -size_px * SQRT3_HALF),            # N
+        (size_px * 0.75, -size_px * SQRT3_HALF / 2),   # NE
+        (size_px * 0.75,  size_px * SQRT3_HALF / 2),   # SE
+        (0,  size_px * SQRT3_HALF),            # S
+        (-size_px * 0.75, size_px * SQRT3_HALF / 2),   # SW
+        (-size_px * 0.75, -size_px * SQRT3_HALF / 2),  # NW
+    ]
+    outer_offsets = [
+        (2 * dx, 2 * dy) for dx, dy in inner_offsets
+    ]
+    slot_offsets = inner_offsets + outer_offsets
+
+    for i, p in enumerate(member_paths):
+        cell = CellWindow(branding, catalog_path=str(p.resolve()))
+        if size_px > 0:
+            try:
+                cell.apply_size_change(int(size_px))
+            except Exception:  # noqa: BLE001
+                cell.resize(size_px, size_px)
+        slot_idx = i % len(slot_offsets)
+        dx, dy = slot_offsets[slot_idx]
+        cell_pos = QPoint(int(round(dx)), int(round(dy)))
+        # Wire link membership so the cell paints with its
+        # forest-linked outline tint (not green free-cell).
+        forest._members[cell._id] = QPoint(cell_pos)
+        forest._positioned.add(cell._id)
+        cell._group_master_id = forest._id
+        cell._link_parent_id = forest._id
+        placements.append((cell, cell_pos))
+
+    _capture_composite(placements, out)
 
 
 # ---------------------------------------------------------------------------
@@ -530,15 +600,24 @@ def _render_forest(
 def _render_menu(
     catalog_path: Path, out: Path, size_px: int,
 ) -> None:
-    """Render a forest hub cell with the catalog's tree popup menu
+    """Render a forest hub cell with its merged tree-popup menu
     rendered below it — composed onto a single PNG.
 
-    Shows the user "this is what the user sees when they
-    double-click the forest": the forest hex on top, the merged
-    menu tree below it.  Uses the same ``build_tree_popup_menu``
-    code path the live shell uses, so the menu's content matches
-    runtime exactly (header label, search bar, sub-menus per
-    catalog member).
+    Two input modes:
+
+    * ``.scriptree`` / ``.scriptreetree``: synthesise a forest hub
+      with one catalog cell as its member, so the merged menu
+      shows that catalog's tools as a single sub-menu.
+
+    * ``.scriptreeforest`` (v0.8.0a5+): load every item from the
+      forest file and add a cell per item to the hub's members.
+      The captured menu is then the user's REAL workspace menu —
+      the same one ScripTreeForest pops up when the user double-
+      clicks the desktop forest hub.
+
+    Uses the same ``build_tree_popup_menu`` code path the live
+    shell uses, so menu contents (header label, search bar,
+    sub-menus per member, nested ring sub-menus) match runtime.
     """
     _ensure_app()
     from scriptree.shell.branding_loader import load_branding
@@ -546,33 +625,28 @@ def _render_menu(
     from scriptree.shell.tree_popup import build_tree_popup_menu
 
     branding = load_branding()
+    forest = _build_forest_hub(branding, size_px)
 
-    forest = CellWindow(branding, role="master")
-    forest._is_forest_master = True
-    if size_px > 0:
-        try:
-            forest.apply_size_change(int(size_px))
-        except Exception:  # noqa: BLE001
-            forest.resize(size_px, size_px)
-    try:
-        from scriptree.shell.icon_assets import (
-            BUNDLED_FORMAT, bundled_icon_b64,
-        )
-        b64 = bundled_icon_b64("forest")
-        if b64:
-            forest._icon_data_b64 = b64
-            forest._icon_data_format = BUNDLED_FORMAT
-    except Exception as exc:  # noqa: BLE001
-        _log(f"menu: bundled-icon load failed: {exc!r}")
+    # Resolve member catalogs.
+    if catalog_path.suffix.lower() == ".scriptreeforest":
+        member_paths = _forest_member_catalog_paths(catalog_path)
+        if not member_paths:
+            _log(
+                f"menu: {catalog_path} has no items on disk — "
+                f"capturing an empty forest menu"
+            )
+    else:
+        member_paths = [catalog_path.resolve()]
 
-    # Add the catalog as a forest member so the merged menu has
-    # content to populate from.  The cell isn't drawn — we only
-    # want the menu render below the forest hex.
-    member = CellWindow(branding, catalog_path=str(catalog_path.resolve()))
-    forest._members[member._id] = QPoint(0, 0)
-    forest._positioned.add(member._id)
-    member._group_master_id = forest._id
-    member._link_parent_id = forest._id
+    # Add every catalog as a forest member so the merged menu
+    # populates from each.  Cells aren't drawn — only the menu
+    # appears in the composite below the hub.
+    for p in member_paths:
+        member = CellWindow(branding, catalog_path=str(p.resolve()))
+        forest._members[member._id] = QPoint(0, 0)
+        forest._positioned.add(member._id)
+        member._group_master_id = forest._id
+        member._link_parent_id = forest._id
 
     menu = build_tree_popup_menu(forest)
     menu.adjustSize()
