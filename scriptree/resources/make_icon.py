@@ -1222,12 +1222,14 @@ def pil_grayscale_leveled_tree(canvas_size: int = MASTER,
                                ) -> Image.Image:
     """Render the grayscale fractal-tree icon onto a transparent canvas.
 
-    ``trunk_width`` (optional) overrides the trunk stroke thickness.
-    Expressed in pixels at the 1024-reference canvas, scaled
-    proportionally for other canvas sizes — so passing 50 means "50 px
-    at 1024, ~12 px at 256, ~3 px at 64."  The branch widths are left
-    untouched: only the trunk gets thicker / thinner, the canopy stays
-    at its fractal-derived weights.
+    ``trunk_width`` (optional) sets the overall stroke weight for the
+    whole tree.  It names the trunk thickness (in pixels at the
+    1024-reference canvas, scaled proportionally for other sizes), but
+    the canopy branches and the connector circles scale together with
+    it so the fractal proportions are preserved.  Passing
+    ``trunk_width=80`` doubles every stroke — trunk + every branch
+    level + every junction node — relative to the default 40 px trunk
+    at the 1024 canvas.
     """
     s = canvas_size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
@@ -1239,13 +1241,24 @@ def pil_grayscale_leveled_tree(canvas_size: int = MASTER,
 
     # Stroke widths follow the fractal's scaling sequence.  The trunk
     # is the "level −1" width by default (one step up from the depth-0
-    # branch stroke), but ``trunk_width`` can override it — useful when
-    # the icon is being placed alongside other glyphs whose strokes
-    # have a different reference thickness.  The value is interpreted at
-    # the 1024-reference canvas and scaled proportionally for any other.
+    # branch stroke).  ``trunk_width`` overrides BOTH the trunk width
+    # AND scales the canopy strokes + connector circles by the same
+    # factor — set the trunk to N px and everything below follows
+    # proportionally (so the user can match a different icon family's
+    # reference weight without breaking the fractal's internal ratios).
     line_w  = max(2, int(round(s * 0.022)))
+    node_r  = max(2, int(round(s * 0.014)))
     if trunk_width is not None:
         trunk_w = max(2, int(round(trunk_width * (s / 1024.0))))
+        # Default trunk thickness at the 1024 canvas: round(23/_BRANCH_SCALE).
+        # The override's ratio to that default is the global scale factor
+        # we apply to line_w + node_r so trunk / branch / node geometry
+        # stays proportional.
+        default_trunk_1024 = max(3, int(round(
+            int(round(1024 * 0.022)) / _BRANCH_SCALE)))
+        scale = trunk_width / default_trunk_1024
+        line_w = max(2, int(round(line_w * scale)))
+        node_r = max(2, int(round(node_r * scale)))
     else:
         trunk_w = max(3, int(round(line_w / _BRANCH_SCALE)))
 
@@ -1259,9 +1272,10 @@ def pil_grayscale_leveled_tree(canvas_size: int = MASTER,
 
     # Hex-fractal canopy — collect first, then draw all lines, then all
     # dots, so every junction circle sits on top of the strokes that
-    # meet at it.
+    # meet at it.  ``line_w`` and ``node_r`` were already computed above
+    # (scaled together with ``trunk_w`` when the user supplied a
+    # ``trunk_width`` override; default fractal-ladder values otherwise).
     initial_side = s * 0.155
-    node_r = max(2, int(round(s * 0.014)))
     trunk_top = (0.50 * s, 0.66 * s)
     lines: list = []
     dots:  list = []
@@ -1336,9 +1350,18 @@ def svg_grayscale_leveled_tree(canvas_size: int = 1024,
     trunk_color = f'rgb({trunk_rgb[0]},{trunk_rgb[1]},{trunk_rgb[2]})'
     cap_color   = f'rgb({cap_rgb[0]},{cap_rgb[1]},{cap_rgb[2]})'
 
-    line_w  = S * 0.022
+    # Stroke / node sizing — mirrors ``pil_grayscale_leveled_tree``:
+    # ``trunk_width`` (when given) sets the trunk in 1024-canvas px AND
+    # scales the canopy / connector geometry by the same ratio so all
+    # stroke weights stay proportional.
+    line_w = S * 0.022
+    node_r = S * 0.014
     if trunk_width is not None:
         trunk_w = trunk_width * (S / 1024.0)
+        default_trunk_1024 = (1024 * 0.022) / _BRANCH_SCALE
+        scale = trunk_width / default_trunk_1024
+        line_w *= scale
+        node_r *= scale
     else:
         trunk_w = line_w / _BRANCH_SCALE
 
@@ -1350,7 +1373,6 @@ def svg_grayscale_leveled_tree(canvas_size: int = 1024,
 
     trunk_top    = (0.50 * S, 0.66 * S)
     initial_side = S * 0.155
-    node_r       = S * 0.014
     line_parts: list = []
     dot_parts:  list = []
     _svg_collect_fractal(trunk_top, 0.0, initial_side, 0, max_depth,
@@ -2026,12 +2048,18 @@ def _build_cli() -> argparse.ArgumentParser:
         return s
     p.add_argument(
         "--trunk-width", type=int, default=None, metavar="PX",
-        help="Override the trunk stroke thickness, in pixels at the "
+        help="Set the overall stroke weight for the whole tree.  "
+             "Value names the trunk thickness in pixels at the "
              "1024-reference canvas (scaled proportionally for other "
-             "canvas sizes — 50 means '50 px at 1024, ~12 px at 256').  "
-             "Default: derived from the fractal scaling ladder "
-             "(~40 px at 1024).  Only the trunk is affected; the canopy "
-             "branches keep their fractal-derived weights.  Concept 10 only.",
+             "canvas sizes -- 50 means '50 px at 1024, ~12 px at 256'), "
+             "and the canopy branches plus connector circles are "
+             "scaled by the same ratio so the fractal proportions are "
+             "preserved.  Passing --trunk-width 80 doubles every "
+             "stroke -- trunk, every branch level, and every junction "
+             "node -- relative to the default 40 px trunk.  Default: "
+             "derived from the fractal scaling ladder (~40 px at 1024 "
+             "with the canopy at its default thickness).  Concept 10 "
+             "only.",
     )
     p.add_argument(
         "--color", default=None, metavar="#RRGGBB", type=_color_arg,

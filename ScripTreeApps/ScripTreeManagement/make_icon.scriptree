@@ -143,8 +143,8 @@
     },
     {
       "id": "trunk_width",
-      "label": "Trunk width (pixels at 1024 canvas)",
-      "description": "Override the trunk stroke thickness. Value is in pixels at the 1024-reference canvas and scales proportionally for other canvases (so 50 means 50 px at 1024, ~12 px at 256, ~3 px at 64). Only the trunk is affected; canopy branches keep their fractal-derived weights. Blank = use the fractal default (~40 px at 1024). Concept 10 only.",
+      "label": "Overall stroke weight (trunk px at 1024 canvas)",
+      "description": "Set the overall stroke weight for the whole tree. Value names the trunk thickness in pixels at the 1024-reference canvas (so 50 means 50 px at 1024, ~12 px at 256, ~3 px at 64), and the canopy branches plus connector circles are scaled by the same ratio so the fractal proportions are preserved. Passing 80 doubles every stroke -- trunk, every branch level, every junction node -- relative to the default 40. Blank = use the fractal default (~40 px at 1024). Concept 10 only.",
       "type": "string",
       "widget": "text",
       "required": false,
