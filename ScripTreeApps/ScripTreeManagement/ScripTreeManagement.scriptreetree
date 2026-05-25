@@ -39,6 +39,16 @@
           "path": "./screenshooter.scriptree"
         }
       ]
+    },
+    {
+      "type": "folder",
+      "name": "Branding",
+      "children": [
+        {
+          "type": "leaf",
+          "path": "./make_icon.scriptree"
+        }
+      ]
     }
   ],
   "cell": {
