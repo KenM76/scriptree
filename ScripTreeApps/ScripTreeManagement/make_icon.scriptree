@@ -38,6 +38,10 @@
     [
       "--trunk-width",
       "{trunk_width}"
+    ],
+    [
+      "--trunk-lightness",
+      "{trunk_lightness}"
     ]
   ],
   "params": [
@@ -145,6 +149,17 @@
       "id": "trunk_width",
       "label": "Overall stroke weight (trunk px at 1024 canvas)",
       "description": "Set the overall stroke weight for the whole tree. Value names the trunk thickness in pixels at the 1024-reference canvas (so 50 means 50 px at 1024, ~12 px at 256, ~3 px at 64), and the canopy branches plus connector circles are scaled by the same ratio so the fractal proportions are preserved. Passing 80 doubles every stroke -- trunk, every branch level, every junction node -- relative to the default 40. Blank = use the fractal default (~40 px at 1024). Concept 10 only.",
+      "type": "string",
+      "widget": "text",
+      "required": false,
+      "default": "",
+      "no_split": true,
+      "section": "Palette"
+    },
+    {
+      "id": "trunk_lightness",
+      "label": "Trunk lightness (0..255 grayscale ladder)",
+      "description": "Set the trunk's brightness on the 0..255 grayscale ladder.  Each recursion level brightens by a fixed step (default 14), so pick 255 - max_depth * step to land the canopy tips on pure white.  At the default max_depth=4 + step=14, that's 199 (trunk=199, level1=213, level2=227, level3=241, tips=255).  Node colours follow the branch ladder up by the same delta so the within-level node-vs-branch contrast is preserved.  When Invert is also set, the assignment flips (trunk gets the brightest end, tips the darkest).  Blank = default 78 (the bottom of the fractal's stock contrast range).  Concept 10 only.",
       "type": "string",
       "widget": "text",
       "required": false,

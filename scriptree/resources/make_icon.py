@@ -1142,10 +1142,19 @@ def _colorize_gray(gray: int, base_rgb: tuple[int, int, int]) -> tuple[int, int,
     return (int(round(nr * 255)), int(round(ng * 255)), int(round(nb * 255)))
 
 
+_DEFAULT_BASE_BRANCH = 78
+_DEFAULT_BASE_NODE   = 132
+_DEFAULT_STEP        = 14
+# Node-vs-branch offset preserved when ``base_branch`` is overridden
+# from the CLI — moving the trunk brightness up by Δ also moves the
+# node base up by Δ so the within-level contrast stays the same.
+_NODE_BRANCH_OFFSET  = _DEFAULT_BASE_NODE - _DEFAULT_BASE_BRANCH
+
+
 def _grayscale_levels(max_depth: int,
-                      base_branch: int = 78,
-                      base_node:   int = 132,
-                      step:        int = 14,
+                      base_branch: int | None = None,
+                      base_node:   int | None = None,
+                      step:        int = _DEFAULT_STEP,
                       invert:      bool = False,
                       color:       str | None = None,
                       ) -> list[tuple[tuple, tuple]]:
@@ -1162,7 +1171,20 @@ def _grayscale_levels(max_depth: int,
     With ``color="#RRGGBB"`` each gray luminance is re-mapped onto that
     hue via HLS lightness substitution, so the same brightness ladder
     becomes a ladder of tints/shades of the chosen colour.
+
+    ``base_branch`` (None = default 78) sets the trunk's gray value;
+    every other level steps up by ``step``.  Pick
+    ``255 - max_depth * step`` to land the tips on pure white.
+    ``base_node`` (None = follow base_branch + 54) sets the node gray
+    value at depth 0.  Both clamp to [0, 255].
     """
+    if base_branch is None:
+        base_branch = _DEFAULT_BASE_BRANCH
+    base_branch = max(0, min(255, int(base_branch)))
+    if base_node is None:
+        base_node = max(0, min(255, base_branch + _NODE_BRANCH_OFFSET))
+    else:
+        base_node = max(0, min(255, int(base_node)))
     base_rgb = _parse_hex_color(color) if color else None
     out = []
     for L in range(max_depth + 1):
@@ -1219,6 +1241,7 @@ def pil_grayscale_leveled_tree(canvas_size: int = MASTER,
                                invert: bool = False,
                                color: str | None = None,
                                trunk_width: int | None = None,
+                               trunk_lightness: int | None = None,
                                ) -> Image.Image:
     """Render the grayscale fractal-tree icon onto a transparent canvas.
 
@@ -1230,12 +1253,23 @@ def pil_grayscale_leveled_tree(canvas_size: int = MASTER,
     ``trunk_width=80`` doubles every stroke — trunk + every branch
     level + every junction node — relative to the default 40 px trunk
     at the 1024 canvas.
+
+    ``trunk_lightness`` (optional, 0..255) sets the brightness of the
+    trunk in the grayscale ladder.  Each successive recursion level
+    brightens by the same fixed ``step`` (default 14), so picking
+    ``trunk_lightness = 255 - max_depth * step`` lands the canopy tips
+    on pure white.  At default ``max_depth=4`` and ``step=14``, that's
+    ``trunk_lightness=199``.  Node colours move up by the same delta
+    as the branches so the within-level node-vs-branch contrast is
+    preserved.  Inverted ladders flip the assignment (trunk gets the
+    highest, tips the lowest).
     """
     s = canvas_size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
 
-    levels = _grayscale_levels(max_depth, invert=invert, color=color)
+    levels = _grayscale_levels(max_depth, invert=invert, color=color,
+                               base_branch=trunk_lightness)
     trunk_color = levels[0][0]          # same as depth-0 branch
     cap_color   = levels[0][1]          # depth-0 node colour at the seam
 
@@ -1343,9 +1377,11 @@ def svg_grayscale_leveled_tree(canvas_size: int = 1024,
                                max_depth: int = 4,
                                invert: bool = False,
                                color: str | None = None,
-                               trunk_width: int | None = None) -> str:
+                               trunk_width: int | None = None,
+                               trunk_lightness: int | None = None) -> str:
     S = canvas_size
-    levels = _grayscale_levels(max_depth, invert=invert, color=color)
+    levels = _grayscale_levels(max_depth, invert=invert, color=color,
+                               base_branch=trunk_lightness)
     trunk_rgb, cap_rgb = levels[0]
     trunk_color = f'rgb({trunk_rgb[0]},{trunk_rgb[1]},{trunk_rgb[2]})'
     cap_color   = f'rgb({cap_rgb[0]},{cap_rgb[1]},{cap_rgb[2]})'
@@ -2070,6 +2106,20 @@ def _build_cli() -> argparse.ArgumentParser:
              "--color '#56D6A8' restores the original ScripTree mint.  "
              "Concept 10 only.",
     )
+    p.add_argument(
+        "--trunk-lightness", type=int, default=None, metavar="0..255",
+        help="Set the trunk's brightness on the 0..255 grayscale ladder.  "
+             "Each successive recursion level brightens by a fixed step "
+             "(default 14), so pick 255 - max_depth * step to land the "
+             "canopy tips on pure white.  At the default max_depth=4 + "
+             "step=14, that's --trunk-lightness 199 (trunk=199, level1=213, "
+             "level2=227, level3=241, tips=255).  Node colours follow the "
+             "branch ladder up by the same delta so the within-level "
+             "node-vs-branch contrast is preserved.  When --invert is "
+             "also set, the assignment flips (trunk gets the brightest "
+             "end, tips the darkest).  Default: 78 (the bottom of the "
+             "fractal's stock contrast range).  Concept 10 only.",
+    )
     return p
 
 
@@ -2096,14 +2146,18 @@ def _single_shot(args: argparse.Namespace) -> None:
         raise SystemExit(
             f"--depth/--size require an adaptive concept (one of "
             f"{sorted(_ADAPTIVE_CONCEPTS)}); got {name!r}.")
-    if ((args.invert or args.color or args.trunk_width is not None)
+    if ((args.invert or args.color or args.trunk_width is not None
+                or args.trunk_lightness is not None)
             and name != "10_grayscale_leveled_tree"):
         raise SystemExit(
-            f"--invert / --color / --trunk-width only affect concept "
-            f"10_grayscale_leveled_tree; got concept {name!r}.  Re-run "
-            f"without those flags or pick --concept 10_grayscale_leveled_tree.")
+            f"--invert / --color / --trunk-width / --trunk-lightness only "
+            f"affect concept 10_grayscale_leveled_tree; got concept "
+            f"{name!r}.  Re-run without those flags or pick "
+            f"--concept 10_grayscale_leveled_tree.")
     if args.trunk_width is not None and args.trunk_width < 1:
         raise SystemExit("--trunk-width must be at least 1 px.")
+    if args.trunk_lightness is not None and not (0 <= args.trunk_lightness <= 255):
+        raise SystemExit("--trunk-lightness must be in [0, 255].")
     pil_fn = _ADAPTIVE_CONCEPTS[name][0]
     depth  = args.depth if args.depth is not None else 4
     size   = args.size  if args.size  is not None else MASTER
@@ -2117,7 +2171,8 @@ def _single_shot(args: argparse.Namespace) -> None:
     work = max(256, size)
     img  = pil_fn(canvas_size=work, max_depth=depth,
                   invert=args.invert, color=args.color,
-                  trunk_width=args.trunk_width)
+                  trunk_width=args.trunk_width,
+                  trunk_lightness=args.trunk_lightness)
     if work != size:
         img = img.resize((size, size), Image.LANCZOS)
 
@@ -2126,9 +2181,10 @@ def _single_shot(args: argparse.Namespace) -> None:
     img.save(out, "PNG")
     palette_note = ""
     bits = []
-    if args.invert:                    bits.append("invert")
-    if args.color:                     bits.append(f"color={args.color}")
-    if args.trunk_width is not None:   bits.append(f"trunk-width={args.trunk_width}px")
+    if args.invert:                       bits.append("invert")
+    if args.color:                        bits.append(f"color={args.color}")
+    if args.trunk_width is not None:      bits.append(f"trunk-width={args.trunk_width}px")
+    if args.trunk_lightness is not None:  bits.append(f"trunk-lightness={args.trunk_lightness}")
     if bits:
         palette_note = f", {', '.join(bits)}"
     print(f"Wrote {out}  ({name}, depth={depth}, size={size}px{palette_note})")
@@ -2138,26 +2194,28 @@ def _single_shot(args: argparse.Namespace) -> None:
 # for forward-compat with the palette CLI flags; concepts 06/08/09 ignore
 # them (their palettes are baked in), only concept 10 honours them.
 def _wrap_palette_pil(fn):
-    return lambda *, canvas_size, max_depth, invert=False, color=None, trunk_width=None: fn(canvas_size, max_depth)
+    return lambda *, canvas_size, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None: fn(canvas_size, max_depth)
 
 def _wrap_palette_svg(fn):
-    return lambda S, max_depth, invert=False, color=None, trunk_width=None: fn(S, max_depth)
+    return lambda S, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None: fn(S, max_depth)
 
 _ADAPTIVE_CONCEPTS = {
     # name -> (pil_renderer, svg_renderer, size→depth fn, default max_depth)
     "06_hex_fractal_tree":       (_wrap_palette_pil(pil_fractal_tree),       _wrap_palette_svg(svg_fractal_tree),       None, 4),
     "08_mono_fractal_tree":      (_wrap_palette_pil(pil_mono_fractal_tree),      _wrap_palette_svg(svg_mono_fractal_tree),      None, 4),
     "09_grayscale_fractal_tree": (_wrap_palette_pil(pil_grayscale_fractal_tree), _wrap_palette_svg(svg_grayscale_fractal_tree), None, 4),
-    # Concept 10 honours invert + color + trunk_width directly.
+    # Concept 10 honours invert + color + trunk_width + trunk_lightness.
     "10_grayscale_leveled_tree": (
-        lambda *, canvas_size, max_depth, invert=False, color=None, trunk_width=None:
+        lambda *, canvas_size, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None:
             pil_grayscale_leveled_tree(canvas_size, max_depth,
                                        invert=invert, color=color,
-                                       trunk_width=trunk_width),
-        lambda S, max_depth, invert=False, color=None, trunk_width=None:
+                                       trunk_width=trunk_width,
+                                       trunk_lightness=trunk_lightness),
+        lambda S, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None:
             svg_grayscale_leveled_tree(S, max_depth,
                                        invert=invert, color=color,
-                                       trunk_width=trunk_width),
+                                       trunk_width=trunk_width,
+                                       trunk_lightness=trunk_lightness),
         None, 4),
 }
 
@@ -2217,21 +2275,27 @@ def main() -> None:
         else:
             frame_depth_fn = depth_fn
 
-        # --invert / --color / --trunk-width only mean anything for
-        # concept 10.  Reject early instead of silently dropping intent.
+        # --invert / --color / --trunk-width / --trunk-lightness only
+        # mean anything for concept 10.  Reject early instead of
+        # silently dropping intent.
         palette_active = (args.invert or args.color
-                          or args.trunk_width is not None)
+                          or args.trunk_width is not None
+                          or args.trunk_lightness is not None)
         if palette_active and ACTIVE != "10_grayscale_leveled_tree":
             raise SystemExit(
-                f"--invert / --color / --trunk-width only affect "
-                f"10_grayscale_leveled_tree; active concept is {ACTIVE!r}.  "
-                f"Re-run without those flags or switch ACTIVE.")
+                f"--invert / --color / --trunk-width / --trunk-lightness "
+                f"only affect 10_grayscale_leveled_tree; active concept "
+                f"is {ACTIVE!r}.  Re-run without those flags or switch "
+                f"ACTIVE.")
         if args.color:
             _parse_hex_color(args.color)   # validate early
         if args.trunk_width is not None and args.trunk_width < 1:
             raise SystemExit("--trunk-width must be at least 1 px.")
+        if args.trunk_lightness is not None and not (0 <= args.trunk_lightness <= 255):
+            raise SystemExit("--trunk-lightness must be in [0, 255].")
         palette = dict(invert=args.invert, color=args.color,
-                       trunk_width=args.trunk_width)
+                       trunk_width=args.trunk_width,
+                       trunk_lightness=args.trunk_lightness)
 
         # Master PNG at the (possibly-overridden) max depth
         master = pil_fn(canvas_size=MASTER, max_depth=effective_max_d, **palette)
@@ -2248,14 +2312,17 @@ def main() -> None:
         (HERE / "scriptree.svg").write_text(
             svg_fn(1024, max_depth=effective_max_d, **palette), encoding="utf-8")
         print(f"Active = {ACTIVE} -> scriptree.png / scriptree.ico / scriptree.svg")
-        if publish_overrides or args.invert or args.color or args.trunk_width is not None:
+        if (publish_overrides or args.invert or args.color
+                or args.trunk_width is not None
+                or args.trunk_lightness is not None):
             bits = []
             if publish_overrides:
                 bits.append(f"publish-depth={args.publish_depth!r}")
                 bits.append(f"ico-sizes={list(effective_sizes)}")
-            if args.invert:                  bits.append("invert")
-            if args.color:                   bits.append(f"color={args.color}")
-            if args.trunk_width is not None: bits.append(f"trunk-width={args.trunk_width}px")
+            if args.invert:                     bits.append("invert")
+            if args.color:                      bits.append(f"color={args.color}")
+            if args.trunk_width is not None:    bits.append(f"trunk-width={args.trunk_width}px")
+            if args.trunk_lightness is not None: bits.append(f"trunk-lightness={args.trunk_lightness}")
             print(f"  {', '.join(bits)}")
     else:
         active = rendered[ACTIVE]
@@ -2278,7 +2345,8 @@ def main() -> None:
         pil_fn, svg_fn, _, max_d = _ADAPTIVE_PUBLISH[ACTIVE]
         forest_max_d = args.publish_depth if args.publish_depth is not None else max_d
         palette = dict(invert=args.invert, color=args.color,
-                       trunk_width=args.trunk_width)
+                       trunk_width=args.trunk_width,
+                       trunk_lightness=args.trunk_lightness)
         icons_dir = HERE.parent.parent / "icons"
         if icons_dir.is_dir():
             # 256-px PNG matches the existing icon-*.png set
