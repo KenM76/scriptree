@@ -1,0 +1,42 @@
+{
+  "schema_version": 3,
+  "name": "Action buttons demo",
+  "description": "Demo of the new action-button system (v0.8.0a11+).\n\nThe main Run button does what every ScripTree tool already does -- builds argv from the form's 'Message' field and the argument_template, then spawns the executable.\n\nThe THREE NEW BUTTONS in the second row are 'actions'. Each one runs a fixed argv (defined in this file's \"actions\" array) without touching the form. Output streams into the same output pane Run uses, prefixed with '▶ Action: <label>' so the session log stays readable.\n\nTry each:\n  * 'Python version' has popup=always -- the result also opens in a copy-friendly dialog (select / Copy button).\n  * 'List CWD' has popup=auto -- pops only when the output is short.\n  * 'Env count' has no popup -- output pane only.\n\nNo files are touched by any of these actions; they're pure inspection commands.",
+  "executable": "python",
+  "argument_template": [
+    "-c",
+    "print('main run with message:', '{message}')"
+  ],
+  "params": [
+    {
+      "id": "message",
+      "label": "Message",
+      "type": "string",
+      "widget": "text",
+      "default": "hello",
+      "description": "Goes into the main argv via {message} substitution. Action buttons IGNORE this field -- they use their own literal argv."
+    }
+  ],
+  "actions": [
+    {
+      "id": "version",
+      "label": "Python version",
+      "argv": ["-c", "import sys; print(sys.version)"],
+      "tooltip": "Show this Python interpreter's version (popup enabled).",
+      "popup": "always"
+    },
+    {
+      "id": "list_cwd",
+      "label": "List CWD",
+      "argv": ["-c", "import os; print('\\n'.join(sorted(os.listdir('.'))[:50]))"],
+      "tooltip": "List the current working directory (popup auto -- pops for short output).",
+      "popup": "auto"
+    },
+    {
+      "id": "env_count",
+      "label": "Env count",
+      "argv": ["-c", "import os; print(len(os.environ), 'env vars')"],
+      "tooltip": "Count environment variables (no popup -- output pane only)."
+    }
+  ]
+}

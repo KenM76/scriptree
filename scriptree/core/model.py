@@ -482,6 +482,113 @@ class Section:
 
 
 @dataclass
+class ActionDef:
+    """One named action button on a tool's form.
+
+    Action buttons are fixed-argv presets that live alongside the
+    main Run button.  Click an action and the tool's executable is
+    spawned with ``[*action.argv]`` appended -- NO ``{param_id}``
+    substitution from form fields, NO list fan-out, just the literal
+    arg list authored here.  Output streams to the same output pane
+    Run uses (prefixed with ``"▶ Action: <label>"`` so the session
+    log stays readable when several actions are clicked in
+    succession).
+
+    Use this for the common "wrapped CLI has a main flow + 3-5 quick
+    side actions" case (``git status --short``,
+    ``pip list --outdated``, ``docker ps``, …) where the producer
+    used to either cram the side actions into the main form via a
+    mode enum + branching ``argument_template``, split the tool into
+    several ``.scriptree`` files, or punt to "easier from the
+    command line" -- all bad.  An action button shares the tool's
+    ``working_directory`` / ``env`` / ``path_prepend`` and the
+    currently-selected configuration's overrides, so the side action
+    runs in the same context as Run would.
+
+    Schema fields:
+
+      * ``id`` — stable identifier matching ``[a-z_][a-z0-9_]*``
+        (starts with a letter or underscore, then any number of
+        lowercase letters / digits / underscores), unique within
+        the tool.  Used as a permission key
+        (``run_action:<tool>:<id>``) and as the stable handle for
+        editor tooling.
+      * ``label`` — button text shown in the UI.
+      * ``tooltip`` — hover text; falls back to ``executable +
+        " " + " ".join(argv)`` when empty.
+      * ``argv`` — list of literal strings.  May be empty (means
+        "run the executable with no arguments").
+      * ``popup`` — one of ``"never"`` (default; stream to output
+        pane only), ``"auto"`` (also pop a copy-friendly modal when
+        the output fits a sensible cap), or ``"always"`` (always
+        pop the modal regardless of output size).
+      * ``confirm`` — optional confirmation text.  When non-empty,
+        a "Are you sure? — <text>" modal must be accepted before
+        the action runs.  For destructive presets.
+      * ``icon`` — optional bundled-icon-library name (see
+        ``help/LLM/icon_library.md``).  Empty = label-only button.
+      * ``hidden`` — when True the action is registered but not
+        rendered as a button; useful for actions surfaced
+        elsewhere (custom menus, hotkeys in a future version).
+      * ``section`` — optional section name; when set, the button
+        renders inside that named section instead of the dedicated
+        Actions row near Run.  Re-uses the existing
+        ``Section.name`` indexing.
+
+    Permission integration:
+      Argv elements go through the same ``permissions.check_command``
+      gate as Run, so a global "no --force-push" rule blocks the
+      action too.  Plus a new ``run_action:<tool>:<action_id>``
+      capability gates the BUTTON ITSELF (default-permissive so
+      existing permission files don't need editing).
+    """
+
+    id: str
+    label: str
+    argv: list[str] = field(default_factory=list)
+    tooltip: str = ""
+    popup: str = "never"      # "never" | "auto" | "always"
+    confirm: str = ""
+    icon: str = ""
+    hidden: bool = False
+    section: str = ""
+
+    def __post_init__(self) -> None:
+        # Fail loud at load -- the schema is supposed to be authored
+        # with the LLM authoring docs in front of you; structural
+        # problems should surface here, not at click time.
+        import re
+        if not self.id:
+            raise ValueError("ActionDef.id must be non-empty.")
+        if not re.match(r"^[a-z_][a-z0-9_]*$", self.id):
+            raise ValueError(
+                f"ActionDef.id {self.id!r} must match "
+                f"[a-z_][a-z0-9_]* (starts with a letter or "
+                f"underscore, then lowercase letters / digits / "
+                f"underscores -- stable handle for permissions + "
+                f"editor tooling)."
+            )
+        if not self.label:
+            raise ValueError(
+                f"ActionDef[{self.id}].label must be non-empty."
+            )
+        if self.popup not in ("never", "auto", "always"):
+            raise ValueError(
+                f"ActionDef[{self.id}].popup must be one of "
+                f"'never' / 'auto' / 'always'; got {self.popup!r}."
+            )
+        # Argv elements must be strings.  An empty list IS valid
+        # (means "run executable with no args"); a list with non-
+        # string entries is NOT.
+        for i, a in enumerate(self.argv):
+            if not isinstance(a, str):
+                raise ValueError(
+                    f"ActionDef[{self.id}].argv[{i}] must be a "
+                    f"string; got {type(a).__name__}."
+                )
+
+
+@dataclass
 class MenuItemDef:
     """One item in a custom menu bar.
 
@@ -543,6 +650,18 @@ class ToolDef:
     # and as a menu bar extension in the main window. Grouped by
     # ``MenuItemDef.menu`` into top-level menus.
     menus: list[MenuItemDef] = field(default_factory=list)
+    # Named action buttons rendered alongside the Run button (V3
+    # v0.8.0a11+).  Each action carries its own literal argv that
+    # gets appended to ``executable`` when the button is clicked,
+    # bypassing the main form's ``argument_template`` and the
+    # ``{token}`` substitution machinery.  Sharing the tool's
+    # ``working_directory`` / ``env`` / ``path_prepend`` and the
+    # currently-selected configuration's overrides, so an action
+    # runs in the same context as Run.  See ``ActionDef`` for the
+    # per-action field contract.  Default empty list keeps every
+    # legacy ``.scriptree`` round-tripping byte-identical -- nothing
+    # is emitted to disk when no actions are declared.
+    actions: list[ActionDef] = field(default_factory=list)
     # Cell-shell visual settings (V3, optional).  Persisted in the
     # .scriptree JSON so a tool ships with its preferred presentation.
     # All optional; cells fall back to auto-derived letters when none
@@ -696,6 +815,28 @@ class ToolDef:
                         errors.append(
                             f"Template references unknown parameter: {{{ref}}}"
                         )
+
+        # Action button IDs must be unique within the tool (they're
+        # used as permission keys and as the editor's stable handle).
+        # ``ActionDef.__post_init__`` already rejects bad id formats
+        # at construction time; here we catch the cross-action
+        # duplicate case the per-action check can't see.  Also flag
+        # any action whose ``section`` references an undeclared
+        # section -- a typo there silently moves the button into
+        # the synthetic "Other" group, which is rarely what was
+        # intended.
+        seen_action_ids: set[str] = set()
+        declared_section_names = {s.name for s in self.sections}
+        for a in self.actions:
+            if a.id in seen_action_ids:
+                errors.append(f"Duplicate action id: {a.id!r}")
+            seen_action_ids.add(a.id)
+            if a.section and a.section not in declared_section_names:
+                errors.append(
+                    f"Action {a.id!r}.section references undeclared "
+                    f"section {a.section!r}; declare it under "
+                    f"``sections`` or leave the action's section empty."
+                )
         return errors
 
 

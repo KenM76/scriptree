@@ -525,6 +525,121 @@ Items with the same `menu` value are grouped under one menu. Commands
 are split via `CommandLineToArgvW` (Windows) or `shlex.split` — never
 `shell=True`.
 
+## `actions` array (optional, v0.8.0a11+)
+
+Named **action buttons** rendered next to the Run button in the tool
+runner.  Each action carries a fixed argv that gets appended to
+`executable` when its button is clicked.  **No `{token}` substitution
+happens against `action.argv`** — actions are presets, not
+form-driven invocations.
+
+When omitted (or empty), the tool runner shows only the existing
+Run / Stop / Copy argv row.  Adding `actions` is a fully additive
+schema change: existing `.scriptree` files load unchanged.
+
+```json
+{
+  "actions": [
+    {
+      "id": "status",
+      "label": "Status",
+      "tooltip": "Show working-tree status.",
+      "argv": ["status", "--short"],
+      "popup": "never"
+    },
+    {
+      "id": "log10",
+      "label": "Last 10",
+      "argv": ["log", "--oneline", "-10"],
+      "popup": "auto"
+    },
+    {
+      "id": "purge",
+      "label": "Purge cache",
+      "argv": ["cache", "purge"],
+      "confirm": "This deletes every cached entry.  Continue?",
+      "popup": "always"
+    }
+  ]
+}
+```
+
+### Field rules
+
+| Field      | Required | Default     | Notes                                                                                                                                                                            |
+|------------|----------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`       | yes      | —           | Stable identifier matching `^[a-z_][a-z0-9_]*$`, unique within `actions[]`.  Used as a permission key (`run_action:<tool>:<id>`) and as the editor's stable handle.              |
+| `label`    | yes      | —           | Button text shown in the UI.                                                                                                                                                     |
+| `argv`     | yes      | `[]`        | List of literal strings appended to `executable`.  Empty list is legal — means "run executable with no args."  **No `{token}` substitution.**                                    |
+| `tooltip`  | no       | `""`        | Hover text.  Blank falls back to the resolved argv preview (`executable + " " + argv joined`).                                                                                  |
+| `popup`    | no       | `"never"`   | One of `"never"` / `"auto"` / `"always"`.  `"auto"` shows a copy-friendly result modal when output ≤ 200 lines; `"always"` shows it regardless; `"never"` skips it.             |
+| `confirm`  | no       | `""`        | When non-empty, show "Are you sure? — `<confirm>`" before running.  For destructive actions.                                                                                     |
+| `icon`     | no       | `""`        | Optional icon name from the bundled icon library (see `icon_library.md`).  Empty = label-only button.                                                                            |
+| `hidden`   | no       | `false`     | Registered but not rendered as a button.  Use for actions surfaced elsewhere (custom menus, future hotkey bindings).                                                             |
+| `section`  | no       | `""`        | When non-empty, must match a declared `sections[].name`.  Renders the button inside that section instead of the dedicated Actions row near Run.  Empty = render in Actions row. |
+
+### Compactness rule
+
+The writer omits every field at its default so a `.scriptree`
+authored before this feature, then re-saved through a newer loader,
+produces byte-identical JSON.  Only `id`, `label`, and `argv` are
+emitted unconditionally — `argv` because an empty argv has
+meaningful intent (no args) distinct from "field omitted."
+
+### Where each field is enforced
+
+* `ActionDef.__post_init__` validates `id` pattern, `label`
+  non-empty, `popup` enum, and that every `argv` element is a string.
+  Bad data raises `ValueError` at load (`load_tool`) — same fail-loud
+  contract used for `ParamDef`.
+* `ToolDef.validate` adds the cross-action checks: id uniqueness
+  within `actions[]` and `section` references resolve to a declared
+  section.
+
+### What actions inherit from the tool
+
+When an action's button is clicked the runner builds:
+
+```
+[tool.executable_resolved, *action.argv]
+```
+
+using the **same** working-directory resolution, environment block,
+and runtime-shim injection that Run uses.  The tool's `env` /
+`path_prepend` apply.  The currently-selected configuration's `env`
+/ `path_prepend` apply.  The active configuration's other overrides
+do NOT apply (actions are not configurable per-run).
+
+### Output routing
+
+Action stdout/stderr streams into the same output pane Run uses,
+preceded by:
+
+```
+▶ Action: <label>
+$ <executable> <argv joined>
+```
+
+so a session log with several action firings stays readable.  When
+`popup ∈ {"auto", "always"}` triggers, the same output is also
+shown in a non-modal copy-friendly dialog (selectable text, Copy
+button, Ctrl-Shift-C copy-all, Esc to close, position memory per
+tool+action pair).
+
+### When to use actions vs the main form
+
+| Want                                                | Use                                            |
+|-----------------------------------------------------|------------------------------------------------|
+| Form-driven invocation (user fills fields, clicks Run) | Main `argument_template` + `params` + Run button |
+| Fixed preset with no required user input               | `actions[]` entry                                |
+| Several modes of the same CLI (status / log / diff)    | Several `actions[]` entries, one per mode        |
+| Destructive preset that should confirm before running  | Action with `confirm` text set                   |
+| Action whose output the user wants to copy/paste       | Action with `popup: "always"` (or `"auto"`)      |
+
+If you find yourself writing tool-help text like "for X, run the
+underlying CLI directly", that's the smell that says an `actions[]`
+entry would solve it cleanly.
+
 ## Loader invariants
 
 The `tool_from_dict` function enforces:
@@ -541,6 +656,12 @@ The `tool_from_dict` function enforces:
 8. Every `ParamDef.section`, if non-empty, names a section in
    `sections[]`.
 9. Every `SectionDef.name` is non-empty and unique.
+10. Every `ActionDef.id` matches `^[a-z_][a-z0-9_]*$` and is unique
+    within `actions[]`.
+11. Every `ActionDef.popup`, if set, is one of `"never"` / `"auto"`
+    / `"always"`.
+12. Every `ActionDef.section`, if non-empty, names a section in
+    `sections[]`.
 
 Violations raise `ValueError` with a message pointing to the offending
 field.

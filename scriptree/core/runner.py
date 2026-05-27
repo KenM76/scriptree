@@ -102,7 +102,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .model import ParamDef, ParamType, ToolDef
+from .model import ActionDef, ParamDef, ParamType, ToolDef
 
 
 class RunnerError(Exception):
@@ -1583,3 +1583,122 @@ def build_full_argv(
     return ResolvedCommand(
         argv=[*cmd.argv, *extras], cwd=cmd.cwd, env=env
     )
+
+
+# ---------------------------------------------------------------------------
+# Action-button argv assembly (V3 v0.8.0a11+)
+# ---------------------------------------------------------------------------
+#
+# Action buttons are fixed-argv presets defined alongside the main Run
+# button (see ``ActionDef`` in ``core/model.py``).  Their argv is
+# **literal** — no ``{token}`` substitution, no fan-out, no
+# string-passthrough splitting.  The only resolution applied is:
+#
+#   1. The tool's ``executable`` is resolved against ``tool.loaded_from``
+#      (same as Run -- so relative ``./bin/foo`` works after the .scriptree
+#      moves).
+#   2. The cwd is resolved the same way (``tool.working_directory`` or
+#      the executable's directory, identical to ``resolve()``).
+#   3. The runtime shim is spliced in for Python interpreters (same as
+#      Run -- sibling imports inside the tool's folder must keep working
+#      from actions just as they do from Run).
+#   4. The env block is built via ``build_env`` + ``inject_tool_dir_env``
+#      so actions inherit the tool's ``env`` / ``path_prepend`` AND the
+#      currently-selected configuration's overrides AND the
+#      ``SCRIPTREE_TOOL_DIR`` / ``PYTHONPATH`` injections (so a
+#      catalog-tree-launched tool's action runs with the same env
+#      Run would).
+#
+# Permission-gating is the UI layer's job, not this function's --
+# ``ActionDef.id`` provides the stable handle the UI uses to construct
+# a ``run_action:<tool>:<action>`` capability key.  Argv-element
+# permission rules (if any are ever wired) would intercept BEFORE
+# calling this, since the function only returns a ResolvedCommand and
+# doesn't spawn anything itself.
+
+def resolve_action(tool: ToolDef, action: ActionDef) -> ResolvedCommand:
+    """Resolve one ``ActionDef`` into a runnable :class:`ResolvedCommand`.
+
+    Builds ``[executable, *action.argv]`` with the executable resolved
+    via :func:`resolve_tool_path` against ``tool.loaded_from``.  The
+    cwd defaults to ``tool.working_directory`` (relative paths
+    anchored at the .scriptree file's dir), falling back to the
+    executable's directory -- identical to :func:`resolve`'s cwd
+    rules.
+
+    No ``{token}`` substitution is performed against ``action.argv`` --
+    actions are presets, not form-driven invocations.  If a producer
+    wants form-field-substituted argv, they should use the main
+    ``argument_template`` + Run button, not an action.
+
+    Raises :class:`RunnerError` when ``tool.executable`` is empty,
+    matching :func:`resolve`'s contract.
+    """
+    if not tool.executable:
+        raise RunnerError("Tool has no executable.")
+
+    exe = resolve_tool_path(tool.executable, tool.loaded_from)
+    # Literal append -- no template-language processing happens here.
+    argv: list[str] = [exe, *action.argv]
+
+    # cwd resolution mirrors ``resolve()`` so actions and Run share
+    # the same working-directory anchoring behaviour.
+    cwd_raw = tool.working_directory
+    if cwd_raw:
+        cwd = resolve_tool_path(cwd_raw, tool.loaded_from)
+    else:
+        exe_parent = Path(exe).parent
+        cwd = str(exe_parent) if str(exe_parent) not in ("", ".") else None
+
+    # Same shim injection Run uses so a Python tool's actions can
+    # ``import _sibling`` exactly like Run can.
+    argv = _inject_runtime_shim(argv)
+
+    return ResolvedCommand(argv=argv, cwd=cwd)
+
+
+def build_full_action_argv(
+    tool: ToolDef,
+    action_id: str,
+    *,
+    config_env: dict[str, str] | None = None,
+    config_path_prepend: list[str] | None = None,
+    global_env: dict[str, str] | None = None,
+    global_env_overrides: bool = False,
+    global_path_prepend: list[str] | None = None,
+    global_path_overrides: bool = False,
+    tree_path_prepend: list[str] | None = None,
+) -> ResolvedCommand:
+    """Resolve action ``action_id`` for spawn, including env block.
+
+    Mirrors :func:`build_full_argv` exactly except for the argv source
+    -- actions don't read the form so no ``values`` argument is needed.
+    The resulting :class:`ResolvedCommand` is shaped identically to
+    the one Run produces, so it can be handed off to
+    :func:`spawn_streaming` (or any other future spawn surface) on the
+    same code path.
+
+    Raises :class:`RunnerError` if ``action_id`` is not registered on
+    ``tool``, or if ``tool.executable`` is empty.
+    """
+    action: ActionDef | None = None
+    for a in tool.actions:
+        if a.id == action_id:
+            action = a
+            break
+    if action is None:
+        raise RunnerError(
+            f"Tool {tool.name!r} has no action with id {action_id!r}."
+        )
+
+    cmd = resolve_action(tool, action)
+    env = build_env(
+        tool, config_env, config_path_prepend,
+        global_env=global_env,
+        global_env_overrides=global_env_overrides,
+        global_path_prepend=global_path_prepend,
+        global_path_overrides=global_path_overrides,
+        tree_path_prepend=tree_path_prepend,
+    )
+    env = inject_tool_dir_env(env, tool)
+    return ResolvedCommand(argv=cmd.argv, cwd=cmd.cwd, env=env)

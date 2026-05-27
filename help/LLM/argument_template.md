@@ -4,6 +4,14 @@ The `argument_template` field on a `ToolDef` drives argv generation.
 `core.runner.resolve` is the canonical implementation; this document
 describes the grammar it implements.
 
+> **See also:** the `actions[]` array (`scriptree_format.md` →
+> "`actions` array"). Action-button argv is **literal-only** — none
+> of the template grammar below applies to it. If you need
+> form-field substitution, repeating-group fan-out, or the
+> string-passthrough rule, use the main `argument_template` + the
+> Run button. If you need a fixed preset that fires the same argv
+> every time, use an action entry.
+
 ## Template shape
 
 `argument_template` is a `list[Entry]` where each `Entry` is either:

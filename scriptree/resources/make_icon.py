@@ -1,18 +1,147 @@
-"""Generate ScripTree app icons and concept variants.
+"""Generate ScripTree's app icons and the cell-shell forest hub glyph.
 
-Running this script produces:
+## What this script is
 
-* ``concepts/01_node_graph.{png,ico}`` — the original clean
-  node-graph concept: mint branches, circular nodes, ">" glyph at root.
-* ``concepts/02_wood_tree_windows.{png,ico}`` — a literal brown tree
-  whose canopy is a cluster of tiny app windows.
-* ``concepts/03_branch_windows.{png,ico}`` — node-graph branches (from
-  concept 01) with tiny app windows hanging at the branch tips instead
-  of plain dots (current working favourite).
+A self-contained Pillow + raw-SVG generator that produces every icon
+asset ScripTree ships:
 
-The "active" icon in the resources root (``scriptree.png`` /
-``scriptree.ico``) is rebuilt from the chosen concept — set
-``ACTIVE`` below.
+* the app icon at the resources root —
+  ``scriptree.{png,ico,svg}`` (taskbar / About dialog / file
+  association); the ``.ico`` is multi-frame with sizes
+  ``16/24/32/48/64/128/256`` px;
+* the cell-shell forest hub glyph at the project root —
+  ``icons/icon-forest.{png,svg}`` (the fallback face for any forest
+  master cell that doesn't have a per-forest icon embedded);
+* one ``concepts/<NN_name>.{png,ico,svg}`` showcase per design
+  concept the project has explored (current count: ten).
+
+The script has TWO modes:
+
+* **Full publish (default, no flags):** re-render every concept into
+  ``concepts/``, then publish the ``ACTIVE`` concept to the app-icon
+  paths AND the forest-hub paths.  Use this when you've bumped
+  ``ACTIVE`` or you want every concept's showcase up to date.
+* **Single-shot (``--depth`` / ``--size`` / ``--out`` / ``--svg-out``
+  in any combination):** render one PNG and/or SVG of one concept at
+  a chosen recursion depth and pixel size, leaving the published
+  icons and the ``concepts/`` folder alone.  Use this to preview
+  palette tweaks or to drop a one-off custom render somewhere.
+
+End-users never run this; it's a maintainer tool.  Pillow is
+deliberately not vendored — see ``_ensure_pillow`` for the lazy
+import + ``--install-deps`` prompt that handles the missing-Pillow
+case cleanly.
+
+## The concept catalog
+
+Each concept lives in its own section below.  ``ACTIVE`` (set after
+the constants block) names the one that's currently shipping.
+
+| Concept                          | Style                                                        | Notes                                                                                                   |
+|----------------------------------|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| ``01_node_graph``                | Stylised node-link graph on a dark rounded tile              | Mint branches, circular nodes, ``>_`` prompt etched at root.  Frozen — the original V1 sketch.          |
+| ``02_wood_tree_windows``         | Brown tree whose canopy is a cluster of tiny app windows     | A literal "command-line wrapper" metaphor.  Rasterised only.                                            |
+| ``03_branch_windows``            | Concept-01 branches with windows at the tips                 | An interim hybrid between 01 and 02.                                                                    |
+| ``04_upright_tree_windows``      | Concept 02 trunk re-stood upright                            | Iteration on 02.                                                                                        |
+| ``05_upright_branch_windows``    | Concept 03 with the trunk re-stood upright                   | First concept to also emit ``.svg``.                                                                    |
+| ``06_hex_fractal_tree``          | Recursive hex-fractal canopy on a dark tile                  | Size-adaptive ICO depth ladder.  Coloured mint with brown trunk and gold ``>_`` prompt.                 |
+| ``07_glyph_fractal_tree``        | Pure-stroke line glyph on a 48 grid, ``currentColor`` SVG    | Matches the bundled facet-icon style (see ``help/host-software-icon-style.md``).                        |
+| ``08_mono_fractal_tree``         | Concept 06 with a single mint hue and a straight trunk       | Drops the brown trunk + gold prompt for a monochrome look.                                              |
+| ``09_grayscale_fractal_tree``    | Grayscale, straight trunk, transparent background            | First palette-free fractal; reads on light or dark surfaces.                                            |
+| ``10_grayscale_leveled_tree``    | **Current ACTIVE.** Per-level brightness ladder + full nodes | Trunk colour matches depth-0 branches, every junction has a connector dot, brightness steps per level.  |
+
+Concepts 06/08/09/10 share recursion geometry and use a
+**size-adaptive ICO depth ladder** (1 split at 16-24 px, up to 4 at
+128+ px) so small frames stay legible.  Concept 07 uses a tighter
+ladder because its line-glyph language gets busy fast.
+
+## Palette flags (concept 10 only)
+
+The grayscale ladder used by ``10_grayscale_leveled_tree`` exposes
+four CLI knobs, all defaulting to "off":
+
+* ``--invert`` flips the ladder so the trunk is brightest and the
+  tips darkest.  Pair with a light background; the default direction
+  is biased for dark backgrounds.
+* ``--color #RRGGBB`` re-maps the grayscale ladder onto a chosen hue
+  via HLS lightness substitution — trunk-dark / tips-light becomes a
+  ladder of shades-then-tints of that colour.  Original ScripTree
+  mint is ``#56D6A8``.
+* ``--trunk-width N`` sets the overall stroke weight (trunk px at
+  the 1024 reference canvas).  Branches + connector circles scale
+  by the same ratio so the fractal's internal proportions hold.
+* ``--trunk-lightness 0..255`` sets the trunk's brightness on the
+  ladder.  Each level brightens by ``step=14``, so pick
+  ``255 - max_depth*step`` to land the tips on pure white.  At the
+  default ``max_depth=4`` that's ``199`` (199 → 213 → 227 → 241 → 255).
+
+The flags compose: ``--trunk-lightness 199 --color '#3B82F6'``
+produces a blue ladder ending in white tips; ``--invert
+--trunk-lightness 78`` produces a near-original look with the trunk
+near-white and the tips near-black.
+
+## Anatomy of a fractal concept
+
+Each fractal renderer (concepts 06/07/08/09/10) follows the same
+recipe:
+
+1. Start with a vertical trunk anchored at ``(0.50, 0.66) → (0.50,
+   0.93)`` in fractional canvas coordinates.
+2. At the trunk top, anchor a hex fractal.  ``_split_pts`` computes
+   the five vertices of one hex split (``v1`` = anchor, ``v2``/``v6``
+   = side mid-points, ``v3``/``v5`` = far corners).
+3. Recurse on ``v3`` and ``v5`` with side ×``_BRANCH_SCALE``, tilted
+   outward by ``±_BRANCH_TILT``, until ``max_depth``.  Stroke widths
+   and node radii scale by the same factor each level.
+4. The palette is applied per level — either a single colour (06/08)
+   or a brightness ladder (09/10).  Concept 10 ALSO places a
+   connector dot at every junction, with leaf tips ~1.5× larger so
+   the canopy edge stays visually anchored.
+
+## Module layout
+
+* **Imports + lazy-Pillow check** — top.  ``_ensure_pillow()`` runs
+  before the real PIL import so a missing-dep case prints a
+  copy-paste install command instead of a traceback.
+* **Bookkeeping helpers** — ``write_ico_png_frames`` (raw .ico
+  writer, used by concepts with per-frame distinct depth),
+  ``rounded_mask``, ``vertical_gradient``, ``make_tile``,
+  ``draw_window``, ``save_concept``.
+* **Concept sections (01..10)** — each section opens with a
+  banner comment describing the concept, then defines (where
+  applicable): a ``concept_XX`` builder OR a
+  ``pil_XX_NAME`` / ``svg_XX_NAME`` renderer pair, and a
+  ``save_concept_XX`` publisher.
+* **Hex-fractal geometry** — ``_BRANCH_SCALE`` / ``_BRANCH_TILT`` /
+  ``_split_pts`` / ``_depth_for_size`` are shared by the fractal
+  concepts.
+* **Concept 10's palette ladder** — ``_DEFAULT_BASE_BRANCH`` /
+  ``_DEFAULT_STEP`` / ``_NODE_BRANCH_OFFSET`` constants,
+  ``_grayscale_levels`` builder, ``_collect_fractal`` /
+  ``_svg_collect_fractal`` two-pass walkers.
+* **CLI** — ``_build_cli`` defines every flag and writes its own
+  help text; ``_single_shot`` handles the one-render path;
+  ``main`` orchestrates the full-publish path including the
+  ``icons/icon-forest`` companion publish.
+
+## Quick reference
+
+Re-publish the active concept with the current "tips reach white" look::
+
+    python make_icon.py --trunk-lightness 199 --trunk-width 80
+
+Single-shot a 2048-px concept-10 PNG at deep recursion::
+
+    python make_icon.py --depth 6 --size 2048 \\
+        --out D:/TEMP/preview.png \\
+        --trunk-lightness 199
+
+Single-shot a coloured ladder, PNG + SVG together::
+
+    python make_icon.py --depth 4 --size 1024 --color '#3B82F6' \\
+        --out /tmp/blue.png --svg-out /tmp/blue.svg
+
+See ``help/make_icon.md`` for the user-facing manual.
 """
 from __future__ import annotations
 
@@ -20,7 +149,115 @@ import argparse
 import io
 import math
 import struct
+import subprocess
+import sys
 from pathlib import Path
+
+
+def _ensure_pillow() -> None:
+    """Import-check Pillow, prompting / installing on demand if missing.
+
+    Pillow (~7 MB wheel / ~25 MB installed) is only used by this
+    script -- the icon generator.  We deliberately do NOT ship it as
+    a vendored runtime dep: bloating every ScripTree install for a
+    feature only the maintainer touches isn't worth it.  Instead, we
+    lazy-prompt here:
+
+    * Missing + ``--install-deps`` on argv -> ask once, then
+      ``pip install Pillow`` into the running interpreter and retry.
+    * Missing + no ``--install-deps`` -> print the exact pip command
+      tied to ``sys.executable`` so the user can copy-paste, then
+      exit cleanly (no traceback).
+    * Present -> no-op.
+
+    Runs BEFORE argparse so the missing-dep case surfaces with
+    friendly output rather than a bare ``ModuleNotFoundError`` from
+    the module-level ``from PIL import ...`` line below.
+
+    Why pre-scan ``sys.argv`` instead of asking argparse: argparse
+    runs AFTER the top-level PIL import would fire, so by the time
+    argparse could tell us about ``--install-deps`` we've already
+    crashed.  A pre-scan dodges that ordering trap.  ``--install-deps``
+    is still registered on the argparse parser so ``--help`` documents
+    it; argparse just sees it twice (once here, once for the usage
+    string).
+    """
+    try:
+        import PIL.Image  # noqa: F401 -- importability check only
+        return
+    except ImportError:
+        pass
+
+    # Exact command, tied to the interpreter currently running so the
+    # user can copy-paste and hit the right Python.  When multiple
+    # installs are on PATH ("python" can mean any of them), pinning
+    # to sys.executable removes all ambiguity.
+    install_cmd = f'"{sys.executable}" -m pip install Pillow'
+
+    if "--install-deps" not in sys.argv[1:]:
+        print(
+            "make_icon.py needs Pillow, which isn't installed in this "
+            "Python.\n"
+            "\n"
+            f"  Interpreter: {sys.executable}\n"
+            "  Pillow:       ~7 MB download, one-time, ~25 MB on disk.\n"
+            "\n"
+            "Install with:\n"
+            f"  {install_cmd}\n"
+            "\n"
+            "Or re-run this command with --install-deps to install it now.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # --install-deps was passed -- confirm once, then install.
+    prompt = (
+        "make_icon.py needs Pillow (image library, ~7 MB).\n"
+        f"  Interpreter: {sys.executable}\n"
+        "Install it now? [Y/n] "
+    )
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        # Non-TTY parent (GUI runner pipes stdin, CI runners, etc.) --
+        # treat the explicit --install-deps flag as consent and proceed
+        # without a prompt.  The user opted in by passing the flag.
+        answer = "y"
+        print("(non-interactive: proceeding)", file=sys.stderr)
+    if answer and answer not in ("y", "yes"):
+        print("Skipped.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"Running: {install_cmd}", file=sys.stderr)
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "Pillow"])
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"\npip install failed (exit {exc.returncode}).  "
+            f"Try the manual command above.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # Retry the import -- if pip succeeded but PIL still can't be
+    # imported (PATH weirdness, permission issue, broken wheel) we
+    # need to fail loudly rather than continue and crash later on a
+    # confusing ``NameError: Image is not defined``.
+    try:
+        import PIL.Image  # noqa: F401
+    except ImportError as exc:
+        print(
+            f"\npip succeeded but Pillow still can't be imported: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    print("Pillow installed successfully.", file=sys.stderr)
+
+
+_ensure_pillow()
+
 from PIL import Image, ImageDraw, ImageFilter
 
 
@@ -74,12 +311,24 @@ ACTIVE = "10_grayscale_leveled_tree"   # which concept populates scriptree.{png,
 # ---------------------------------------------------------------------------
 
 def rounded_mask(size: int, radius: int) -> Image.Image:
+    """Return an L-mode alpha mask: a ``size``×``size`` rounded square.
+
+    Used by ``make_tile`` to clip the gradient + halo into the rounded
+    "macOS-style" tile shape every legacy concept (01-06, 08) shares.
+    """
     m = Image.new("L", (size, size), 0)
     ImageDraw.Draw(m).rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=255)
     return m
 
 
 def vertical_gradient(size: int, top, bot) -> Image.Image:
+    """Return an RGB ``size``×``size`` linear gradient from ``top`` to ``bot``.
+
+    ``top`` and ``bot`` are 3-tuples in ``(R, G, B)``.  The gradient
+    direction is screen-y (top of image = ``top``, bottom = ``bot``).
+    Built by drawing a one-pixel-wide column and resizing — cheap, and
+    accurate enough for the icon scale we're working at.
+    """
     col = Image.new("RGB", (1, size))
     for y in range(size):
         t = y / (size - 1)
@@ -88,6 +337,17 @@ def vertical_gradient(size: int, top, bot) -> Image.Image:
 
 
 def make_tile(size: int, bg_top, bg_bot, halo=None) -> Image.Image:
+    """Build the shared "dark rounded square + soft halo" background tile.
+
+    ``bg_top`` / ``bg_bot`` define a vertical gradient that fills the
+    tile.  When ``halo=(cx, cy, r, (R,G,B), alpha)`` is supplied an
+    additional Gaussian-blurred glow ellipse is composited on top of
+    the gradient, clipped to the tile shape.  Returns an RGBA image
+    with transparency outside the rounded square.
+
+    Used by concepts 01/02/03/04/05/06/08.  Concepts 07/09/10 skip the
+    tile entirely and draw their tree on a transparent canvas.
+    """
     tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     grad = vertical_gradient(size, bg_top, bg_bot).convert("RGBA")
     mask = rounded_mask(size, radius=int(size * 0.22))
@@ -156,6 +416,15 @@ def draw_window(tile: Image.Image, cx_f, cy_f, w_f, h_f, rot_deg=0,
 
 
 def save_concept(name: str, master: Image.Image) -> None:
+    """Write the simple-path concept artefacts: ``<name>.png`` + ``<name>.ico``.
+
+    For static concepts whose canopy doesn't change with the on-screen
+    size (01-05), the master image is resampled to every required
+    pixel size with PIL's built-in ICO resizer — fine when the design
+    is busy enough to read at every scale.  Concepts 06/07/08/09/10
+    bypass this and re-render at each ICO size with a size-appropriate
+    recursion depth (see ``save_concept_0N`` for those).
+    """
     png_path = CONCEPTS / f"{name}.png"
     ico_path = CONCEPTS / f"{name}.ico"
     master.resize((512, 512), Image.LANCZOS).save(png_path, "PNG")
@@ -170,26 +439,44 @@ def save_concept(name: str, master: Image.Image) -> None:
 # ---------------------------------------------------------------------------
 
 def concept_node_graph() -> Image.Image:
+    """Concept 01 — clean stylised node-link graph.
+
+    Two layers of branches fan out from a central node above a stubby
+    trunk, with circular node highlights at every junction and a gold
+    ``>_`` prompt etched into the trunk.  Built on the shared dark
+    rounded tile + halo.
+
+    Frozen since v0.1 — the original V1 sketch, kept around as a
+    reference for the project's visual language.
+    """
     s = MASTER
+    # Background tile: dark blue-grey gradient with a soft top-centre halo.
     tile = make_tile(s, (34, 52, 82), (18, 28, 46),
                      halo=(int(s * 0.5), int(s * 0.2), int(s * 0.5),
                            (255, 255, 255), 28))
     d = ImageDraw.Draw(tile)
 
-    accent = (86, 214, 168)
-    accent_hi = (176, 246, 214)
-    prompt = (255, 214, 102)
+    # --- Palette --------------------------------------------------------
+    accent    = (86, 214, 168)    # mint — branches + leaf nodes
+    accent_hi = (176, 246, 214)   # lighter mint — root highlight ring
+    prompt    = (255, 214, 102)   # gold — ">_" prompt glyph
 
+    # Fractional-canvas helper: ``px(0.5, 0.5)`` -> centre pixel.
     def px(x, y): return (int(x * s), int(y * s))
 
-    line_w = int(s * 0.028)
-    node_r = int(s * 0.055)
-    leaf_r = int(s * 0.045)
+    # --- Stroke / node sizing (relative to canvas) ----------------------
+    line_w = int(s * 0.028)       # branch stroke
+    node_r = int(s * 0.055)       # central root node radius
+    leaf_r = int(s * 0.045)       # leaf-node radius
 
+    # --- Branch geometry (fractional canvas coords) ---------------------
+    # root: anchor point on the left; t1: first-tier branch tips on the
+    # mid-vertical column; t2: second-tier branch tips on the right.
     root = (0.28, 0.26)
-    t1 = [(0.58, 0.26), (0.58, 0.50), (0.58, 0.74)]
-    t2 = [(0.82, 0.42), (0.82, 0.58)]
+    t1   = [(0.58, 0.26), (0.58, 0.50), (0.58, 0.74)]
+    t2   = [(0.82, 0.42), (0.82, 0.58)]
 
+    # --- Draw branches: a vertical spine from root + horizontal arms ----
     d.line([px(root[0], root[1]), px(root[0], t1[-1][1])], fill=accent, width=line_w)
     for (bx, by) in t1:
         d.line([px(root[0], by), px(bx, by)], fill=accent, width=line_w)
@@ -198,18 +485,20 @@ def concept_node_graph() -> Image.Image:
     for (bx, by) in t2:
         d.line([px(mid[0], by), px(bx, by)], fill=accent, width=line_w)
 
+    # --- Nodes at every branch tip + a haloed root node -----------------
     def disc(p, r, fill):
         cx, cy = px(*p)
         d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=fill)
 
     for p in t1 + t2:
         disc(p, leaf_r, accent)
-    disc(root, node_r + int(s * 0.012), accent_hi)
-    disc(root, node_r, (22, 36, 58))
+    disc(root, node_r + int(s * 0.012), accent_hi)  # outer highlight ring
+    disc(root, node_r, (22, 36, 58))                # darker inner fill so ">_" reads
 
+    # --- ">_" prompt centred on the root node ---------------------------
     cx, cy = px(*root)
     stroke = int(s * 0.022)
-    arm = int(node_r * 0.62)
+    arm    = int(node_r * 0.62)
     d.line([(cx - arm // 2, cy - arm), (cx + arm // 2, cy), (cx - arm // 2, cy + arm)],
            fill=prompt, width=stroke, joint="curve")
     return tile
@@ -220,22 +509,36 @@ def concept_node_graph() -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def concept_wood_tree_windows() -> Image.Image:
+    """Concept 02 — literal brown tree with an "app windows" canopy.
+
+    A more representational direction: a stylised wood-coloured trunk
+    with a tiered foliage canopy made up of tiny rounded-rectangle
+    "application windows" (each with title bar + traffic-light dots,
+    rendered by ``draw_window``).  Reads as "this is a wrapper for
+    other applications."  Rasterised only — no SVG, no size-adaptive
+    ladder.
+    """
     s = MASTER
+    # Background tile: dark teal gradient with a warm halo near top-centre.
     tile = make_tile(s, (22, 54, 66), (9, 22, 30),
                      halo=(int(s * 0.5), int(s * 0.38), int(s * 0.32),
                            (255, 210, 130), 70))
 
-    # canopy backing blobs
-    CG_A = (86, 204, 138); CG_B = (42, 150, 102)
+    # --- Canopy backing blobs ------------------------------------------
+    # Six soft-blurred green ellipses build a tiered foliage shape that
+    # sits BEHIND the trunk + the actual window leaves.  Each entry is
+    # ``(cx, cy, r, color, alpha)`` in fractional canvas coords.
+    CG_A = (86, 204, 138)   # lighter green — front layer
+    CG_B = (42, 150, 102)   # darker green  — back layer
     canopy = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     cd = ImageDraw.Draw(canopy)
     for (cx, cy, r, color, a) in [
-        (0.50, 0.38, 0.30, CG_B, 220),
-        (0.36, 0.34, 0.20, CG_A, 230),
-        (0.64, 0.34, 0.20, CG_A, 230),
-        (0.50, 0.22, 0.19, CG_A, 230),
-        (0.30, 0.46, 0.16, CG_B, 220),
-        (0.70, 0.46, 0.16, CG_B, 220),
+        (0.50, 0.38, 0.30, CG_B, 220),    # central back blob
+        (0.36, 0.34, 0.20, CG_A, 230),    # left  front blob
+        (0.64, 0.34, 0.20, CG_A, 230),    # right front blob
+        (0.50, 0.22, 0.19, CG_A, 230),    # top   front blob
+        (0.30, 0.46, 0.16, CG_B, 220),    # lower-left  back blob
+        (0.70, 0.46, 0.16, CG_B, 220),    # lower-right back blob
     ]:
         cx, cy, r = int(cx * s), int(cy * s), int(r * s)
         cd.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*color, a))
@@ -243,15 +546,22 @@ def concept_wood_tree_windows() -> Image.Image:
     tile = Image.alpha_composite(tile, canopy)
     d = ImageDraw.Draw(tile)
 
-    TRUNK = (138, 92, 46); TRUNK_HI = (190, 134, 74); PROMPT = (252, 220, 128)
+    # --- Palette --------------------------------------------------------
+    TRUNK    = (138, 92, 46)    # warm brown
+    TRUNK_HI = (190, 134, 74)   # lighter brown highlight stripe
+    PROMPT   = (252, 220, 128)  # gold ">_" glyph
 
     def px(x, y): return (int(x * s), int(y * s))
 
+    # --- Trunk: tapered polygon + lighter highlight stripe + base flare -
+    # Trunk top y=0.48, base y=0.88; slight outward taper at the base.
     d.polygon([px(0.47, 0.48), px(0.53, 0.48), px(0.56, 0.88), px(0.44, 0.88)],
               fill=TRUNK)
     d.polygon([px(0.475, 0.48), px(0.495, 0.48), px(0.475, 0.88), px(0.455, 0.88)],
               fill=TRUNK_HI)
 
+    # Two quarter-circle "root flare" wedges where the trunk meets the
+    # ground line.  ``dx=-1`` is the left wedge, ``dx=+1`` the right.
     base_y = int(0.88 * s)
     for dx in (-1, 1):
         cx = int((0.50 + dx * 0.06) * s)
@@ -259,12 +569,15 @@ def concept_wood_tree_windows() -> Image.Image:
         d.pieslice((cx - r, base_y - r, cx + r, base_y + r),
                    0 if dx > 0 else 90, 90 if dx > 0 else 180, fill=TRUNK)
 
+    # --- Three branch arms reaching from the trunk into the canopy ------
     branch_w = int(s * 0.028)
     for (x2, y2) in [(0.30, 0.48), (0.70, 0.48), (0.50, 0.30)]:
         d.line([px(0.50, 0.55), px(x2, y2)], fill=TRUNK, width=branch_w)
 
+    # --- ">_" prompt etched into the trunk ------------------------------
     cx, cy = px(0.50, 0.70)
-    arm = int(s * 0.035); stroke = int(s * 0.018)
+    arm    = int(s * 0.035)
+    stroke = int(s * 0.018)
     d.line([(cx - arm, cy - arm), (cx, cy), (cx - arm, cy + arm)],
            fill=PROMPT, width=stroke, joint="curve")
     under_w = int(s * 0.07)
@@ -272,6 +585,10 @@ def concept_wood_tree_windows() -> Image.Image:
                          cx + int(s * 0.012) + under_w, cy + arm + stroke // 2),
                         radius=stroke // 2, fill=PROMPT)
 
+    # --- Window leaves (tiny "app windows" with traffic-light dots) -----
+    # Six windows scattered through the canopy, rotated slightly for a
+    # hand-placed feel.  ``draw_window(tile, cx, cy, w, h, rot_deg)`` —
+    # all coords/dims fractional.
     draw_window(tile, 0.32, 0.34, 0.24, 0.22, rot_deg=-10)
     draw_window(tile, 0.68, 0.34, 0.24, 0.22, rot_deg=10)
     draw_window(tile, 0.50, 0.22, 0.26, 0.20, rot_deg=-3)
@@ -286,27 +603,38 @@ def concept_wood_tree_windows() -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def concept_branch_windows() -> Image.Image:
+    """Concept 03 — node-graph branches (from 01) with windows at the tips.
+
+    A hybrid that keeps concept 01's branching geometry but replaces
+    its terminal circular nodes with concept 02's tiny app-window
+    leaves.  Reads as "node-tree wrapping app processes."  Was the
+    working favourite for a stretch.
+    """
     s = MASTER
+    # Same dark blue-grey tile + halo as concept 01.
     tile = make_tile(s, (34, 52, 82), (18, 28, 46),
                      halo=(int(s * 0.5), int(s * 0.2), int(s * 0.5),
                            (255, 255, 255), 28))
     d = ImageDraw.Draw(tile)
 
-    accent = (86, 214, 168)
-    accent_hi = (176, 246, 214)
-    prompt = (255, 214, 102)
+    # --- Palette --------------------------------------------------------
+    accent    = (86, 214, 168)    # mint — branches
+    accent_hi = (176, 246, 214)   # lighter mint — elbow highlights + root halo
+    prompt    = (255, 214, 102)   # gold — ">_" glyph
 
     def px(x, y): return (int(x * s), int(y * s))
 
+    # --- Stroke / node sizing -------------------------------------------
     line_w = int(s * 0.028)
     node_r = int(s * 0.055)
 
-    # Layout: root at left-centre, three branches fanning to the right.
-    # Each branch terminates in a window-leaf. The middle branch also has
+    # --- Branch layout --------------------------------------------------
+    # Root at left-centre, three branches fanning to the right.  Each
+    # branch terminates in a window-leaf.  The middle branch also has
     # a short sub-spine with two secondary window-leaves.
     root = (0.18, 0.50)
-    t1  = [(0.50, 0.22), (0.50, 0.50), (0.50, 0.78)]
-    t2  = [(0.80, 0.36), (0.80, 0.64)]  # secondaries off middle branch
+    t1   = [(0.50, 0.22), (0.50, 0.50), (0.50, 0.78)]
+    t2   = [(0.80, 0.36), (0.80, 0.64)]  # secondaries off middle branch
 
     # Vertical spine from root
     d.line([px(root[0], t1[0][1]), px(root[0], t1[-1][1])],
@@ -460,6 +788,13 @@ def concept_upright_tree_windows() -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def concept_upright_branch_windows() -> Image.Image:
+    """Concept 05 — upright tree with stylised branches + window leaves.
+
+    Combines concept 04's upright wooden trunk with concept 03's
+    node-style branches and tiny app-window leaves.  The first concept
+    to also ship an SVG (``svg_concept_05``) — the line geometry is
+    simple enough to translate cleanly.
+    """
     s = MASTER
     tile = make_tile(s, (22, 54, 66), (9, 22, 30),
                      halo=(int(s * 0.5), int(s * 0.28), int(s * 0.36),
@@ -837,6 +1172,21 @@ def _split_pts(anchor, angle_deg, side):
 def _pil_subtree(d, anchor, angle_deg, side, depth, max_depth,
                      branch, node_hi, leaf_tip,
                      line_w, node_r, leaf_r):
+    """Recursively draw one hex-fractal subtree (PIL, with junction dots).
+
+    Used by concepts 06/08/09 — they all share this geometry, only the
+    palette differs (colour-per-concept passed via ``branch`` /
+    ``node_hi`` / ``leaf_tip``).  At each level we stroke the four hex
+    segments, drop a node circle at every junction, then recurse on
+    ``v3`` / ``v5`` with ``side`` × ``_BRANCH_SCALE`` and an outward
+    ``±_BRANCH_TILT`` tilt.  At ``max_depth`` the recursion stops and
+    leaf-tip discs (larger radius) are drawn at the canopy edge.
+
+    Concept 10 uses ``_collect_fractal`` instead — a two-pass walker
+    that lets the renderer draw every line first and every dot
+    afterwards, so junction circles always sit on top of the deeper
+    levels' branch strokes meeting at the same point.
+    """
     v1, v2, v6, v3, v5 = _split_pts(anchor, angle_deg, side)
     d.line([v1, v2], fill=branch, width=line_w)
     d.line([v1, v6], fill=branch, width=line_w)
@@ -865,6 +1215,18 @@ def _pil_subtree(d, anchor, angle_deg, side, depth, max_depth,
 
 
 def pil_fractal_tree(canvas_size: int = MASTER, max_depth: int = 4) -> Image.Image:
+    """Concept 06 — hex-fractal tree over a dark tile (PIL).
+
+    The "first fractal" concept.  Dark teal background tile with a
+    soft warm halo, brown trunk with a gold ``>_`` prompt, and a mint
+    hex-fractal canopy with circular junction highlights + leaf-tip
+    discs.  ``max_depth`` controls how many recursive splits the
+    canopy shows (1-6 useful range; ICO ladder picks per-frame depth).
+
+    Palette is baked in — concept 06 does NOT honour ``--invert`` /
+    ``--color`` / ``--trunk-width`` / ``--trunk-lightness``; only
+    concept 10 does.
+    """
     s = canvas_size
     tile = make_tile(s, (22, 54, 66), (9, 22, 30),
                      halo=(int(s * 0.5), int(s * 0.30), int(s * 0.40),
@@ -933,6 +1295,16 @@ def pil_fractal_tree(canvas_size: int = MASTER, max_depth: int = 4) -> Image.Ima
 def _svg_subtree(anchor, angle_deg, side, depth, max_depth,
                      branch, node_hi, leaf_tip,
                      line_w, node_r, leaf_r) -> str:
+    """SVG analogue of ``_pil_subtree`` — returns an SVG fragment string.
+
+    Same geometry rules (``_split_pts`` + ``_BRANCH_SCALE`` +
+    ``_BRANCH_TILT``), same single-pass walk that draws junction
+    circles inline (since SVG document order = z-order, this works
+    for concepts 06/08/09 whose junction circles don't overlap deeper
+    levels' strokes).  Concept 10 uses ``_svg_collect_fractal``
+    instead so its connector dots can be appended LAST and end up on
+    top.
+    """
     v1, v2, v6, v3, v5 = _split_pts(anchor, angle_deg, side)
     parts = []
     cap = 'stroke-linecap="round"'
@@ -966,6 +1338,15 @@ def _svg_subtree(anchor, angle_deg, side, depth, max_depth,
 
 
 def svg_fractal_tree(canvas_size: int = 1024, max_depth: int = 4) -> str:
+    """Concept 06 as SVG — vector twin of ``pil_fractal_tree``.
+
+    Same dark-tile background, brown trunk with gold ``>_`` prompt,
+    mint hex-fractal canopy with junction highlights + leaf tips.
+    Embeds the gradient + halo as ``<defs>``/``<linearGradient>``/
+    ``<radialGradient>`` and clips the whole composition to a rounded
+    rectangle.  ``canvas_size`` sets the viewBox size; the file
+    scales freely once it's in a viewer.
+    """
     S = canvas_size
     BG_TOP   = "#163642"; BG_BOT  = "#09161E"
     BRANCH   = "#56D6A8"; NODE_HI = "#B0F6D6"; LEAF_TIP = "#8CE8BC"
@@ -1379,6 +1760,16 @@ def svg_grayscale_leveled_tree(canvas_size: int = 1024,
                                color: str | None = None,
                                trunk_width: int | None = None,
                                trunk_lightness: int | None = None) -> str:
+    """Concept 10 as SVG — vector twin of ``pil_grayscale_leveled_tree``.
+
+    Honours the same four palette knobs as the PIL version (``invert``
+    / ``color`` / ``trunk_width`` / ``trunk_lightness``).  Returns a
+    plain SVG string with a transparent background — no tile, no
+    halo, no gradient — so the same icon reads cleanly on light or
+    dark surfaces depending on which way the brightness ladder is
+    pointing.  ``canvas_size`` sets the viewBox + internal coordinate
+    space; the file scales freely once it's in a viewer.
+    """
     S = canvas_size
     levels = _grayscale_levels(max_depth, invert=invert, color=color,
                                base_branch=trunk_lightness)
@@ -1432,6 +1823,15 @@ def svg_grayscale_leveled_tree(canvas_size: int = 1024,
 
 
 def save_concept_10() -> None:
+    """Render concept 10's showcase artefacts into ``concepts/``.
+
+    Writes ``10_grayscale_leveled_tree.{png,ico,svg}`` with the
+    size-adaptive ICO depth ladder (1 split at 16-24 px, 4 at 128+).
+    Mirrors ``save_concept_06`` but for concept 10's geometry +
+    palette ladder.  All palette knobs default to "off" here —
+    user-driven palette overrides flow through ``main``'s publish
+    path, not this showcase render.
+    """
     name = "10_grayscale_leveled_tree"
 
     master = pil_grayscale_leveled_tree(canvas_size=MASTER, max_depth=4)
@@ -1486,6 +1886,16 @@ _C09_PROMPT   = (232, 232, 232) # near-white — pops on the dark trunk
 
 def pil_grayscale_fractal_tree(canvas_size: int = MASTER,
                                max_depth: int = 4) -> Image.Image:
+    """Concept 09 — grayscale hex-fractal tree, straight trunk, transparent BG.
+
+    Same fractal geometry as concept 06 but with the dark tile, halo,
+    and warm gradient removed, palette flattened to grayscale, and
+    the trunk re-drawn as a straight (untapered) stadium rectangle
+    whose width is one fractal-scaling step "up" from the depth-0
+    branch stroke.  Designed to read on either a light or dark
+    surface, biased a touch darker for good contrast against the
+    usual light file-explorer background.
+    """
     s = canvas_size
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
@@ -1539,6 +1949,13 @@ def pil_grayscale_fractal_tree(canvas_size: int = MASTER,
 
 def svg_grayscale_fractal_tree(canvas_size: int = 1024,
                                max_depth: int = 4) -> str:
+    """Concept 09 as SVG — vector twin of ``pil_grayscale_fractal_tree``.
+
+    Same grayscale palette (``_C09_*`` constants), same straight
+    stadium trunk, same hex-fractal canopy with junction + leaf
+    circles.  No background — the file is just the tree on a
+    transparent viewBox.
+    """
     S = canvas_size
 
     TRUNK    = f'rgb({_C09_TRUNK[0]},{_C09_TRUNK[1]},{_C09_TRUNK[2]})'
@@ -1596,6 +2013,7 @@ def svg_grayscale_fractal_tree(canvas_size: int = 1024,
 
 
 def save_concept_09() -> None:
+    """Write concept 09's PNG + size-adaptive ICO + SVG into ``concepts/``."""
     name = "09_grayscale_fractal_tree"
 
     master = pil_grayscale_fractal_tree(canvas_size=MASTER, max_depth=4)
@@ -1636,6 +2054,16 @@ _C08_MINT = (86, 214, 168)
 
 
 def pil_mono_fractal_tree(canvas_size: int = MASTER, max_depth: int = 4) -> Image.Image:
+    """Concept 08 — monochrome mint fractal on the dark tile.
+
+    Same dark teal tile + warm halo as concept 06, but every
+    foreground element (trunk, branches, junction dots, leaf tips,
+    ``>_`` prompt) renders in a single mint hue.  The trunk is a
+    straight rounded rectangle — no flare, no taper — and the
+    ``>_`` is drawn as a "punch-through" in the background colour
+    so it reads as a cutout rather than another mint glyph on top
+    of the trunk.
+    """
     s = canvas_size
     tile = make_tile(s, (22, 54, 66), (9, 22, 30),
                      halo=(int(s * 0.5), int(s * 0.30), int(s * 0.40),
@@ -1687,6 +2115,12 @@ def pil_mono_fractal_tree(canvas_size: int = MASTER, max_depth: int = 4) -> Imag
 # --- SVG emitter --------------------------------------------------------
 
 def svg_mono_fractal_tree(canvas_size: int = 1024, max_depth: int = 4) -> str:
+    """Concept 08 as SVG — vector twin of ``pil_mono_fractal_tree``.
+
+    Embeds the dark gradient + halo as SVG defs, then renders trunk +
+    canopy + ``>_`` prompt all in the same mint hue (with the prompt
+    in the punch-through background colour for the cutout effect).
+    """
     S = canvas_size
     BG_TOP   = "#163642"; BG_BOT  = "#09161E"
     MINT     = "#56D6A8"
@@ -1755,6 +2189,7 @@ def svg_mono_fractal_tree(canvas_size: int = 1024, max_depth: int = 4) -> str:
 
 
 def save_concept_08() -> None:
+    """Write concept 08's PNG + size-adaptive ICO + SVG into ``concepts/``."""
     name = "08_mono_fractal_tree"
 
     master = pil_mono_fractal_tree(canvas_size=MASTER, max_depth=4)
@@ -1911,6 +2346,14 @@ def pil_glyph_fractal_tree(canvas_size: int = MASTER, max_depth: int = 3,
 
 def _svg_subtree_lines(anchor, angle_deg, side, depth, max_depth,
                            stroke_w) -> str:
+    """SVG analogue of ``_pil_subtree_lines`` — stroke-only hex fractal.
+
+    Recurses through the hex-split geometry just like the dot-bearing
+    variants but emits ``<line>`` elements only, with ``currentColor``
+    so the line-glyph icon picks up its colour from the surrounding
+    text colour (per the facet-icon style guide).  No junction dots,
+    no leaf tips.
+    """
     v1, v2, v6, v3, v5 = _split_pts(anchor, angle_deg, side)
     parts = []
     for a, b in ((v1, v2), (v1, v6), (v2, v3), (v6, v5)):
@@ -2014,6 +2457,15 @@ CONCEPTS_TABLE = {
 
 
 def _build_cli() -> argparse.ArgumentParser:
+    """Construct the argparse parser for ``make_icon.py``.
+
+    The parser drives two distinct paths in ``main`` — see the
+    parser's own ``description`` text for the user-facing split.
+    Help text on every flag is written for end-users (the script
+    is also wired into the GUI front-end at
+    ``ScripTreeApps/ScripTreeManagement/make_icon.scriptree``, which
+    surfaces each flag as a labelled form field).
+    """
     p = argparse.ArgumentParser(
         prog="make_icon.py",
         description=(
@@ -2049,7 +2501,19 @@ def _build_cli() -> argparse.ArgumentParser:
     p.add_argument(
         "--out", type=Path, default=None,
         help="Output PNG path for single-shot mode.  "
-             "Default: ./scriptree_custom.png next to this script.",
+             "Default: ./scriptree_custom.png next to this script "
+             "(suppressed automatically when --svg-out is the only "
+             "output requested).",
+    )
+    p.add_argument(
+        "--svg-out", type=Path, default=None,
+        help="Output SVG path for single-shot mode.  May be set on its "
+             "own, or alongside --out to produce both formats in one "
+             "render.  Concept must be size-adaptive (06/08/09/10).  "
+             "--size sets the SVG's viewBox + internal coordinate "
+             "space, which mostly affects stroke widths when the file "
+             "is opened with a forced pixel size (default 1024 is "
+             "fine for almost everything).",
     )
     # ---- Full-publish overrides (applied to the default no-flag run) ----
     p.add_argument(
@@ -2120,6 +2584,22 @@ def _build_cli() -> argparse.ArgumentParser:
              "end, tips the darkest).  Default: 78 (the bottom of the "
              "fractal's stock contrast range).  Concept 10 only.",
     )
+    # Documented for ``--help`` only -- the real handling lives in
+    # ``_ensure_pillow`` at module top, which pre-scans sys.argv before
+    # the top-level ``from PIL import ...`` could fire on a missing
+    # Pillow.  Argparse just sees the flag and ignores it (no business
+    # logic depends on args.install_deps once we get this far -- by
+    # then Pillow is already present).  Listed here so ``--help`` shows
+    # the flag and the prompt text mentions a real, discoverable option.
+    p.add_argument(
+        "--install-deps", action="store_true",
+        help="Offer to ``pip install Pillow`` into this Python "
+             "(``sys.executable``) when it's missing, instead of just "
+             "printing the install command and exiting.  Prompts for "
+             "confirmation on a TTY; in non-interactive contexts (GUI "
+             "runner, CI) treats the flag itself as consent.  Has no "
+             "effect when Pillow is already installed.",
+    )
     return p
 
 
@@ -2140,7 +2620,20 @@ def _parse_ico_sizes(s: str) -> list[int]:
 
 
 def _single_shot(args: argparse.Namespace) -> None:
-    """Render one PNG of one concept at a chosen depth and size."""
+    """Render one PNG and/or SVG of one concept at a chosen depth/size.
+
+    Output selection rules:
+
+    * ``--out`` alone -> PNG only (current behaviour, preserved).
+    * ``--svg-out`` alone -> SVG only.
+    * Both -> both formats, side-by-side at the paths given.
+    * Neither -> PNG only at the legacy default
+      ``./scriptree_custom.png`` next to this script.
+
+    The same ``--depth / --size / --color / --invert / --trunk-width /
+    --trunk-lightness`` flags apply to both formats so the two outputs
+    are visually consistent when produced together.
+    """
     name = args.concept or ACTIVE
     if name not in _ADAPTIVE_CONCEPTS:
         raise SystemExit(
@@ -2158,7 +2651,7 @@ def _single_shot(args: argparse.Namespace) -> None:
         raise SystemExit("--trunk-width must be at least 1 px.")
     if args.trunk_lightness is not None and not (0 <= args.trunk_lightness <= 255):
         raise SystemExit("--trunk-lightness must be in [0, 255].")
-    pil_fn = _ADAPTIVE_CONCEPTS[name][0]
+    pil_fn, svg_fn, *_ = _ADAPTIVE_CONCEPTS[name]
     depth  = args.depth if args.depth is not None else 4
     size   = args.size  if args.size  is not None else MASTER
 
@@ -2166,37 +2659,66 @@ def _single_shot(args: argparse.Namespace) -> None:
     if args.color:
         _parse_hex_color(args.color)  # raises ValueError if malformed
 
-    # Render at the requested size directly when ≥ 256, else render at a
-    # higher working resolution and downsample for clean antialiasing.
-    work = max(256, size)
-    img  = pil_fn(canvas_size=work, max_depth=depth,
-                  invert=args.invert, color=args.color,
-                  trunk_width=args.trunk_width,
-                  trunk_lightness=args.trunk_lightness)
-    if work != size:
-        img = img.resize((size, size), Image.LANCZOS)
+    # Decide which formats to write.  The default-when-nothing-given
+    # behaviour preserves the v0.7-era "render a PNG to a sensible
+    # default path" so existing invocations with no output flag still
+    # work as documented.
+    png_out = args.out
+    svg_out = args.svg_out
+    if png_out is None and svg_out is None:
+        png_out = HERE / "scriptree_custom.png"
 
-    out = args.out or (HERE / "scriptree_custom.png")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, "PNG")
-    palette_note = ""
+    # Shared bits-suffix for the "Wrote ..." print lines so the user
+    # can tell at a glance what palette knobs landed on each file.
     bits = []
     if args.invert:                       bits.append("invert")
     if args.color:                        bits.append(f"color={args.color}")
     if args.trunk_width is not None:      bits.append(f"trunk-width={args.trunk_width}px")
     if args.trunk_lightness is not None:  bits.append(f"trunk-lightness={args.trunk_lightness}")
-    if bits:
-        palette_note = f", {', '.join(bits)}"
-    print(f"Wrote {out}  ({name}, depth={depth}, size={size}px{palette_note})")
+    palette_note = f", {', '.join(bits)}" if bits else ""
+
+    if png_out is not None:
+        # Render at the requested size directly when ≥ 256, else
+        # render at a higher working resolution and downsample for
+        # clean antialiasing.  SVG doesn't need this dance — it's
+        # resolution-independent.
+        work = max(256, size)
+        img  = pil_fn(canvas_size=work, max_depth=depth,
+                      invert=args.invert, color=args.color,
+                      trunk_width=args.trunk_width,
+                      trunk_lightness=args.trunk_lightness)
+        if work != size:
+            img = img.resize((size, size), Image.LANCZOS)
+        png_out.parent.mkdir(parents=True, exist_ok=True)
+        img.save(png_out, "PNG")
+        print(f"Wrote {png_out}  ({name}, depth={depth}, size={size}px{palette_note})")
+
+    if svg_out is not None:
+        svg_text = svg_fn(size, depth,
+                          invert=args.invert, color=args.color,
+                          trunk_width=args.trunk_width,
+                          trunk_lightness=args.trunk_lightness)
+        svg_out.parent.mkdir(parents=True, exist_ok=True)
+        svg_out.write_text(svg_text, encoding="utf-8")
+        print(f"Wrote {svg_out}  ({name}, depth={depth}, viewBox={size}{palette_note})")
 
 
 # Adaptive concepts.  Renderers all accept ``invert`` / ``color`` kwargs
 # for forward-compat with the palette CLI flags; concepts 06/08/09 ignore
 # them (their palettes are baked in), only concept 10 honours them.
 def _wrap_palette_pil(fn):
+    """Wrap a palette-free PIL renderer so it accepts (and ignores) the palette kwargs.
+
+    Concepts 06/08/09 take ``(canvas_size, max_depth)``; concept 10
+    additionally takes ``invert`` / ``color`` / ``trunk_width`` /
+    ``trunk_lightness``.  The ``_ADAPTIVE_CONCEPTS`` dispatch table
+    calls every renderer with the same signature for uniformity, so
+    we wrap the simpler ones to discard the extra kwargs silently.
+    """
     return lambda *, canvas_size, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None: fn(canvas_size, max_depth)
 
 def _wrap_palette_svg(fn):
+    """SVG counterpart of ``_wrap_palette_pil`` — discards palette kwargs."""
     return lambda S, max_depth, invert=False, color=None, trunk_width=None, trunk_lightness=None: fn(S, max_depth)
 
 _ADAPTIVE_CONCEPTS = {
@@ -2221,9 +2743,39 @@ _ADAPTIVE_CONCEPTS = {
 
 
 def main() -> None:
+    """Entry point — dispatch to single-shot or full-publish based on argv.
+
+    Decision tree:
+
+    * Any of ``--depth`` / ``--size`` / ``--out`` / ``--svg-out`` set
+      -> **single-shot** (``_single_shot``).  Touches only the user-
+      named output path(s).
+    * Any of ``--publish-depth`` / ``--ico-sizes`` set, and none of
+      the single-shot flags -> **full publish with overrides**.
+    * Combining single-shot flags with publish-override flags raises
+      ``SystemExit`` (those are different intents and would silently
+      drop one user's input).
+    * Otherwise -> **full publish** with defaults.
+
+    The full-publish path:
+
+      1. Renders every concept's showcase artefacts into
+         ``concepts/<NN_name>.{png,ico,svg}``.
+      2. Publishes the ``ACTIVE`` concept to ``scriptree.{png,ico,svg}``
+         at the resources root, applying any palette flags
+         (concept 10 only) and any ICO-ladder overrides.
+      3. Publishes the same image to ``icons/icon-forest.{png,svg}``
+         at the project root so the cell-shell forest hub falls back
+         to a consistent glyph when no per-forest icon is embedded.
+    """
     args = _build_cli().parse_args()
+    # ``--svg-out`` belongs on this list -- a user who passes ONLY
+    # ``--svg-out`` (no --depth / --size / --out) is asking for a
+    # single-shot SVG render, not a full publish.  Missing this
+    # caused --svg-out alone to silently fall through to publish.
     single_shot = (args.depth is not None or args.size is not None
-                   or args.out is not None)
+                   or args.out is not None
+                   or args.svg_out is not None)
     publish_overrides = (args.publish_depth is not None
                         or args.ico_sizes is not None)
     if single_shot and publish_overrides:

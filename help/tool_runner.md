@@ -240,6 +240,54 @@ at the top of the form panel. Menu items execute their command when
 clicked. Commands are split safely (no shell) via `CommandLineToArgvW`
 on Windows or `shlex.split` on other platforms.
 
+## Action buttons (v0.8.0a11+)
+
+If the `.scriptree` defines an `"actions"` array, a second row of
+buttons appears below the Run / Stop / Copy argv row, labelled
+**Actions:**. Each action is a **fixed-argv preset** — clicking it
+runs the tool with the argv the producer wrote into the `.scriptree`,
+without touching the form. Use them for quick side actions that
+don't need user input: `git status`, `pip list --outdated`,
+`docker ps`, "validate config", "test connection", and so on.
+
+What you see:
+
+- The button row only appears when the tool has actions. Tools
+  without any are unchanged.
+- Hover a button to see its argv (or a custom tooltip if the
+  producer wrote one).
+- Click it: output streams into the same output pane the main Run
+  uses, prefixed with `▶ Action: <label>` so a session log with
+  several action firings stays readable.
+- When the producer marked an action with `popup: "always"` (or
+  `"auto"` and the output is short) a **copy-friendly modal** also
+  opens with the result:
+  - Selectable text (click-drag, Ctrl-A, right-click → Copy).
+  - A **Copy** button at the bottom-left grabs the whole output
+    into the clipboard.
+  - Ctrl-Shift-C also does copy-all.
+  - Escape (or the Close button) closes the dialog.
+  - The dialog remembers its position per tool+action pair.
+- Run and the action buttons share a concurrency lock: while one is
+  in flight, the others are disabled. The same Stop button cancels
+  either.
+- A destructive action can carry a `confirm` text — clicking it
+  pops a confirmation dialog before running.
+
+When to use actions vs the main form:
+
+| Want                                                  | Use                                          |
+|-------------------------------------------------------|----------------------------------------------|
+| Form-driven invocation (fill fields, click Run)       | The main form + Run                           |
+| Quick preset with no user input                       | An action                                     |
+| Several modes of the same CLI (status / log / diff)   | Several actions, one per mode                 |
+| Destructive preset that should confirm                | Action with `confirm` text                    |
+| Output the user will copy/paste                       | Action with `popup: "always"` (or `"auto"`)   |
+
+Edit actions from the tool editor's **Action buttons:** row →
+**Edit actions...** button. The editor lets you add, remove,
+reorder, and configure each action with a live argv preview.
+
 ## Input sanitization
 
 Before every run, ScripTree checks all form values for:

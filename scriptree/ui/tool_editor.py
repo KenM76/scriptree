@@ -235,6 +235,29 @@ class ToolEditorView(QWidget):
         menus_wrapper.setLayout(menus_row)
         top_form.addRow("Custom menus:", menus_wrapper)
 
+        # Action buttons — tool.actions.  Rendered as a row next to
+        # Run in ToolRunnerView when the tool is loaded.  Same UX
+        # pattern as the menus row above: status label + Edit button
+        # that opens a dedicated dialog.  Empty list = no row in
+        # the runner.
+        actions_row = QHBoxLayout()
+        self._actions_status = QLabel(_actions_summary(self._tool))
+        self._actions_status.setStyleSheet("color: #666;")
+        actions_row.addWidget(self._actions_status, stretch=1)
+        actions_btn = QPushButton("Edit actions...")
+        actions_btn.setToolTip(
+            "Add and configure the action buttons that appear next to "
+            "Run in the tool runner.  Each action fires a fixed argv "
+            "(no form-field substitution) -- useful for quick presets "
+            "like 'git status', 'pip list --outdated', diagnostic "
+            "dumps, etc."
+        )
+        actions_btn.clicked.connect(self._edit_tool_actions)
+        actions_row.addWidget(actions_btn)
+        actions_wrapper = QWidget()
+        actions_wrapper.setLayout(actions_row)
+        top_form.addRow("Action buttons:", actions_wrapper)
+
         outer.addWidget(top)
 
         # Middle: param list | property panel.
@@ -784,6 +807,23 @@ class ToolEditorView(QWidget):
             return
         self._tool.menus = dlg.menus
         self._menus_status.setText(_menus_summary(self._tool))
+
+    def _edit_tool_actions(self) -> None:
+        """Open the action-buttons editor and write results back to the tool.
+
+        Same lifecycle as ``_edit_tool_menus`` -- the dialog mutates a
+        deep copy of the list and only commits to ``self._tool.actions``
+        on OK.  The main Save button persists to disk.
+        """
+        from .actions_editor import ActionsEditorDialog
+
+        dlg = ActionsEditorDialog(
+            self._tool.actions, tool=self._tool, parent=self,
+        )
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        self._tool.actions = dlg.actions
+        self._actions_status.setText(_actions_summary(self._tool))
 
     # --- property-row tooltip helper (v0.4.0+) ---------------------------
 
@@ -1801,6 +1841,23 @@ def _menus_summary(tool: ToolDef) -> str:
             names.append(key)
     n_items = len(tool.menus)
     return f"{', '.join(names)} — {n_items} item{'s' if n_items != 1 else ''}"
+
+
+def _actions_summary(tool: ToolDef) -> str:
+    """Short status for the ``Edit actions...`` inline label.
+
+    Reports the visible vs hidden count so the user can tell at a
+    glance whether actions are defined and how many will render as
+    buttons.  Mirrors :func:`_menus_summary`'s shape.
+    """
+    if not tool.actions:
+        return "<i>none</i>"
+    visible = sum(1 for a in tool.actions if not a.hidden)
+    hidden = len(tool.actions) - visible
+    parts = [f"{visible} button{'s' if visible != 1 else ''}"]
+    if hidden:
+        parts.append(f"{hidden} hidden")
+    return ", ".join(parts)
 
 
 # --- choices text round-trip helpers ---------------------------------------

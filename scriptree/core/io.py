@@ -49,6 +49,7 @@ from typing import Any
 
 from .model import (
     SCHEMA_VERSION,
+    ActionDef,
     MenuItemDef,
     ParamDef,
     ParamType,
@@ -102,6 +103,11 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         d["path_prepend"] = list(tool.path_prepend)
     if tool.menus:
         d["menus"] = [_menu_item_to_dict(m) for m in tool.menus]
+    # Action buttons (V3 v0.8.0a11+).  Same compactness rule as
+    # ``menus`` -- omitted entirely when no actions are declared so
+    # every legacy ``.scriptree`` round-trips byte-identical.
+    if tool.actions:
+        d["actions"] = [_action_to_dict(a) for a in tool.actions]
     # Cell-shell visual settings (V3, optional).  Each emitted only
     # when set so legacy tools round-trip byte-identical.  A "cell"
     # sub-object groups them so the top-level ToolDef JSON stays
@@ -197,6 +203,65 @@ def _load_menus(raw: Any) -> list[MenuItemDef]:
     return [_menu_item_from_dict(m) for m in raw if isinstance(m, dict)]
 
 
+def _action_to_dict(a: ActionDef) -> dict[str, Any]:
+    """Serialise one :class:`ActionDef`.
+
+    Compactness rule (matches :func:`_param_to_dict` /
+    :func:`_provider_to_dict`): every optional field is omitted at
+    its default so a ``.scriptree`` authored before this feature
+    existed and then re-saved through a later loader produces a
+    byte-identical file.  Only ``id``, ``label``, and ``argv`` are
+    emitted unconditionally -- the first two are required, ``argv``
+    appears even when empty because an empty argv is a meaningful
+    intent ("run executable with no args") rather than an omission.
+    """
+    d: dict[str, Any] = {
+        "id": a.id,
+        "label": a.label,
+        "argv": list(a.argv),
+    }
+    if a.tooltip:
+        d["tooltip"] = a.tooltip
+    if a.popup != "never":
+        d["popup"] = a.popup
+    if a.confirm:
+        d["confirm"] = a.confirm
+    if a.icon:
+        d["icon"] = a.icon
+    if a.hidden:
+        d["hidden"] = True
+    if a.section:
+        d["section"] = a.section
+    return d
+
+
+def _action_from_dict(raw: dict[str, Any]) -> ActionDef:
+    """Build an :class:`ActionDef` from a parsed JSON object.
+
+    ``ActionDef.__post_init__`` enforces structural validity (id
+    format, popup enum, argv element types) -- so a malformed
+    action raises ``ValueError`` at load time, same fail-loud
+    contract the rest of the schema uses.
+    """
+    return ActionDef(
+        id=str(raw.get("id", "")),
+        label=str(raw.get("label", "")),
+        argv=[str(x) for x in (raw.get("argv") or [])],
+        tooltip=str(raw.get("tooltip", "")),
+        popup=str(raw.get("popup", "never")),
+        confirm=str(raw.get("confirm", "")),
+        icon=str(raw.get("icon", "")),
+        hidden=bool(raw.get("hidden", False)),
+        section=str(raw.get("section", "")),
+    )
+
+
+def _load_actions(raw: Any) -> list[ActionDef]:
+    if not isinstance(raw, list):
+        return []
+    return [_action_from_dict(a) for a in raw if isinstance(a, dict)]
+
+
 def tool_from_dict(data: dict[str, Any]) -> ToolDef:
     _check_schema(data)
     src = data.get("source") or {}
@@ -258,6 +323,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         },
         path_prepend=[str(p) for p in (data.get("path_prepend") or [])],
         menus=_load_menus(data.get("menus")),
+        actions=_load_actions(data.get("actions")),
         cell_icon=str(cell_d.get("icon", "")),
         cell_icon_data=str(cell_d.get("icon_data", "")),
         cell_icon_format=str(cell_d.get("icon_format", "")),

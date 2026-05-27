@@ -62,6 +62,11 @@ Read these in order for the full picture:
     icons, autostart, the `.scriptreering` file format. The shell
     calls the editor as a subprocess for every tool launch, so V1
     stays untouched.
+14. **[Icon generator (`make_icon.py`)](make_icon.md)** — maintainer
+    tool for rebuilding the app icon + cell-shell forest hub glyph.
+    Two modes (full publish / single-shot), four palette flags
+    (concept 10), ten concept variants, optional auto-install of
+    Pillow.
 
 ## For LLMs (and humans using AI to generate tools)
 

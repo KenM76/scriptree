@@ -198,6 +198,22 @@ Menu item fields:
 In `.scriptree` files, menus appear as a menu bar at the top of the form.
 In `.scriptreetree` files, menus appear in the standalone window's menu bar.
 
+## Action buttons (v0.8.0a11+)
+
+`.scriptree` files can also declare an `"actions"` array — named
+fixed-argv presets rendered as a second button row next to Run in
+the tool runner. See [tool_runner.md](tool_runner.md#action-buttons-v080a11)
+for the UI walkthrough and `LLM/scriptree_format.md` for the
+field-level schema.
+
+```json
+"actions": [
+  {"id": "status", "label": "Status", "argv": ["status", "--short"]},
+  {"id": "log10",  "label": "Last 10", "argv": ["log", "--oneline", "-10"],
+   "popup": "auto"}
+]
+```
+
 ## Permissions files
 
 The `permissions/` folder contains blank files whose names are capabilities

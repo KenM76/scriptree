@@ -238,6 +238,12 @@ format.
   reason to serialize them.
 - Set `source.mode` to `"manual"` unless you actually ran a parser.
 - Omit `menus` unless the tool actually needs custom menus.
+- **If you find yourself writing tool-help text like "for X, run the
+  underlying CLI directly", stop and add an `actions[]` entry
+  instead.** That phrase is the smell of a missing action button.
+  See `scriptree_format.md` → "`actions` array" for the field-level
+  schema. Action argv is literal-only — no `{token}` substitution
+  from form fields.
 - Validate the result by round-tripping through `tool_from_dict` →
   `tool_to_dict` → JSON and confirming the output is stable.
 - Do NOT use shell metacharacters in menu `command` strings — they

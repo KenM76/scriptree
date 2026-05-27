@@ -1625,6 +1625,56 @@ class ToolRunnerView(QWidget):
 
         layout.addLayout(action_row)
 
+        # --- Action-button row (V3 v0.8.0a11+) ---------------------------
+        # A second FlowLayout below the Run / Stop / Copy argv row, only
+        # populated when ``self._tool.actions`` is non-empty.  Each
+        # ``ActionDef`` becomes a single QPushButton that, when clicked,
+        # spawns the tool with ``[executable, *action.argv]`` -- no form
+        # value substitution, no template language, just the literal argv
+        # the producer authored.  Output streams into the same pane Run
+        # uses, prefixed with "▶ Action: <label>\n" so the session log
+        # stays readable when several actions fire in succession.
+        #
+        # ``self._action_btns`` mirrors the visible buttons so the
+        # enable/disable wiring in ``_start_run`` / ``_start_action`` /
+        # ``_on_finished`` can flip them all together -- concurrent
+        # Run + action is intentionally prevented (same model as
+        # concurrent Run + Run today).
+        self._action_btns: list[QPushButton] = []
+        visible_actions = [
+            a for a in (getattr(self._tool, "actions", None) or [])
+            if not a.hidden
+        ]
+        if visible_actions:
+            from .flow_layout import FlowLayout
+            actions_row = FlowLayout(hspacing=4, vspacing=4)
+            self._actions_label = QLabel("Actions:")
+            self._actions_label.setStyleSheet(
+                "QLabel { color: #555; padding-right: 4px; }"
+            )
+            actions_row.addWidget(self._actions_label)
+            for action_def in visible_actions:
+                btn = QPushButton(action_def.label)
+                # Tooltip falls back to the resolved argv when the
+                # producer didn't author one -- matches the spec's
+                # "tooltip empty -> show argv".
+                if action_def.tooltip:
+                    btn.setToolTip(action_def.tooltip)
+                else:
+                    preview = " ".join(
+                        [self._tool.executable or "", *action_def.argv]
+                    ).strip()
+                    btn.setToolTip(preview)
+                # Capture ``action_def.id`` by default-argument trick so
+                # the closure binds the right id per iteration.
+                btn.clicked.connect(
+                    lambda _checked=False, _aid=action_def.id:
+                        self._start_action(_aid)
+                )
+                actions_row.addWidget(btn)
+                self._action_btns.append(btn)
+            layout.addLayout(actions_row)
+
         self._status = QLabel("")
         layout.addWidget(self._status)
 
@@ -2493,6 +2543,158 @@ class ToolRunnerView(QWidget):
         """
         return self._thread is not None
 
+    def _set_action_buttons_enabled(self, enabled: bool) -> None:
+        """Enable or disable every action button at once.
+
+        Called by ``_start_run`` / ``_start_action`` to lock the row
+        while a subprocess is in flight, and by ``_on_finished`` (and
+        the action's own completion handler) to re-enable on
+        finish.  No-op when ``self._tool.actions`` is empty (the
+        button list is empty too).
+        """
+        for btn in getattr(self, "_action_btns", []) or []:
+            btn.setEnabled(enabled)
+
+    def _start_action(self, action_id: str) -> None:
+        """Spawn the named action (V3 v0.8.0a11+).
+
+        Mirrors ``_start_run``'s spawn path -- same worker thread,
+        same ``stdoutLine`` / ``stderrLine`` / ``finished`` signals,
+        same Run / Stop / action-button enable wiring -- but uses
+        ``build_full_action_argv`` instead of ``build_full_argv`` so
+        the literal action argv is appended without form-value
+        substitution.  Output streams to the same pane, prefixed
+        with a "▶ Action: <label>\\n" separator so the session log
+        stays readable across multiple action firings.
+
+        The same ``run_tools`` capability gate applies -- an action
+        is just a different argv for the same tool, so denying
+        ``run_tools`` denies actions too.
+
+        v1 deliberately skips the form-value sanitization / extras /
+        live-cmd-editor branches of ``_start_run``: actions don't
+        consume any of those, so re-running that machinery here would
+        be cargo-cult.  The path the action argv travels is literally
+        ``ActionDef.argv -> build_full_action_argv -> spawn``.
+
+        Concurrent runs are prevented the same way ``_start_run``
+        does -- ``self._thread is not None`` short-circuits.
+        """
+        from .permission_guards import perm_check
+        if not perm_check("run_tools"):
+            QMessageBox.warning(
+                self, "Action not permitted",
+                "Running tools is disabled by your administrator "
+                "(capability: run_tools).",
+            )
+            return
+        if self._thread is not None:
+            return  # a Run or another action is already in flight
+
+        # Look up the ActionDef so we have the label/popup mode for
+        # output formatting + the result-popup decision.
+        action_def = None
+        for a in self._tool.actions:
+            if a.id == action_id:
+                action_def = a
+                break
+        if action_def is None:
+            QMessageBox.warning(
+                self, "Unknown action",
+                f"This tool has no action named {action_id!r}.",
+            )
+            return
+
+        # Confirm prompt for destructive actions (``confirm`` set).
+        if action_def.confirm:
+            reply = QMessageBox.question(
+                self, f"{self._tool.name} — {action_def.label}",
+                action_def.confirm,
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                return
+
+        # Build the command via the same machinery Run uses, just
+        # routed through the action-specific resolver so the literal
+        # argv (no form-value substitution) lands in the spawned
+        # process.
+        try:
+            from ..core.runner import build_full_action_argv
+            cfg, _set, _storage = self._active_config_and_set()
+            from ..core.app_settings import get_settings
+            from .settings_dialog import (
+                load_global_env, global_env_overrides_tool,
+                load_global_path_prepend, global_path_overrides_tool,
+            )
+            _qs = get_settings()
+            _g_env = load_global_env(_qs)
+            _g_env_override = global_env_overrides_tool(_qs)
+            _g_path = load_global_path_prepend(_qs)
+            _g_path_override = global_path_overrides_tool(_qs)
+
+            cmd = build_full_action_argv(
+                self._tool, action_id,
+                config_env=cfg.env if cfg else None,
+                config_path_prepend=cfg.path_prepend if cfg else None,
+                global_env=_g_env or None,
+                global_env_overrides=_g_env_override,
+                global_path_prepend=_g_path or None,
+                global_path_overrides=_g_path_override,
+                tree_path_prepend=self._tree_path_prepend or None,
+            )
+        except RunnerError as e:
+            QMessageBox.warning(self, "Action error", str(e))
+            return
+
+        # Separator + the action argv preview, so a user reading the
+        # output pane after several actions can tell what fired when.
+        self._append_line(
+            f"▶ Action: {action_def.label}",
+            color=QColor("#0050a0"),
+        )
+        self._append_line(f"$ {cmd.display()}\n")
+
+        # Remember which action is running so the finish handler can
+        # show the copy-friendly popup if the producer asked for one.
+        # (Phase D will wire the popup; storing the ref here lets
+        # Phase D land as a no-op-elsewhere change.)
+        self._active_action = action_def
+        self._action_stdout_buffer: list[str] = []
+
+        # Disable Run + every other action button while this one is
+        # in flight; enable Stop.  ``_on_finished`` flips them back.
+        self._btn_run.setEnabled(False)
+        self._set_action_buttons_enabled(False)
+        self._btn_stop.setEnabled(True)
+        self._btn_stop.setText("Stop")
+        self._status.setText(f"Running action: {action_def.label}…")
+
+        self._thread = QThread(self)
+        self._worker = _RunWorker(cmd, credentials=None, interactive=False)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.stdoutLine.connect(self._on_action_stdout)
+        self._worker.stderrLine.connect(self._on_stderr)
+        self._worker.finished.connect(self._on_finished)
+        self._thread.start()
+        self.runningChanged.emit(self._file_path or "", True)
+
+    def _on_action_stdout(self, line: str) -> None:
+        """Stdout handler for action runs.
+
+        Routes to the same output pane as Run's ``_on_stdout`` AND
+        buffers the line for the result popup (Phase D).  The
+        existing ``_on_stdout`` would also buffer for the popup if
+        we routed there directly, but keeping a dedicated handler
+        for actions makes the code path obvious and lets Phase D
+        attach its result-popup logic without touching Run.
+        """
+        self._on_stdout(line)
+        if hasattr(self, "_action_stdout_buffer"):
+            self._action_stdout_buffer.append(line)
+
     def _start_run(self) -> None:
         # ``run_tools`` capability gate (V3 v0.3.3) — call-time check
         # so keyboard shortcuts and programmatic invocations are gated
@@ -2734,6 +2936,10 @@ class ToolRunnerView(QWidget):
         self._refresh_interactive_visibility()
 
         self._btn_run.setEnabled(False)
+        # Disable action buttons too -- Run holds the worker lock, so
+        # actions can't fire concurrently.  ``_on_finished`` flips
+        # them back when the run completes.
+        self._set_action_buttons_enabled(False)
         self._btn_stop.setEnabled(True)
         self._btn_stop.setText("Stop")
         self._status.setText("Running…")
@@ -3198,12 +3404,41 @@ class ToolRunnerView(QWidget):
         self._thread = None
         self._worker = None
         self._btn_run.setEnabled(True)
+        # Re-enable every action button.  Symmetric to the disable
+        # in ``_start_run`` / ``_start_action``.
+        self._set_action_buttons_enabled(True)
         self._btn_stop.setEnabled(False)
         self._btn_stop.setText("Stop")
         self._status.setText(
             f"Finished — exit {exit_code} in {duration:.2f}s"
         )
         self.runningChanged.emit(self._file_path or "", False)
+
+        # Phase D popup hook: if this finish was an action run AND
+        # the action asked for a popup, show the copy-friendly
+        # result dialog.  The actual dialog class lands in Phase D;
+        # for now this branch is a no-op when the dialog module is
+        # not yet importable.
+        active_action = getattr(self, "_active_action", None)
+        if active_action is not None:
+            try:
+                from .action_result_dialog import maybe_show_action_result
+                maybe_show_action_result(
+                    parent=self,
+                    tool_name=self._tool.name,
+                    action=active_action,
+                    output_lines=getattr(
+                        self, "_action_stdout_buffer", []
+                    ),
+                    exit_code=exit_code,
+                )
+            except ImportError:
+                # action_result_dialog hasn't landed yet -- silent
+                # fall-through is intentional so Phase D can ship
+                # without touching this block.
+                pass
+            self._active_action = None
+            self._action_stdout_buffer = []
 
         # Popup dialogs when output pane is hidden.
         _cfg, _set, _storage = self._active_config_and_set()
