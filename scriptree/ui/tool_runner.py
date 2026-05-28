@@ -1019,20 +1019,19 @@ class ToolRunnerView(QWidget):
     def _return_bottom_panel(self, widget: QWidget) -> None:
         """Re-attach the bottom panel after a MainWindow uninstall.
 
-        v0.8.0a12+ -- the bottom pane no longer lives inside a
-        QSplitter, so the legacy ``runner._bottom_splitter.addWidget``
-        path is gone.  This method inserts the panel at its original
-        position in the main form layout (between the configurations
-        bar and the action button row), preserving the visual order.
+        v0.8.0a14+ -- the bottom pane sits inside the bottom-band
+        widget alongside the cfg row, Run / Stop row, and status
+        line.  Re-insert at the captured index so the visual order
+        (cfg -> extras + cmd -> Run row -> ...) is preserved.
         Used by ``MainWindow._uninstall_runner_panels``.
         """
         if widget is not self._bottom_pane:
             self._bottom_pane = widget
-        layout = getattr(self, "_main_form_layout", None)
+        layout = getattr(self, "_bottom_band_layout", None)
         if layout is None:
-            # Layout wasn't captured (should never happen in
-            # practice) -- fall back to appending so the panel is at
-            # least visible.
+            # Pre-v0.8.0a14 fallback -- should never happen on the
+            # current build but keeps the call site safe if a stale
+            # MainWindow ever calls back into a fresh runner.
             return
         index = getattr(self, "_bottom_pane_index", layout.count())
         layout.insertWidget(min(index, layout.count()), widget)
@@ -1557,24 +1556,50 @@ class ToolRunnerView(QWidget):
         # time in ``_start_run`` too for keyboard / programmatic.
         apply_widget_perm(self._chk_prompt_creds, "run_as_different_user")
 
-        layout.addWidget(self._cfg_widget)
-
-        # The bottom pane (extras + command line, each in an
-        # ArrowSection) sits right under the configurations bar so
-        # everything below the parameters scroll area forms a single
-        # always-visible band -- per the v0.8.0a12 layout rework, no
-        # splitter, no drag, controls stay put.  ``bottom_pane`` was
-        # constructed above before the cfg bar so the section
-        # widgets could be configured next to where ``bottom_layout``
-        # was set up; it's added to the outer layout HERE so visual
-        # order is cfg -> extras -> cmd.
+        # v0.8.0a14+ bottom_band rework
+        # ---------------------------------------------------------------
+        # In v0.8.0a13 we set ``form_scroll.setMinimumHeight(0)`` so
+        # the parameters scroll area could compress and let the Run /
+        # Stop button row stay visible.  That works in MainWindow's
+        # editor (which wraps the form panel in a QStackedWidget) but
+        # NOT in StandaloneWindow, which puts the form panel directly
+        # into a QtAds dock -- QtAds's dock geometry negotiation
+        # doesn't honour the inner scroll area's "I can shrink"
+        # promise reliably, and the Run buttons still get pushed off.
         #
-        # Remember the index where the bottom pane lives so
-        # ``_return_bottom_panel`` can re-insert it at the correct
-        # position after MainWindow's docking detaches it.
-        layout.addWidget(self._bottom_pane)
-        self._main_form_layout = layout
-        self._bottom_pane_index = layout.indexOf(self._bottom_pane)
+        # The robust fix is to wrap everything below ``form_scroll``
+        # into one ``bottom_band`` widget with a Fixed vertical size
+        # policy.  Qt's QVBoxLayout treats Fixed as "must get
+        # sizeHint exactly", so the band claims its natural height
+        # first; ``form_scroll`` absorbs whatever is left over (with
+        # ``stretch=1`` it'll happily take the rest when there is
+        # any).  This makes the layout deterministic across MainWindow
+        # AND StandaloneWindow.
+        from PySide6.QtWidgets import QSizePolicy
+        bottom_band = QWidget()
+        bottom_band_layout = QVBoxLayout(bottom_band)
+        bottom_band_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_band_layout.setSpacing(4)
+        bottom_band.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
+
+        bottom_band_layout.addWidget(self._cfg_widget)
+
+        # The bottom pane (extras + command line ArrowSections).
+        # Remember the index inside ``bottom_band_layout`` so
+        # ``_return_bottom_panel`` can re-insert it correctly after
+        # MainWindow detaches it into its own dock.
+        bottom_band_layout.addWidget(self._bottom_pane)
+        self._bottom_band = bottom_band
+        self._bottom_band_layout = bottom_band_layout
+        self._bottom_pane_index = bottom_band_layout.indexOf(
+            self._bottom_pane,
+        )
+        # Backward compat aliases for tests + downstream callers
+        # that referenced these names in v0.8.0a12/a13.
+        self._main_form_layout = bottom_band_layout
 
         # Action row: [Run] [Stop] [Copy argv] [Undo] [Redo] [Reset] [Clear]
         # Uses FlowLayout so the buttons wrap to a second row when the
@@ -1675,7 +1700,11 @@ class ToolRunnerView(QWidget):
         self._user_indicator.setVisible(False)
         action_row.addWidget(self._user_indicator)
 
-        layout.addLayout(action_row)
+        # Action row goes into the bottom band (v0.8.0a14+) so it
+        # stays at natural height instead of competing with the
+        # params scroll area for vertical space.  FlowLayout has no
+        # owning widget so we drop it directly via ``addLayout``.
+        bottom_band_layout.addLayout(action_row)
 
         # --- Action-button row (V3 v0.8.0a11+) ---------------------------
         # A second FlowLayout below the Run / Stop / Copy argv row, only
@@ -1725,10 +1754,19 @@ class ToolRunnerView(QWidget):
                 )
                 actions_row.addWidget(btn)
                 self._action_btns.append(btn)
-            layout.addLayout(actions_row)
+            bottom_band_layout.addLayout(actions_row)
 
         self._status = QLabel("")
-        layout.addWidget(self._status)
+        bottom_band_layout.addWidget(self._status)
+
+        # Finally attach the bottom band to the outer layout.  No
+        # stretch -- it claims its sizeHint exactly (Fixed vertical),
+        # leaving the rest of the dock to ``form_scroll`` (which has
+        # ``stretch=1`` + ``setMinimumHeight(0)`` so it absorbs
+        # whatever space is left and can compress to a tiny strip
+        # when the dock is short).  This is the contract that makes
+        # the Run / Stop buttons always visible.
+        layout.addWidget(bottom_band)
 
         return container
 

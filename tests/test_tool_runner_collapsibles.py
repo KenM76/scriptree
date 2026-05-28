@@ -155,16 +155,14 @@ def test_collapsing_cmd_hides_editor_and_options() -> None:
 # --- layout ----------------------------------------------------------------
 
 def test_form_panel_layout_order() -> None:
-    """v0.8.0a12+ -- no more QSplitter between form and bottom.  Verify
-    the form-scroll, configurations bar, and bottom pane appear in
-    the correct visual order in the main layout.
-
-    Order should be: form scroll (stretch=1) -> cfg widget ->
-    bottom pane (extras + cmd) -> action row -> [optional action
-    buttons row] -> status."""
+    """v0.8.0a14+ -- cfg widget + bottom pane live inside a
+    ``bottom_band`` widget below the form scroll area.  Verify the
+    visual order (cfg before bottom pane) is preserved inside the
+    band's own layout.
+    """
     v = ToolRunnerView(_tool())
-    layout = v._main_form_layout
-    # Walk the layout and find indices of our key widgets.
+    layout = v._bottom_band_layout
+    # Walk the band layout and find indices of our key widgets.
     indices: dict[str, int] = {}
     for i in range(layout.count()):
         item = layout.itemAt(i)
@@ -177,8 +175,8 @@ def test_form_panel_layout_order() -> None:
             indices["cfg"] = i
         elif w is v._bottom_pane:
             indices["bottom"] = i
-    assert "cfg" in indices, "configurations widget not in layout"
-    assert "bottom" in indices, "bottom pane not in layout"
+    assert "cfg" in indices, "configurations widget not in bottom band"
+    assert "bottom" in indices, "bottom pane not in bottom band"
     # Configurations bar appears before bottom pane (extras + cmd).
     assert indices["cfg"] < indices["bottom"]
 
