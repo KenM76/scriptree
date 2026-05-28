@@ -790,11 +790,13 @@ class MainWindow(QMainWindow):
         output.setParent(None)
         runner._inner_splitter.addWidget(output)
         # Reattach the bottom (extras + cmd) panel to the runner's
-        # internal splitter so a re-installed runner finds it where
-        # _build_form_panel originally placed it.
+        # main layout so a re-installed runner finds it where
+        # ``_build_form_panel`` originally placed it.  v0.8.0a12+
+        # uses ``_return_bottom_panel`` instead of
+        # ``_bottom_splitter.addWidget`` because the splitter is gone.
         bottom = runner.bottom_panel
         bottom.setParent(None)
-        runner._bottom_splitter.addWidget(bottom)
+        runner._return_bottom_panel(bottom)
         self._active_runner = None
         self._output_dock.toggleView(False)
         self._run_controls_dock.toggleView(False)

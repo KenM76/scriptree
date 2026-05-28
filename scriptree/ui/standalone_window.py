@@ -158,7 +158,7 @@ class StandaloneWindow(QMainWindow):
 
         win = cls(title=f"ScripTree — {tool.name}", parent=parent)
         runner = ToolRunnerView(tool, file_path=file_path)
-        runner._standalone_mode = True
+        runner.set_standalone_mode(True)
 
         if config_name:
             runner.apply_named_configuration(config_name)
@@ -634,7 +634,7 @@ def _add_leaf_tab(
     from .tool_runner import ToolRunnerView
 
     runner = ToolRunnerView(tool, file_path=str(tool_path))
-    runner._standalone_mode = True
+    runner.set_standalone_mode(True)
 
     # Resolve configuration name: overrides > tree config > node.
     cfg_name = (

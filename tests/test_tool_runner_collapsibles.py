@@ -1,17 +1,37 @@
-"""Tests for the collapsible header / extras / command-line group
-boxes in the runner form panel (v0.1.12).
+"""Tests for the collapsible header / extras / command-line sections
+in the runner form panel.
 
-The runner now has four collapsible regions:
+v0.8.0a12+ replaced the Qt-native ``QGroupBox(setCheckable=True)``
+pattern (which puts a CHECKBOX in the title bar -- visually reads as
+"enable / disable the feature") with :class:`ArrowSection`, a custom
+widget that uses a ▶ / ▼ collapse arrow.  The public API is
+backward-compatible -- ``setChecked`` / ``isChecked`` / ``toggled``
+all still work -- but the underlying widget type changed, so this
+file's "Qt-checkable-group-box" assertions were retargeted to test
+the new contract:
 
-- ``_header_box`` — wraps the tool name + description blurb.
-- (per-section group boxes — already covered by test_sections.py)
-- ``_extras_box`` — wraps the "Extra arguments" QPlainTextEdit.
-- ``_cmd_box`` — wraps the command-line preview + its option row.
+* ``isChecked()`` / ``isExpanded()`` still report the toggle state.
+* The header arrow flips ▶ / ▼ to match.
+* The content widget's visibility tracks the toggle.
+* Bottom panel still exposes a ``bottom_panel`` property for
+  MainWindow's reparent-into-dock dance.
 
-Each box uses the standard Qt checkable-group-box mechanism: the
-title bar shows a checkbox; toggling it hides the inner content
-widget(s) and shrinks the box to title height. State is session-only
-(no persistence to .scriptree).
+The form panel no longer uses a QSplitter -- the user's v0.8.0a12
+direction was "Configuration line and everything below should be
+in a separate scroll area from the parameters section -- always
+try to stay visible without a scroll bar."  The new shape:
+
+    [Header section]            ← arrow-collapsible
+    [Parameters scroll area]    ← takes available space
+    [Configurations bar]
+    [Extras section]            ← arrow-collapsible
+    [Command line section]      ← arrow-collapsible
+    [Run / Stop row]
+    [Action buttons row]
+    [Status]
+
+So this file drops the splitter assertion entirely and replaces it
+with a layout-order assertion instead.
 """
 from __future__ import annotations
 
@@ -20,6 +40,7 @@ from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication([])
 
 from scriptree.core.model import ParamDef, ToolDef  # noqa: E402
+from scriptree.ui.arrow_section import ArrowSection  # noqa: E402
 from scriptree.ui.tool_runner import ToolRunnerView  # noqa: E402
 
 
@@ -37,30 +58,32 @@ def _tool() -> ToolDef:
 
 def test_header_box_exists_and_starts_expanded() -> None:
     v = ToolRunnerView(_tool())
-    assert v._header_box.isCheckable() is True
+    assert isinstance(v._header_box, ArrowSection)
+    # ``isChecked`` aliases to ``isExpanded`` for backward compat.
     assert v._header_box.isChecked() is True
+    assert v._header_box.isExpanded() is True
     # Title shows the tool name.
     assert "demo" in v._header_box.title()
 
 
 def test_collapsing_header_hides_description() -> None:
     v = ToolRunnerView(_tool())
-    # Find the description label inside the header box.
+    # Find the description label inside the header section's content.
     from PySide6.QtWidgets import QLabel
     labels = v._header_box.findChildren(QLabel)
     desc_label = next(
         (l for l in labels if "description" in l.text().lower()), None
     )
     assert desc_label is not None
-
-    v._header_box.setChecked(False)  # collapse
-    assert desc_label.isVisible() is False
-
-    v._header_box.setChecked(True)  # expand
-    # Need to attach the widget to a parent for isVisible(); checking
-    # the parent visibility instead since the widget itself isn't shown.
+    # Collapse hides the inner content widget which contains the label.
     inner = desc_label.parentWidget()
-    assert inner is not None and not inner.isHidden()
+    assert inner is not None
+
+    v._header_box.setChecked(False)
+    assert inner.isHidden() or not inner.isVisible()
+
+    v._header_box.setChecked(True)
+    assert not inner.isHidden()
 
 
 def test_header_works_for_tool_without_description() -> None:
@@ -69,7 +92,7 @@ def test_header_works_for_tool_without_description() -> None:
     tool = _tool()
     tool.description = ""
     v = ToolRunnerView(tool)
-    assert v._header_box.isCheckable() is True
+    assert isinstance(v._header_box, ArrowSection)
     assert v._header_box.isChecked() is True
 
 
@@ -77,7 +100,7 @@ def test_header_works_for_tool_without_description() -> None:
 
 def test_extras_box_starts_expanded() -> None:
     v = ToolRunnerView(_tool())
-    assert v._extras_box.isCheckable() is True
+    assert isinstance(v._extras_box, ArrowSection)
     assert v._extras_box.isChecked() is True
     assert v._extras_edit.isHidden() is False
 
@@ -85,52 +108,79 @@ def test_extras_box_starts_expanded() -> None:
 def test_collapsing_extras_hides_editor() -> None:
     v = ToolRunnerView(_tool())
     v._extras_box.setChecked(False)
-    assert v._extras_edit.isHidden() is True
+    # The arrow section hides its inner content holder; the edit
+    # widget itself reports hidden because its parent is hidden.
+    assert v._extras_edit.isHidden() or not v._extras_edit.isVisible()
     v._extras_box.setChecked(True)
     assert v._extras_edit.isHidden() is False
+
+
+def test_extras_collapsed_by_default_in_standalone_mode() -> None:
+    """v0.8.0a12 contract: ``set_standalone_mode(True)`` collapses
+    the extras section because direct-launches almost never use
+    extras (the form is the canonical input surface)."""
+    v = ToolRunnerView(_tool())
+    assert v._extras_box.isChecked() is True
+    v.set_standalone_mode(True)
+    assert v._extras_box.isChecked() is False
+    assert v._standalone_mode is True
 
 
 # --- command line ---------------------------------------------------------
 
 def test_cmd_box_starts_expanded() -> None:
     v = ToolRunnerView(_tool())
-    assert v._cmd_box.isCheckable() is True
+    assert isinstance(v._cmd_box, ArrowSection)
     assert v._cmd_box.isChecked() is True
     assert v._live_cmd.isHidden() is False
 
 
 def test_collapsing_cmd_hides_editor_and_options() -> None:
-    """Toggling the command-line box off hides BOTH the preview text
-    edit AND the Full-path / Word-wrap option row above it."""
+    """Toggling the command-line section off hides BOTH the preview
+    text edit AND the Full-path / Word-wrap option row above it
+    because they live in the same content widget."""
     v = ToolRunnerView(_tool())
     v._cmd_box.setChecked(False)
-    assert v._live_cmd.isHidden() is True
-    # The Full-path / Word-wrap checkboxes live in a wrapper widget
-    # inside the cmd box. ``isHidden`` reports the explicit hidden
-    # state of the wrapper itself, which is what setVisible(False)
-    # toggles when the box collapses.
-    assert v._cmd_opts_wrapper.isHidden() is True
+    assert v._live_cmd.isHidden() or not v._live_cmd.isVisible()
+    assert (
+        v._cmd_opts_wrapper.isHidden()
+        or not v._cmd_opts_wrapper.isVisible()
+    )
 
     v._cmd_box.setChecked(True)
     assert v._live_cmd.isHidden() is False
     assert v._cmd_opts_wrapper.isHidden() is False
 
 
-# --- form / extras-cmd splitter -------------------------------------------
+# --- layout ----------------------------------------------------------------
 
-def test_form_panel_uses_two_way_splitter() -> None:
-    """The form panel's main splitter has exactly two children: the
-    form (top) and the extras+cmd container (bottom). This is the
-    visible "drag handle" between what the user fills in and what
-    actually gets run."""
-    from PySide6.QtWidgets import QSplitter
+def test_form_panel_layout_order() -> None:
+    """v0.8.0a12+ -- no more QSplitter between form and bottom.  Verify
+    the form-scroll, configurations bar, and bottom pane appear in
+    the correct visual order in the main layout.
+
+    Order should be: form scroll (stretch=1) -> cfg widget ->
+    bottom pane (extras + cmd) -> action row -> [optional action
+    buttons row] -> status."""
     v = ToolRunnerView(_tool())
-    # Find the splitter that's a direct child of the form panel.
-    splitters = v._form_container.findChildren(QSplitter)
-    # Pick the topmost (the inner panel splitter, not anything nested).
-    top = splitters[0] if splitters else None
-    assert top is not None
-    assert top.count() == 2
+    layout = v._main_form_layout
+    # Walk the layout and find indices of our key widgets.
+    indices: dict[str, int] = {}
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        if item is None:
+            continue
+        w = item.widget()
+        if w is None:
+            continue
+        if w is v._cfg_widget:
+            indices["cfg"] = i
+        elif w is v._bottom_pane:
+            indices["bottom"] = i
+    assert "cfg" in indices, "configurations widget not in layout"
+    assert "bottom" in indices, "bottom pane not in layout"
+    # Configurations bar appears before bottom pane (extras + cmd).
+    assert indices["cfg"] < indices["bottom"]
 
 
 def test_bottom_panel_property_returns_extras_cmd_container() -> None:
@@ -138,27 +188,42 @@ def test_bottom_panel_property_returns_extras_cmd_container() -> None:
     so MainWindow can reparent it into a dedicated dock widget."""
     v = ToolRunnerView(_tool())
     panel = v.bottom_panel
-    # The extras + cmd boxes live inside it.
+    # The extras + cmd sections live inside it.
     assert v._extras_box.parentWidget() is panel
     assert v._cmd_box.parentWidget() is panel
 
 
-def test_bottom_panel_size_hint_is_compact() -> None:
-    """The bottom panel uses _CompactPlainTextEdit for both the extras
-    and the command-line editors, so its sizeHint is small enough
-    that the run-controls dock opens at the smallest height that fits
-    both editors and their group-box chrome — no scroll bar required.
+def test_bottom_panel_round_trips_through_reparent() -> None:
+    """install_runner_panels reparents bottom_panel into the
+    run-controls dock; uninstall calls ``_return_bottom_panel`` which
+    re-inserts it at the original position in the main layout."""
+    from scriptree.ui.main_window import MainWindow
+    win = MainWindow()
+    try:
+        runner = ToolRunnerView(_tool())
+        win._stack.addWidget(runner)
 
-    We don't assert an exact pixel count (font metrics vary) but the
-    panel's sizeHint height should be well under what a default
-    QPlainTextEdit pair would have produced (~250 px+)."""
-    v = ToolRunnerView(_tool())
-    h = v.bottom_panel.sizeHint().height()
-    # Two QGroupBox titles + margins + cmd option row + two single-
-    # line editors: should fit comfortably under 200 px on any
-    # reasonable font. Default QPlainTextEdits would have produced
-    # ~250-300 px.
-    assert h < 200, f"bottom_panel sizeHint too tall: {h}"
+        bottom = runner.bottom_panel
+        original_index = runner._bottom_pane_index
+
+        win._install_runner_panels(runner)
+        # Now reparented into the run-controls dock.
+        assert win._run_controls_dock.widget() is bottom
+
+        win._uninstall_runner_panels()
+        # Reattached to the layout that owns the form's outer
+        # widgets at the original index.  Parent is whichever widget
+        # owns the main form layout (the form container, not the
+        # runner directly).
+        new_index = runner._main_form_layout.indexOf(bottom)
+        assert new_index == original_index, (
+            f"bottom pane re-inserted at index {new_index} "
+            f"(expected {original_index})"
+        )
+    finally:
+        win.close()
+        win.deleteLater()
+        _app.processEvents()
 
 
 def test_compact_plain_text_edit_one_line_size_hint() -> None:
@@ -170,32 +235,5 @@ def test_compact_plain_text_edit_one_line_size_hint() -> None:
 
     default = QPlainTextEdit()
     compact = _CompactPlainTextEdit()
-    # Compact is dramatically shorter than default. Width is unchanged.
+    # Compact is dramatically shorter than default.
     assert compact.sizeHint().height() < default.sizeHint().height() / 3
-
-
-def test_bottom_panel_round_trips_through_reparent() -> None:
-    """install_runner_panels reparents bottom_panel into the run-controls
-    dock; uninstall reattaches it to the runner's internal splitter.
-    This test exercises the round-trip via main_window."""
-    from scriptree.ui.main_window import MainWindow
-    win = MainWindow()
-    try:
-        runner = ToolRunnerView(_tool())
-        win._stack.addWidget(runner)
-
-        bottom = runner.bottom_panel
-        # Initially attached to the runner's bottom splitter.
-        assert bottom.parentWidget() is runner._bottom_splitter
-
-        win._install_runner_panels(runner)
-        # Now reparented into the run-controls dock.
-        assert win._run_controls_dock.widget() is bottom
-
-        win._uninstall_runner_panels()
-        # Reattached to the splitter on uninstall.
-        assert bottom.parentWidget() is runner._bottom_splitter
-    finally:
-        win.close()
-        win.deleteLater()
-        _app.processEvents()

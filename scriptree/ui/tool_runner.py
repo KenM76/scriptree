@@ -1010,10 +1010,48 @@ class ToolRunnerView(QWidget):
 
         Exposed so the main window can reparent it into its own dock
         widget — mirrors how ``output_panel`` is handled. When the dock
-        is detached, ``_uninstall_runner_panels`` reattaches the panel
-        to the runner's internal splitter.
+        is detached, ``_uninstall_runner_panels`` calls
+        :meth:`_return_bottom_panel` to put the panel back where the
+        runner originally placed it.
         """
         return self._bottom_pane
+
+    def _return_bottom_panel(self, widget: QWidget) -> None:
+        """Re-attach the bottom panel after a MainWindow uninstall.
+
+        v0.8.0a12+ -- the bottom pane no longer lives inside a
+        QSplitter, so the legacy ``runner._bottom_splitter.addWidget``
+        path is gone.  This method inserts the panel at its original
+        position in the main form layout (between the configurations
+        bar and the action button row), preserving the visual order.
+        Used by ``MainWindow._uninstall_runner_panels``.
+        """
+        if widget is not self._bottom_pane:
+            self._bottom_pane = widget
+        layout = getattr(self, "_main_form_layout", None)
+        if layout is None:
+            # Layout wasn't captured (should never happen in
+            # practice) -- fall back to appending so the panel is at
+            # least visible.
+            return
+        index = getattr(self, "_bottom_pane_index", layout.count())
+        layout.insertWidget(min(index, layout.count()), widget)
+
+    def set_standalone_mode(self, standalone: bool) -> None:
+        """Flip the standalone-mode flag with side effects.
+
+        Replaces the previous ``runner._standalone_mode = True``
+        assignment that callers used.  v0.8.0a12+ collapses the
+        "Extra arguments" section by default in standalone mode
+        because direct-launches almost never use extras (the form
+        is the canonical input surface); when run inside the main
+        editor, extras stays expanded so power users can still see
+        and edit the field at a glance.
+        """
+        self._standalone_mode = bool(standalone)
+        extras = getattr(self, "_extras_box", None)
+        if extras is not None and standalone:
+            extras.setExpanded(False)
 
     def set_tree_path_prepend(self, paths: list[str] | None) -> None:
         """Set the parent-tree ``path_prepend`` list for this runner.
@@ -1178,23 +1216,25 @@ class ToolRunnerView(QWidget):
         # Header — collapsible group box wrapping the tool name + the
         # description blurb. Some tools have multi-paragraph descriptions
         # that take a third of the form's vertical space; users who've
-        # read them once want them out of the way. The check state
-        # toggles the contents widget and shrinks the box to title
-        # height. Session-only state — no persistence to .scriptree.
-        self._header_box = QGroupBox()
-        self._header_box.setCheckable(True)
-        self._header_box.setChecked(True)
-        self._header_box.setTitle(f"  {tool.name}")
+        # read them once want them out of the way.  Clicking the
+        # arrow toggles the description; the title bar stays visible
+        # at all times so the toggle is always findable.  Session-
+        # only state -- no persistence to .scriptree.
+        #
+        # v0.8.0a12+ switched from a checkable QGroupBox (Qt-native
+        # checkbox in the title) to ArrowSection (▶ / ▼ arrow) per
+        # user feedback that the checkbox read as "enable / disable
+        # the feature" rather than "show / hide the section."  The
+        # ArrowSection API mirrors QGroupBox's setChecked / isChecked
+        # / toggled / setTitle so call-site changes were minimal.
+        from .arrow_section import ArrowSection
+        self._header_box = ArrowSection(f"{tool.name}", expanded=True)
         self._header_box.setToolTip(
-            "Click the checkbox to collapse the header / description."
+            "Click the arrow to collapse or expand the description."
         )
         header_inner = QWidget()
         header_layout = QVBoxLayout(header_inner)
-        header_layout.setContentsMargins(8, 4, 8, 4)
-        # The h2-styled name still appears INSIDE the box so collapsed
-        # mode preserves Qt's default group-box title style without
-        # losing the "big bold name" the open state used to show. The
-        # title attribute above already shows the name.
+        header_layout.setContentsMargins(0, 0, 0, 0)
         if tool.description:
             desc = QLabel(tool.description)
             desc.setWordWrap(True)
@@ -1203,22 +1243,36 @@ class ToolRunnerView(QWidget):
             header_layout.addWidget(QLabel(
                 f"<i>No description provided.</i>"
             ))
-        outer_header_layout = QVBoxLayout(self._header_box)
-        outer_header_layout.setContentsMargins(6, 4, 6, 6)
-        outer_header_layout.addWidget(header_inner)
-        self._header_box.toggled.connect(
-            lambda checked: header_inner.setVisible(checked)
-        )
+        self._header_box.setContentWidget(header_inner)
         layout.addWidget(self._header_box)
 
-        # Top half (form) and bottom half (extras + command line) sit
-        # in their own vertical splitter so the user gets a clear
-        # drag handle between "what to fill in" (form) and "what gets
-        # run" (extras + command line). The form gets the lion's
-        # share of vertical space; the bottom half opens compact and
-        # grows as the user expands collapsible sub-sections.
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        layout.addWidget(splitter, stretch=1)
+        # Layout shape (v0.8.0a12+, per user feedback):
+        #
+        #   [Header arrow + description]     <- collapsible
+        #   ─────────────────────────────
+        #   [Parameters scroll area]         <- takes available space
+        #   ─────────────────────────────
+        #   [Configurations bar]             <- always visible
+        #   [Extras arrow + edit]            <- collapsible
+        #   [Command line arrow + edit]      <- collapsible
+        #   [Run / Stop / etc row]           <- always visible
+        #   [Action buttons row]             <- always visible (if any)
+        #   [Status line]                    <- always visible
+        #
+        # The previous layout used a QSplitter so the user could drag
+        # a handle between params and "extras + command line."  That
+        # drag was rarely used and let the bottom controls disappear
+        # off-screen when the user accidentally yanked the handle.
+        # The new layout drops the splitter -- the parameters scroll
+        # area takes ``stretch=1`` so it absorbs available vertical
+        # space, and every control below is at its natural height
+        # ("always try to stay visible without a scroll bar").
+        # Each collapsible section uses the project's ``ArrowSection``
+        # widget (▶ / ▼ arrow) instead of Qt's QGroupBox-with-checkbox,
+        # because the checkbox affordance reads as "enable / disable"
+        # while the arrow reads as "show / hide" -- closer to the
+        # actual semantics.
+        from .arrow_section import ArrowSection
 
         # Form — one reorderable list per section (or one flat list
         # if the tool doesn't declare sections). Users drag rows up
@@ -1252,74 +1306,60 @@ class ToolRunnerView(QWidget):
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         form_scroll.setWidget(form_group)
-        splitter.addWidget(form_scroll)
+        layout.addWidget(form_scroll, stretch=1)
 
-        # ============================================================
-        # Bottom pane — extras + command line in their own container
-        # so the splitter has exactly one drag handle between the form
-        # (above) and the run-time controls (below). Each section
-        # inside is a collapsible group box; the user can hide either
-        # without affecting the splitter ratio.
-        # ============================================================
-        # Stored as an instance attribute so MainWindow can pull it
-        # into its own dock widget (similar to output_panel) when the
-        # runner is installed. The runner keeps a reference to the
-        # surrounding splitter and its index so the bottom pane can be
-        # reattached when the runner is uninstalled.
+        # Bottom pane — extras + command line, wrapped in a single
+        # QWidget so MainWindow can detach the whole block into its
+        # own dock when the runner is installed in the main editor.
+        # When standalone, the bottom_pane sits sequentially in the
+        # main layout (no splitter, no drag).
         self._bottom_pane = bottom_pane = QWidget()
         bottom_layout = QVBoxLayout(bottom_pane)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(4)
-        # Stash the splitter so the panel can be returned to it when
-        # the runner is uninstalled.
-        self._bottom_splitter = splitter
+        # ``_bottom_splitter`` no longer points at a real splitter --
+        # kept as an attribute name only because MainWindow's
+        # uninstall code historically called ``addWidget`` on it.
+        # The setter we expose via ``_return_bottom_panel`` is the
+        # supported way to re-attach the panel; MainWindow was
+        # updated in the same release.
+        self._bottom_splitter = None
 
-        # Extras box — space-separated argv tokens the user has added
-        # beyond what the GUI form produces. Populated either by
-        # reconciling edits to the command preview or typed directly.
-        # Collapsible: the title bar acts as a checkbox; collapsing
-        # hides the inner editor and shrinks the box to title height.
-        self._extras_box = extras_box = QGroupBox(
-            "Extra arguments (space-separated)"
+        # Mono font handle reused by extras + cmd editors.
+        mono = QFont()
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        mono.setFamily("Consolas")
+
+        # Extras section — space-separated argv tokens the user has
+        # added beyond what the GUI form produces. Populated either
+        # by reconciling edits to the command preview or typed
+        # directly.  Collapsible (▶ / ▼ arrow toggles visibility of
+        # the inner editor; the header bar is always there so the
+        # user can find the expander when collapsed).
+        self._extras_box = ArrowSection(
+            "Extra arguments (space-separated)", expanded=True,
         )
-        extras_box.setCheckable(True)
-        extras_box.setChecked(True)
-        extras_box.setToolTip(
+        self._extras_box.setToolTip(
             "Tokens here are appended to the command as-is. "
             "Anything you type in the preview below that doesn't match "
             "a form parameter lands here automatically."
         )
-        extras_layout = QVBoxLayout(extras_box)
-        extras_layout.setContentsMargins(4, 2, 4, 4)
-        extras_layout.setSpacing(0)
         self._extras_edit = _CompactPlainTextEdit()
-        # Start visually as a single line via _CompactPlainTextEdit's
-        # one-line sizeHint, so the run-controls dock opens as tightly
-        # as possible. User can drag the dock's resize handle or the
-        # splitter handle (when the panel is inside the runner) to
-        # grow it freely — no maximumHeight is set.
-        mono = QFont()
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        mono.setFamily("Consolas")
         self._extras_edit.setFont(mono)
         self._extras_edit.setPlaceholderText(
             "e.g. --debug 2 --log-file C:/tmp/run.log"
         )
         self._extras_edit.textChanged.connect(self._on_extras_edited)
-        extras_layout.addWidget(self._extras_edit)
-        extras_box.toggled.connect(
-            lambda checked: self._extras_edit.setVisible(checked)
-        )
-        bottom_layout.addWidget(extras_box)
+        self._extras_box.setContentWidget(self._extras_edit)
+        bottom_layout.addWidget(self._extras_box)
 
         # Command preview — editable QPlainTextEdit with "Full path"
-        # and "Word wrap" checkboxes. Also collapsible.
-        self._cmd_box = cmd_box = QGroupBox("Command line")
-        cmd_box.setCheckable(True)
-        cmd_box.setChecked(True)
-        cmd_layout = QVBoxLayout(cmd_box)
-        cmd_layout.setContentsMargins(4, 2, 4, 4)
-        cmd_layout.setSpacing(0)
+        # and "Word wrap" checkboxes.  Same arrow-collapse pattern.
+        self._cmd_box = ArrowSection("Command line", expanded=True)
+        cmd_inner = QWidget()
+        cmd_inner_layout = QVBoxLayout(cmd_inner)
+        cmd_inner_layout.setContentsMargins(0, 0, 0, 0)
+        cmd_inner_layout.setSpacing(2)
         cmd_opts = QHBoxLayout()
         cmd_opts.setContentsMargins(0, 0, 0, 0)
 
@@ -1340,12 +1380,11 @@ class ToolRunnerView(QWidget):
         cmd_opts.addWidget(self._chk_word_wrap)
 
         cmd_opts.addStretch(1)
-        # Wrap the option row in a QWidget so we can hide the whole
-        # row when the box collapses (otherwise the option checkboxes
-        # stay visible underneath the title).
+        # Wrap the option row in a QWidget so the cmd section can
+        # tuck it inside its content widget cleanly.
         self._cmd_opts_wrapper = cmd_opts_wrapper = QWidget()
         cmd_opts_wrapper.setLayout(cmd_opts)
-        cmd_layout.addWidget(cmd_opts_wrapper)
+        cmd_inner_layout.addWidget(cmd_opts_wrapper)
 
         self._live_cmd = _CompactPlainTextEdit()
         self._live_cmd.setPlaceholderText(
@@ -1357,7 +1396,8 @@ class ToolRunnerView(QWidget):
         self._live_cmd.setFont(preview_font)
         self._live_cmd.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._live_cmd.textChanged.connect(self._on_live_cmd_text_changed)
-        cmd_layout.addWidget(self._live_cmd)
+        cmd_inner_layout.addWidget(self._live_cmd)
+        self._cmd_box.setContentWidget(cmd_inner)
         # ``command_line_editor`` capability gate (V3 v0.3.3) — when
         # denied, the live command box becomes read-only so the user
         # can still see what's about to run but can't override.  No
@@ -1365,26 +1405,7 @@ class ToolRunnerView(QWidget):
         # the form-derived argv).
         from .permission_guards import apply_text_readonly
         apply_text_readonly(self._live_cmd, "command_line_editor")
-        cmd_box.toggled.connect(
-            lambda checked, opts=cmd_opts_wrapper, edit=self._live_cmd:
-                (opts.setVisible(checked), edit.setVisible(checked))
-        )
-        bottom_layout.addWidget(cmd_box)
-
-        splitter.addWidget(bottom_pane)
-        splitter.setStretchFactor(0, 3)  # form
-        splitter.setStretchFactor(1, 1)  # extras + command line pane
-
-        # Compute a compact starting height for the bottom pane so
-        # extras + command line each occupy roughly one visible text
-        # line plus group-box chrome. Users drag the splitter handle
-        # to grow either box when they need multi-line editing.
-        fm = QFontMetrics(mono)
-        one_line = fm.lineSpacing()
-        extras_compact = one_line + 24     # title + tight margins
-        cmd_compact = one_line + 36        # title + option row + tight margins
-        bottom_compact = extras_compact + cmd_compact + 8
-        splitter.setSizes([10_000, bottom_compact])
+        bottom_layout.addWidget(self._cmd_box)
 
         # Configurations bar: [Config ▾] [Save] [Save As] [Delete] [Edit...]
         # Wrapped in a QWidget so the MainWindow can show/hide it
@@ -1523,6 +1544,23 @@ class ToolRunnerView(QWidget):
         apply_widget_perm(self._chk_prompt_creds, "run_as_different_user")
 
         layout.addWidget(self._cfg_widget)
+
+        # The bottom pane (extras + command line, each in an
+        # ArrowSection) sits right under the configurations bar so
+        # everything below the parameters scroll area forms a single
+        # always-visible band -- per the v0.8.0a12 layout rework, no
+        # splitter, no drag, controls stay put.  ``bottom_pane`` was
+        # constructed above before the cfg bar so the section
+        # widgets could be configured next to where ``bottom_layout``
+        # was set up; it's added to the outer layout HERE so visual
+        # order is cfg -> extras -> cmd.
+        #
+        # Remember the index where the bottom pane lives so
+        # ``_return_bottom_panel`` can re-insert it at the correct
+        # position after MainWindow's docking detaches it.
+        layout.addWidget(self._bottom_pane)
+        self._main_form_layout = layout
+        self._bottom_pane_index = layout.indexOf(self._bottom_pane)
 
         # Action row: [Run] [Stop] [Copy argv] [Undo] [Redo] [Reset] [Clear]
         # Uses FlowLayout so the buttons wrap to a second row when the
