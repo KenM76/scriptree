@@ -247,7 +247,6 @@ class TextAreaWidget(ParamWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self._edit = _DroppablePlainTextEdit(str(param.default or ""))
         self._edit.setPlaceholderText(param.description[:80])
-        self._edit.setMaximumHeight(80)
         # Monospace font for regexes / patterns.
         font = self._edit.font()
         font.setStyleHint(font.StyleHint.Monospace)
@@ -255,7 +254,16 @@ class TextAreaWidget(ParamWidget):
         self._edit.textChanged.connect(
             lambda: self.valueChanged.emit(self.get_value())
         )
-        layout.addWidget(self._edit)
+        # v0.8.0a15+ wrap in a ResizableContainer so the user can
+        # drag the bottom handle to grow / shrink the text area.
+        # The previous ``setMaximumHeight(80)`` capped this at one
+        # fixed height; long messages had to scroll inside the box
+        # even when there was lots of free room on the form.
+        from .resizable_container import ResizableContainer
+        self._resize = ResizableContainer(
+            self._edit, initial_height=80, min_height=32,
+        )
+        layout.addWidget(self._resize)
 
     def get_value(self) -> str:
         return self._edit.toPlainText()
@@ -548,14 +556,19 @@ class CheckboxListWidget(ParamWidget):
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
-        self._scroll.setMaximumHeight(160)
         self._inner = QWidget()
         self._inner_layout = QVBoxLayout(self._inner)
         self._inner_layout.setContentsMargins(2, 2, 2, 2)
         self._inner_layout.setSpacing(1)
         self._inner_layout.addStretch(1)
         self._scroll.setWidget(self._inner)
-        outer.addWidget(self._scroll)
+        # v0.8.0a15+ wrap in a ResizableContainer so the user can
+        # drag the bottom handle to grow / shrink the checkbox list.
+        from .resizable_container import ResizableContainer
+        self._scroll_resize = ResizableContainer(
+            self._scroll, initial_height=160, min_height=48,
+        )
+        outer.addWidget(self._scroll_resize)
 
         # value -> QCheckBox.  Insertion order == choice order.
         self._boxes: dict[str, QCheckBox] = {}
@@ -1023,7 +1036,6 @@ class _PathListWidget(ParamWidget):
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.ExtendedSelection)
-        self._list.setMaximumHeight(160)
         # v0.6.29 — Remove/Up/Down stay enabled with the list:
         # refresh button state whenever the selection changes, not
         # only when an Add/Remove/Move action fires.  Without this,
@@ -1036,7 +1048,15 @@ class _PathListWidget(ParamWidget):
         # Ctrl+V goes through eventFilter on the list itself.
         self.setAcceptDrops(True)
         self._list.installEventFilter(self)
-        outer.addWidget(self._list)
+        # v0.8.0a15+ wrap in a ResizableContainer so the user can
+        # drag the bottom handle to grow / shrink the path list.
+        # Long catalogs of files / folders shouldn't be stuck at the
+        # old fixed 160 px when the form has room to show more.
+        from .resizable_container import ResizableContainer
+        self._list_resize = ResizableContainer(
+            self._list, initial_height=160, min_height=48,
+        )
+        outer.addWidget(self._list_resize)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
