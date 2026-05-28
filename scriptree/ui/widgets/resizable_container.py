@@ -212,6 +212,24 @@ class ResizableContainer(QWidget):
                                 current.width(), new_row_h,
                             ))
                             break
+                # v0.8.0a17 -- once the item sizeHint is updated, the
+                # QListWidget's *own* sizeHint also needs to be
+                # re-asked so any parent that wraps it (the tab's
+                # QScrollArea, the form_scroll, etc.) grows
+                # accordingly.  Without this, the form list reports
+                # the new row size but its container scroll areas
+                # keep their original size and the resized widget
+                # ends up visually overflowing into the next section.
+                form_list.updateGeometry()
+                # Walk the rest of the chain up too so every
+                # intermediate scroll area / group box re-asks for
+                # sizeHints.
+                p = form_list.parentWidget()
+                while p is not None:
+                    if p.layout() is not None:
+                        p.layout().invalidate()
+                    p.updateGeometry()
+                    p = p.parentWidget()
                 break
             parent = parent.parentWidget()
 

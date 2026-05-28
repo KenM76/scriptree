@@ -1768,6 +1768,27 @@ class ToolRunnerView(QWidget):
         # the Run / Stop buttons always visible.
         layout.addWidget(bottom_band)
 
+        # v0.8.0a17+ -- force the form panel to claim enough height
+        # that the bottom band (cfg + Run/Stop + actions + status)
+        # is always visible.  Without this, QtAds's dock geometry
+        # negotiation can shrink the form dock below the bottom
+        # band's natural height in standalone mode (the user
+        # reported "run controls still have to be scrolled to
+        # ... even though there is lots of room on screen").
+        #
+        # Static numbers, derived from measuring the actual heights
+        # of a fully-populated bottom band in a few different tools.
+        # ``bottom_band`` baseline of 200 px covers: cfg row (~30) +
+        # extras section header (~30, collapsed default in
+        # standalone) + cmd section header + body (~70) + action
+        # button row (~40) + status (~20) + spacings.  In MainWindow
+        # mode bottom_pane is reparented out, so this is generous
+        # there.  Container minimum adds header (~50) + a small
+        # form floor (~60) so the params scroll area can't be
+        # crushed to nothing.
+        bottom_band.setMinimumHeight(200)
+        container.setMinimumHeight(310)
+
         return container
 
     # --- form construction & reorder ------------------------------------
