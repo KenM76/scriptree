@@ -191,6 +191,147 @@ def _strip_ansi(s: str) -> str:
     return _ANSI_RE.sub("", s)
 
 
+class _FormPanelContainer(QWidget):
+    """The outer container of the form panel.
+
+    Subclasses ``QWidget`` solely to provide a real C++ virtual
+    override of ``minimumSizeHint``.  Earlier attempts assigned a
+    function to ``container.minimumSizeHint`` at the instance level,
+    which works for pure-Python callers but is silently ignored by
+    Qt's C++ machinery -- ``QWidget::minimumSizeHint()`` is a virtual
+    method called through the vtable, and PySide6 only routes calls
+    back to Python when the method is declared on a subclass at
+    class-definition time.  QtAds asks Qt directly, sees the default
+    (which returns 0/0 for an untouched ``QWidget``), and freely
+    shrinks the form dock below the bottom band's natural height
+    in standalone mode -- exactly the user-reported failure
+    ("developer mode works, standalone doesn't").
+
+    The override reads the current sizeHints of the header section
+    and bottom band so it stays accurate as those widgets change
+    (e.g. extras section expanded vs collapsed, action buttons
+    added).  When the references are unset the override falls
+    through to the default -- safe during partial construction.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._header_ref: QWidget | None = None
+        self._bottom_band_ref: QWidget | None = None
+        self._form_floor: int = 60
+        # Expand to fill the viewport rather than demanding the
+        # children's full preferred sum (which makes QtAds wrap us
+        # in a scroll area).  Combined with sizeHint==minimumSizeHint
+        # below, this lets the form_panel shrink to fit the dock
+        # viewport while still claiming a sane minimum.
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+
+    def set_size_refs(
+        self,
+        *,
+        header: QWidget,
+        bottom_band: QWidget,
+        form_floor: int = 60,
+    ) -> None:
+        """Install references so ``minimumSizeHint`` can read live."""
+        self._header_ref = header
+        self._bottom_band_ref = bottom_band
+        self._form_floor = int(form_floor)
+        # Trigger an immediate re-layout pass so the new minimum
+        # propagates upward to whatever container (QStackedWidget /
+        # QtAds dock area) is asking.
+        self.updateGeometry()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 -- Qt naming
+        base = super().minimumSizeHint()
+        if self._header_ref is None or self._bottom_band_ref is None:
+            return base
+        h = (
+            self._header_ref.sizeHint().height()
+            + self._form_floor
+            + self._bottom_band_ref.sizeHint().height()
+        )
+        return QSize(base.width(), max(base.height(), h))
+
+    def sizeHint(self) -> QSize:  # noqa: N802 -- Qt naming
+        """Return ``minimumSizeHint`` exactly as the preferred size.
+
+        v0.8.0a19 -- this override is what stops QtAds from wrapping
+        the whole dock in its own QScrollArea, which is what made
+        the cfg row + Run button get "scrolled away" in standalone
+        mode.
+
+        QtAds wraps the dock's content widget in a QScrollArea with
+        ``widgetResizable=True`` -- meaning the contained widget gets
+        its own preferred (``sizeHint``) HEIGHT, not the viewport
+        height, and the scroll area scrolls if that's larger than
+        the viewport.  Without this override, ``QWidget.sizeHint``
+        sums every child layout item's sizeHint -- including the
+        parameters scroll area, whose inner ``ReorderableParamForm``
+        reports the FULL height of all rows.  For a tool with 16
+        params + a textarea that's ~680 px, well above any
+        reasonable dock height -- so form_panel claims 680 px,
+        overflows the dock's viewport, and the bottom band gets
+        scrolled out of sight.  That is the v0.8.0a16/a17/a18
+        regression.
+
+        Returning the minimumSizeHint as the preferred size keeps
+        form_panel from claiming any more than it strictly needs;
+        the ``MinimumExpanding`` size policy set in ``__init__``
+        then lets it grow with the dock viewport when there's room.
+        The inner ``form_scroll`` (already inside form_panel)
+        handles real param overflow via its own scrollbar -- which
+        is what the user actually wants: scroll PARAMS, keep cfg /
+        Run row pinned at the bottom.
+        """
+        return self.minimumSizeHint()
+
+
+class _FormScrollArea(QScrollArea):
+    """A QScrollArea whose ``sizeHint`` is small, but which still
+    claims any leftover vertical space via Expanding sizePolicy.
+
+    Background: ``QScrollArea.sizeHint()`` defaults to its inner
+    widget's sizeHint when ``widgetResizable=True`` -- so a form
+    with 16 param rows reports ~400 px of preferred height.  That
+    height then bubbles up through the form_panel's QVBoxLayout
+    into form_panel.layout().sizeHint(), pushing form_panel's
+    *preferred* height past the dock viewport.  QtAds wraps the
+    over-sized content in its own QScrollArea and the bottom band
+    (cfg / Run row / status) gets scrolled out of sight.
+
+    Returning a small fixed ``sizeHint`` here breaks that chain:
+    form_panel's layout sums up a modest total, form_panel fits
+    in the dock without QtAds wrapping, and the ``Expanding``
+    policy + ``stretch=1`` on this widget in the parent layout
+    still lets it absorb all leftover vertical space.  The inner
+    ``form_group``'s real height is irrelevant -- this widget
+    scrolls its own contents the moment ``form_group`` doesn't
+    fit, exactly like a normal QScrollArea.
+    """
+
+    # A modest preferred height for the params area -- big enough
+    # that single-row tools render without a huge stretched scroll
+    # frame, small enough that the layout's sizeHint sum stays
+    # under any reasonable dock viewport.
+    _PREFERRED_H = 80
+
+    def sizeHint(self) -> QSize:  # noqa: N802 -- Qt naming
+        base = super().sizeHint()
+        return QSize(base.width(), self._PREFERRED_H)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 -- Qt naming
+        # Don't lock in any minimum from the inner widget -- the
+        # parent layout's stretch=1 will grow us, and we can
+        # collapse to nearly nothing when the dock is tight.
+        base = super().minimumSizeHint()
+        return QSize(base.width(), 0)
+
+
 class _CompactPlainTextEdit(QPlainTextEdit):
     """QPlainTextEdit whose ``sizeHint`` is one text line tall.
 
@@ -1202,7 +1343,22 @@ class ToolRunnerView(QWidget):
     def _build_form_panel(self, tool: ToolDef) -> QWidget:
         """Build the form panel as a standalone widget."""
         from PySide6.QtWidgets import QMenuBar
-        container = QWidget()
+        # v0.8.0a19+ -- use a QWidget subclass so we can properly
+        # override ``minimumSizeHint`` as a real Qt virtual method.
+        # Earlier attempts assigned the method to the instance
+        # (``container.minimumSizeHint = lambda: ...``), which
+        # works for pure-Python callers but is SILENTLY IGNORED by
+        # Qt's C++ side -- ``QWidget::minimumSizeHint()`` is a
+        # virtual method called through the vtable, and PySide6
+        # only routes calls back to Python when the method is
+        # declared on a QWidget subclass at class-definition time.
+        # QtAds asks Qt directly, sees the unmodified default
+        # (which returns 0/0), and freely shrinks the form dock
+        # below the bottom band's natural height.  That's the
+        # explanation for "developer mode works, standalone
+        # doesn't" -- MainWindow's QStackedWidget happens to mask
+        # the underlying issue while standalone hits it dead-on.
+        container = _FormPanelContainer()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
 
@@ -1301,7 +1457,15 @@ class ToolRunnerView(QWidget):
             )
         else:
             self._populate_form_rows()
-        form_scroll = QScrollArea()
+        # v0.8.0a19 -- use ``_FormScrollArea`` (a QScrollArea
+        # subclass with a small ``sizeHint``) so the params area
+        # doesn't inflate form_panel.layout().sizeHint().  Combined
+        # with ``Expanding`` policy + ``stretch=1`` below, this
+        # claims any leftover space when the dock is roomy and
+        # collapses (with its own inner scrollbar) when the dock
+        # is tight -- without confusing QtAds into wrapping the
+        # whole form in a second scroll area.
+        form_scroll = _FormScrollArea()
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         form_scroll.setWidget(form_group)
@@ -1315,6 +1479,16 @@ class ToolRunnerView(QWidget):
         # dock when the form_group is taller than the dock.
         from PySide6.QtWidgets import QSizePolicy
         form_scroll.setMinimumHeight(0)
+        # v0.8.0a19 -- ``_FormScrollArea`` already overrides
+        # ``sizeHint`` to a small value, so we keep the natural
+        # ``Expanding`` policy here.  Expanding + stretch=1 lets
+        # form_scroll claim ALL leftover vertical space in the
+        # parent layout (so the params area grows to fill any
+        # gap between the header and the bottom band -- the user-
+        # visible behaviour they expect: "white area should always
+        # be the same size as the full parameters area").
+        # The small sizeHint stops the layout sum from inflating
+        # form_panel's preferred height past the dock viewport.
         form_scroll.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Expanding,
@@ -1768,26 +1942,16 @@ class ToolRunnerView(QWidget):
         # the Run / Stop buttons always visible.
         layout.addWidget(bottom_band)
 
-        # v0.8.0a17+ -- force the form panel to claim enough height
-        # that the bottom band (cfg + Run/Stop + actions + status)
-        # is always visible.  Without this, QtAds's dock geometry
-        # negotiation can shrink the form dock below the bottom
-        # band's natural height in standalone mode (the user
-        # reported "run controls still have to be scrolled to
-        # ... even though there is lots of room on screen").
-        #
-        # Static numbers, derived from measuring the actual heights
-        # of a fully-populated bottom band in a few different tools.
-        # ``bottom_band`` baseline of 200 px covers: cfg row (~30) +
-        # extras section header (~30, collapsed default in
-        # standalone) + cmd section header + body (~70) + action
-        # button row (~40) + status (~20) + spacings.  In MainWindow
-        # mode bottom_pane is reparented out, so this is generous
-        # there.  Container minimum adds header (~50) + a small
-        # form floor (~60) so the params scroll area can't be
-        # crushed to nothing.
-        bottom_band.setMinimumHeight(200)
-        container.setMinimumHeight(310)
+        # Plug the reference widgets into the container so its
+        # ``minimumSizeHint`` override (real C++ virtual via the
+        # ``_FormPanelContainer`` subclass) reads accurate sizes
+        # every time Qt asks -- which it does whenever QtAds is
+        # deciding how much room to give the dock.
+        container.set_size_refs(
+            header=self._header_box,
+            bottom_band=bottom_band,
+            form_floor=60,
+        )
 
         return container
 
@@ -1965,6 +2129,28 @@ class ToolRunnerView(QWidget):
 
         # Flush any trailing tab widget.
         _flush_tab_widget()
+
+        # v0.8.0a19 -- assign all of the trailing stretch to the LAST
+        # inserted widget so the form area FILLS the available
+        # vertical space.  Without this, the addStretch(1) at the
+        # bottom of ``form_outer_layout`` swallows every spare pixel
+        # and the section (whether a QTabWidget for tab-layout
+        # sections like Find Missing Refs's Source / Matching /
+        # Apply, a collapse-layout QGroupBox, or a flat
+        # ReorderableParamForm) sits at its sizeHint with an empty
+        # beige strip of form_group background below it.  Moving
+        # the stretch onto the last widget makes the two areas
+        # scale together: when the dock grows the param view grows
+        # with it; when the dock shrinks the param view's own
+        # scrollbar kicks in.
+        n = self._form_outer_layout.count()
+        if n >= 2:
+            # Last widget sits at index ``n - 2`` (the trailing
+            # stretch is at ``n - 1``).  Set its stretch to 1 and
+            # zero out the trailing spacer so all leftover space
+            # flows to the widget instead.
+            self._form_outer_layout.setStretch(n - 2, 1)
+            self._form_outer_layout.setStretch(n - 1, 0)
 
         # v0.6.0 — dynamic choice/value providers.  Runs AFTER every
         # widget exists so upstream lookups + topo population work.

@@ -168,6 +168,66 @@ class TestParamWidgetWiring:
             f"{h_before} -> {h_after}"
         )
 
+    def test_shrink_drag_shrinks_row_sizehint(self) -> None:
+        """When the user drags the handle UP to shrink the widget,
+        the row's QListWidgetItem sizeHint must shrink with it --
+        not stay pinned at the larger value.
+
+        This was the v0.8.0a18 bug the user reported: shrinking
+        looked like the widget collapsed from BOTH top AND bottom
+        (because the row stayed tall and the smaller container
+        was centred inside the still-tall row), and the next row
+        didn't move up until the parent window was resized
+        (which forced ``ReorderableParamForm.relayout_rows`` to
+        re-poll every row's natural sizeHint).  Root cause was a
+        ``max(current.height(), ...)`` clamp in
+        ``ResizableContainer._on_dragged`` that prevented the row
+        sizeHint from ever decreasing.
+        """
+        from scriptree.ui.tool_runner import ReorderableParamForm
+        form = ReorderableParamForm()
+        child = QPlainTextEdit()
+        rc = ResizableContainer(child, initial_height=100, min_height=20)
+        form.add_param_row("p0", "P0", rc)
+        # A second row so we can also verify it tracks live.
+        form.add_param_row("p1", "P1", QPlainTextEdit())
+        form.resize(500, 400)
+        form.show()
+        _app.processEvents()
+
+        # Grow first, then shrink, then verify the row's sizeHint
+        # follows in BOTH directions.
+        h_initial = form.item(0).sizeHint().height()
+        rc._on_dragged(60)  # grow by 60
+        _app.processEvents()
+        h_grown = form.item(0).sizeHint().height()
+        assert h_grown > h_initial + 40, (
+            f"row sizeHint failed to grow: {h_initial} -> {h_grown}"
+        )
+
+        rc._on_dragged(-80)  # shrink by 80 (smaller than initial)
+        _app.processEvents()
+        h_shrunk = form.item(0).sizeHint().height()
+        assert h_shrunk < h_grown - 40, (
+            f"row sizeHint did NOT shrink with the widget "
+            f"({h_grown} -> {h_shrunk}).  Regression: the "
+            f"``max(current.height(), ...)`` clamp is back -- the "
+            f"row tracks growth but never shrinks, so the widget "
+            f"appears centred in a too-tall row and the next row "
+            f"stays put."
+        )
+
+        # And the second row's y in the viewport must follow the
+        # first row's height -- meaning row 2 moves UP live when
+        # row 1 shrinks (not waiting for a window resize).
+        row1_y = form.visualItemRect(form.item(1)).y()
+        assert abs(row1_y - h_shrunk) <= 4, (
+            f"Row 1 y ({row1_y}) does not match row 0 height "
+            f"({h_shrunk}) -- the QListWidget didn't relayout "
+            f"after the shrink.  The next param row will appear "
+            f"to stay put until the user resizes the window."
+        )
+
     def test_folder_list_wraps_list(self) -> None:
         p = ParamDef(
             id="dirs", label="Folders",

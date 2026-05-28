@@ -196,18 +196,31 @@ class ResizableContainer(QWidget):
                         item = form_list.item(i)
                         if form_list.itemWidget(item) is row_widget:
                             current = item.sizeHint()
-                            # Sum the row's child heights manually
-                            # so we don't depend on the cached row
-                            # sizeHint.  Take max of (handle label
-                            # + side label + our container).  In
-                            # practice our container dominates after
-                            # any drag.
-                            new_row_h = max(
-                                current.height(),
-                                self._desired_height
-                                + self._handle.height()
-                                + 12,  # small padding
-                            )
+                            # v0.8.0a19 -- ask the row widget itself
+                            # for its current preferred height so the
+                            # row tracks the container's height in
+                            # BOTH directions.  The previous code
+                            # used ``max(current.height(), ...)`` so
+                            # the row could only ever GROW -- when
+                            # the user dragged the handle back up to
+                            # shrink, the row's cached sizeHint stayed
+                            # at the old larger value, the row layout
+                            # centred the now-small child vertically
+                            # (looking like the field shrank from
+                            # both top AND bottom), and the next
+                            # row stayed put until a subsequent
+                            # window resize forced the QListWidget
+                            # to re-poll row sizeHints via
+                            # ``relayout_rows``.  Asking the row
+                            # widget directly here makes the row's
+                            # cached sizeHint follow the live drag
+                            # in both directions.
+                            row_h = row_widget.sizeHint().height()
+                            # Floor at the row's natural minimum so
+                            # we don't ever clip the label / handle
+                            # below their content.
+                            row_min = row_widget.minimumSizeHint().height()
+                            new_row_h = max(row_h, row_min)
                             item.setSizeHint(_QSize(
                                 current.width(), new_row_h,
                             ))

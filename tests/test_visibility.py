@@ -563,15 +563,16 @@ class TestStandaloneWindowDocks:
         runner = win._runners[0]
 
         # The dock should report each panel as its current widget.
-        # v0.8.0a16+: form_panel is wrapped in a QStackedWidget
-        # before being installed in the dock (mirrors MainWindow's
-        # form-dock shape so QtAds geometry negotiation honours the
-        # inner bottom-band's Fixed sizePolicy).  The form_panel is
-        # accessible via stack.currentWidget().
-        from PySide6.QtWidgets import QStackedWidget
-        form_widget = win._form_dock.widget()
-        assert isinstance(form_widget, QStackedWidget)
-        assert form_widget.currentWidget() is runner.form_panel
+        # v0.8.0a19+: form_panel is installed DIRECTLY in the dock --
+        # the v0.8.0a16-a18 QStackedWidget wrap was removed because
+        # ``QStackedWidget.sizeHint`` empirically diverged from its
+        # current widget's ``sizeHint()`` override when the child
+        # had a complex layout with Expanding children, causing
+        # QtAds's content scroll area to over-allocate vertical
+        # space and scroll the Run row off the bottom of the dock.
+        # See ``tests/test_form_panel_dock_sizing.py`` for the
+        # contracts this enables.
+        assert win._form_dock.widget() is runner.form_panel
         assert win._output_dock.widget() is runner.output_panel
         assert win._run_controls_dock.widget() is runner.bottom_panel
 

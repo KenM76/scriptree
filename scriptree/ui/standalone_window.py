@@ -53,7 +53,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -89,6 +89,24 @@ _STANDALONE_DOCK_FEATURES = (
 )
 
 
+# Bump this string whenever the form-panel layout structure changes
+# in a way that makes previously-saved QtAds dock geometries wrong.
+# (Saved geometries override widget minimumSizeHints, so a layout
+# saved before a fix gets re-applied and silently re-creates the
+# bug.)
+#
+# v4 (v0.8.0a19) -- form_dock now uses
+# ``MinimumSizeHintFromContent`` so QtAds routes minimum-size
+# queries to the contained QStackedWidget / _FormPanelContainer
+# (which has a real C++ virtual override returning header +
+# floor + bottom_band).  Without this mode QtAds asks the dock
+# widget itself, which returns 0/0, and shrinks the form dock
+# below the bottom band's natural height.  Any saved v3 layout
+# is from a build where this mode wasn't set and may pin a
+# too-small form dock height; bumping schema invalidates them.
+_LAYOUT_SCHEMA = "v4"
+
+
 def _standalone_settings_key(label: str) -> str:
     """Build a per-window QSettings sub-key for layout persistence.
 
@@ -97,7 +115,7 @@ def _standalone_settings_key(label: str) -> str:
     overwritten when they next open a different standalone tool.
     """
     safe = "".join(c if c.isalnum() else "_" for c in (label or "default"))
-    return f"standalone_layout_{safe}"
+    return f"standalone_layout_{_LAYOUT_SCHEMA}_{safe}"
 
 
 class StandaloneWindow(QMainWindow):
@@ -201,27 +219,39 @@ class StandaloneWindow(QMainWindow):
         # explicit avoids the "widget shows briefly in old parent"
         # flicker on Win11).
         #
-        # v0.8.0a16+ -- wrap ``form_panel`` in a QStackedWidget
-        # before handing it to the QtAds dock.  Without the stack,
-        # QtAds's geometry negotiation doesn't honour the inner
-        # bottom-band's Fixed sizePolicy reliably -- the parameters
-        # scroll area expands and pushes the configurations bar /
-        # Run buttons off the bottom of the dock (the "scrolled
-        # away" failure mode the user reported in v0.8.0a14/a15).
-        # MainWindow's editor always wraps the form in a
-        # QStackedWidget for its own reasons (switching between
-        # multiple loaded tools); empirically that's also what made
-        # the bottom band hold its space.  Mirroring the wrapper
-        # here makes standalone behave the same way.
+        # v0.8.0a19 -- no more QStackedWidget wrap.  Earlier (a16+)
+        # this code wrapped form_panel in a QStackedWidget because
+        # MainWindow does so for its own reasons (tool switching).
+        # The hope was that the wrap would also help standalone
+        # honour the bottom-band's Fixed size policy.  It did not:
+        # ``QStackedWidget.sizeHint`` empirically diverges from its
+        # current widget's ``sizeHint()`` override when the child
+        # has a complex layout with expanding children -- with 16
+        # form rows it reports ~730 px instead of the 404 px the
+        # override returns, so QtAds's content-scroll-area wraps
+        # the whole form_panel and the Run row scrolls off the
+        # bottom.  Installing ``form_panel`` directly bypasses that
+        # confused middle-man so the _FormPanelContainer subclass's
+        # sizeHint / minimumSizeHint overrides flow straight into
+        # QtAds.
         form_panel = runner.form_panel
         form_panel.setParent(None)
-        from PySide6.QtWidgets import QStackedWidget
-        form_stack = QStackedWidget()
-        form_stack.addWidget(form_panel)
-        form_stack.setCurrentWidget(form_panel)
         form_dock = ads.CDockWidget(dock_manager, "Form")
         form_dock.setObjectName("StandaloneFormDock")
-        form_dock.setWidget(form_stack)
+        form_dock.setWidget(form_panel)
+        # v0.8.0a19 -- without this, QtAds asks the *dock widget*
+        # for its minimum-size (always 0/0), ignores the contained
+        # widget's ``minimumSizeHint`` entirely, and freely shrinks
+        # the form dock below the bottom band's natural height.
+        # ``MinimumSizeHintFromContent`` routes the query to
+        # ``form_stack.minimumSizeHint()``, which propagates to the
+        # _FormPanelContainer subclass override (header + floor +
+        # bottom_band) and stops QtAds from amputating the Run row.
+        # This is the same wiring MainWindow's tools dock uses
+        # (main_window.py around line 226).
+        form_dock.setMinimumSizeHintMode(
+            ads.CDockWidget.eMinimumSizeHintMode.MinimumSizeHintFromContent
+        )
         form_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
         form_dock.setWindowTitle(f"Form — {tool.name}")
         form_area = dock_manager.addDockWidget(
@@ -419,7 +449,16 @@ class StandaloneWindow(QMainWindow):
         if dm is None or not key:
             return
         try:
-            settings = QSettings("ScripTree", "ScripTree")
+            # v0.8.0a19 -- routed through ``app_settings.get_settings``
+            # so layout state lands in the portable ``scriptree.ini``
+            # next to the install, NOT the Windows registry under
+            # HKCU\Software\ScripTree.  Earlier code used
+            # ``QSettings("ScripTree", "ScripTree")`` which is
+            # platform-default (registry on Windows, .conf on Linux,
+            # plist on macOS) -- cross-platform UNFRIENDLY and stores
+            # state outside the install tree.
+            from ..core.app_settings import get_settings
+            settings = get_settings()
             blob = settings.value(key)
             if blob:
                 dm.restoreState(blob)
@@ -435,7 +474,10 @@ class StandaloneWindow(QMainWindow):
         if dm is None or not key:
             return
         try:
-            settings = QSettings("ScripTree", "ScripTree")
+            # See ``_restore_layout`` — uses the portable INI, not
+            # the Windows registry.
+            from ..core.app_settings import get_settings
+            settings = get_settings()
             settings.setValue(key, dm.saveState())
         except Exception:  # noqa: BLE001
             pass

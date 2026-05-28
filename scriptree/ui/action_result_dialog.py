@@ -44,15 +44,16 @@ that streamed into the pane is preserved there regardless).
   and matches the spec's "non-modal" rule.
 * Position memory uses QSettings keyed by ``<tool_name>::<action_id>``
   so the same action's dialog returns to the same screen position
-  next time, but different actions get their own slots.  Reuses
-  the project's existing QSettings ("ScripTree" / "ScripTree")
-  namespace.
+  next time, but different actions get their own slots.  Routed
+  through ``core.app_settings.get_settings`` (v0.8.0a19+) so state
+  lands in the portable ``scriptree.ini`` next to the install,
+  NOT the Windows registry / platform default.
 """
 from __future__ import annotations
 
 from typing import Iterable
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
@@ -221,13 +222,18 @@ class ActionResultDialog(QDialog):
         )
 
     def _restore_geometry(self) -> None:
-        s = QSettings("ScripTree", "ScripTree")
+        # v0.8.0a19 -- routed through the portable INI rather than
+        # the platform default (Windows registry).  See
+        # ``scriptree.core.app_settings.get_settings``.
+        from ..core.app_settings import get_settings
+        s = get_settings()
         geom = s.value(self._geometry_key())
         if geom is not None:
             self.restoreGeometry(geom)
 
     def _save_geometry(self, *_args: object) -> None:
-        s = QSettings("ScripTree", "ScripTree")
+        from ..core.app_settings import get_settings
+        s = get_settings()
         s.setValue(self._geometry_key(), self.saveGeometry())
 
 
