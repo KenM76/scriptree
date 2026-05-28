@@ -226,6 +226,57 @@ def test_bottom_panel_round_trips_through_reparent() -> None:
         _app.processEvents()
 
 
+def test_run_button_visible_when_dock_is_tight() -> None:
+    """v0.8.0a13 regression: when the form dock is shorter than the
+    natural height of (header + params + cfg + extras + cmd + Run
+    row + status), the Run button must remain visible.  The
+    parameters scroll area shrinks; the bottom band keeps its
+    natural height.
+
+    Failure mode pre-fix: ``form_scroll``'s minimum height was its
+    content's sizeHint, so Qt's QVBoxLayout kept it tall even when
+    the dock was constrained -- pushing the Run buttons off the
+    bottom edge.  Fix: ``form_scroll.setMinimumHeight(0)`` +
+    ``QSizePolicy.Expanding`` so the scroll area genuinely
+    compresses to nothing when space is tight.
+    """
+    # Build a tool with several params so the form is naturally
+    # taller than the dock we'll force on it.
+    tool = ToolDef(
+        name="big",
+        executable="/bin/echo",
+        argument_template=["{a}"],
+        params=[
+            ParamDef(id=f"p{i}", label=f"Param {i}", default=f"v{i}")
+            for i in range(15)
+        ] + [ParamDef(id="a", label="A", default="x")],
+    )
+    v = ToolRunnerView(tool)
+    # Force a small fixed height typical of a half-screen dock.
+    v.resize(600, 280)
+    v.show()
+    _app.processEvents()
+
+    # The Run button MUST have a non-zero visible region.
+    run_btn = v._btn_run
+    # ``isVisible`` is True if the widget's window is mapped; it
+    # doesn't check whether the widget's geometry is on-screen.
+    # ``visibleRegion`` does -- and that's the contract we need.
+    assert run_btn.isVisible(), "Run button widget is not visible"
+    # The widget's mapped y-coordinate must be within the runner's
+    # own height -- otherwise it's been pushed off the bottom edge.
+    pos_in_runner = run_btn.mapTo(v, run_btn.rect().topLeft())
+    assert pos_in_runner.y() < v.height(), (
+        f"Run button is at y={pos_in_runner.y()} but the runner is "
+        f"only {v.height()} px tall -- it's been pushed off the "
+        f"bottom of the dock."
+    )
+
+    v.close()
+    v.deleteLater()
+    _app.processEvents()
+
+
 def test_compact_plain_text_edit_one_line_size_hint() -> None:
     """The _CompactPlainTextEdit subclass returns a sizeHint whose
     height is roughly one text line + minimal chrome, instead of

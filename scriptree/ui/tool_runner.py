@@ -1306,6 +1306,20 @@ class ToolRunnerView(QWidget):
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         form_scroll.setWidget(form_group)
+        # Critical for the v0.8.0a13 "controls always visible" rule:
+        # the scroll area must be allowed to shrink all the way down
+        # so the bottom band (cfg, extras/cmd, Run row, status) keeps
+        # its natural height when the dock is tight.  Without this,
+        # ``stretch=1`` alone isn't enough -- Qt's QVBoxLayout would
+        # still try to honour the scroll area's content sizeHint,
+        # which pushes the Run buttons off the bottom of the form
+        # dock when the form_group is taller than the dock.
+        from PySide6.QtWidgets import QSizePolicy
+        form_scroll.setMinimumHeight(0)
+        form_scroll.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
         layout.addWidget(form_scroll, stretch=1)
 
         # Bottom pane — extras + command line, wrapped in a single
