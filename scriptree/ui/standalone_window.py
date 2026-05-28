@@ -200,11 +200,28 @@ class StandaloneWindow(QMainWindow):
         # stale child pointer (Qt reparents on setWidget but being
         # explicit avoids the "widget shows briefly in old parent"
         # flicker on Win11).
+        #
+        # v0.8.0a16+ -- wrap ``form_panel`` in a QStackedWidget
+        # before handing it to the QtAds dock.  Without the stack,
+        # QtAds's geometry negotiation doesn't honour the inner
+        # bottom-band's Fixed sizePolicy reliably -- the parameters
+        # scroll area expands and pushes the configurations bar /
+        # Run buttons off the bottom of the dock (the "scrolled
+        # away" failure mode the user reported in v0.8.0a14/a15).
+        # MainWindow's editor always wraps the form in a
+        # QStackedWidget for its own reasons (switching between
+        # multiple loaded tools); empirically that's also what made
+        # the bottom band hold its space.  Mirroring the wrapper
+        # here makes standalone behave the same way.
         form_panel = runner.form_panel
         form_panel.setParent(None)
+        from PySide6.QtWidgets import QStackedWidget
+        form_stack = QStackedWidget()
+        form_stack.addWidget(form_panel)
+        form_stack.setCurrentWidget(form_panel)
         form_dock = ads.CDockWidget(dock_manager, "Form")
         form_dock.setObjectName("StandaloneFormDock")
-        form_dock.setWidget(form_panel)
+        form_dock.setWidget(form_stack)
         form_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
         form_dock.setWindowTitle(f"Form — {tool.name}")
         form_area = dock_manager.addDockWidget(

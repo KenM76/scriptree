@@ -36,7 +36,7 @@ vertical space available on the form.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -117,6 +117,12 @@ class ResizableContainer(QWidget):
         super().__init__(parent)
         self._child = child
         self._min_height = int(min_height)
+        # Track the desired child height in an attribute so
+        # ``sizeHint()`` can report it correctly even before the
+        # widget has been laid out (``self._child.height()`` is 0
+        # until the layout pass runs, which would make the parent
+        # row stay at its small initial size).
+        self._desired_height = int(initial_height)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -126,7 +132,7 @@ class ResizableContainer(QWidget):
         # child claims exactly the height we set, instead of letting
         # the form layout grow it to its sizeHint.  Drag updates
         # this value directly.
-        child.setFixedHeight(int(initial_height))
+        child.setFixedHeight(self._desired_height)
         layout.addWidget(child, stretch=1)
 
         self._handle = _ResizeHandle(self)
@@ -138,8 +144,108 @@ class ResizableContainer(QWidget):
     # ------------------------------------------------------------------
 
     def _on_dragged(self, delta_y: int) -> None:
-        new_h = max(self._min_height, self._child.height() + int(delta_y))
+        new_h = max(self._min_height, self._desired_height + int(delta_y))
+        self._desired_height = new_h
         self._child.setFixedHeight(new_h)
+        # ``setFixedHeight`` changes the rendered geometry but
+        # ``QPlainTextEdit.sizeHint()`` (and similar) still report
+        # their *natural* sizeHint, not the fixed value.  Our own
+        # ``sizeHint()`` override returns the correct height, but
+        # we also need to TELL the layout system that something
+        # changed so parents recompute.
+        self._child.updateGeometry()
+        self.updateGeometry()
+
+        # When this container lives inside a row of a QListWidget-
+        # backed ``ReorderableParamForm``, the row's QListWidgetItem
+        # has a cached sizeHint that was set at construction.  Even
+        # after the inner widget grows, ``form.relayout_rows()``
+        # rereads the row widget's sizeHint -- but the row's own
+        # QHBoxLayout caches *its* sizeHint, so reading it returns
+        # the stale value and the item never resizes.  Worse, the
+        # resized widget visually overflows behind the next row
+        # (the exact failure mode the user reported).
+        #
+        # Direct fix: walk up to the QListWidget, find the row whose
+        # ``itemWidget`` is one of our ancestors, then set its
+        # ``sizeHint`` ourselves using ``self._desired_height``.  We
+        # also invalidate intermediate layouts so any future
+        # ``sizeHint()`` callers see the new value.
+        from PySide6.QtWidgets import QListWidget
+        from PySide6.QtCore import QSize as _QSize
+
+        ancestors: list[QWidget] = []
+        parent = self.parentWidget()
+        while parent is not None:
+            ancestors.append(parent)
+            if parent.layout() is not None:
+                parent.layout().invalidate()
+            parent.updateGeometry()
+            if isinstance(parent, QListWidget):
+                form_list = parent
+                # Find the ancestor that's the row -- the one whose
+                # parent is the list's viewport (i.e. installed via
+                # setItemWidget).  Then locate its QListWidgetItem.
+                row_widget: QWidget | None = None
+                for cand in ancestors:
+                    if cand.parentWidget() is form_list.viewport():
+                        row_widget = cand
+                        break
+                if row_widget is not None:
+                    for i in range(form_list.count()):
+                        item = form_list.item(i)
+                        if form_list.itemWidget(item) is row_widget:
+                            current = item.sizeHint()
+                            # Sum the row's child heights manually
+                            # so we don't depend on the cached row
+                            # sizeHint.  Take max of (handle label
+                            # + side label + our container).  In
+                            # practice our container dominates after
+                            # any drag.
+                            new_row_h = max(
+                                current.height(),
+                                self._desired_height
+                                + self._handle.height()
+                                + 12,  # small padding
+                            )
+                            item.setSizeHint(_QSize(
+                                current.width(), new_row_h,
+                            ))
+                            break
+                break
+            parent = parent.parentWidget()
+
+    # ------------------------------------------------------------------
+    # Size hint -- reflect the dragged-to height
+    # ------------------------------------------------------------------
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        """Report the container's actual dragged-to height.
+
+        Without this override, ``QVBoxLayout`` would sum the
+        children's *natural* sizeHints -- and ``QPlainTextEdit`` /
+        ``QListWidget`` return their fontmetric-derived hint, not
+        the value passed to ``setFixedHeight``.  The parent row
+        wouldn't know the child grew, so the resized widget would
+        visually overflow into the next param row (the failure
+        mode the user reported).
+
+        Reads ``self._desired_height`` (the dragged-to value)
+        rather than ``self._child.height()`` so the hint is correct
+        even before Qt has run a layout pass.
+        """
+        base = super().sizeHint()
+        return QSize(
+            base.width(),
+            self._desired_height + self._handle.height(),
+        )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        base = super().minimumSizeHint()
+        return QSize(
+            base.width(),
+            self._min_height + self._handle.height(),
+        )
 
     # ------------------------------------------------------------------
     # Accessors
@@ -151,5 +257,9 @@ class ResizableContainer(QWidget):
         return self._child
 
     def current_child_height(self) -> int:
-        """Current pixel height of the child -- exposed for tests."""
-        return self._child.height()
+        """Current desired pixel height of the child -- exposed for tests.
+
+        Reads the tracked desired value, not ``self._child.height()``
+        (which is 0 until Qt has done a layout pass).
+        """
+        return self._desired_height

@@ -129,6 +129,45 @@ class TestParamWidgetWiring:
         assert isinstance(w._scroll_resize, ResizableContainer)
         assert w._scroll_resize.current_child_height() == 160
 
+    def test_dragging_inside_param_form_grows_the_row(self) -> None:
+        """v0.8.0a16 regression: when a ResizableContainer lives
+        inside a row of a ``ReorderableParamForm`` (which is a
+        QListWidget under the hood), dragging the handle should grow
+        not just the inner widget but ALSO the row's QListWidgetItem
+        sizeHint -- otherwise the resized widget overflows behind the
+        next param row.
+        """
+        from scriptree.ui.tool_runner import ReorderableParamForm
+        from PySide6.QtWidgets import QWidget, QHBoxLayout
+
+        form = ReorderableParamForm()
+        form.resize(600, 400)
+
+        # Build a row containing a TextAreaWidget (which uses
+        # ResizableContainer internally).
+        p = ParamDef(
+            id="msg", label="Msg",
+            type=ParamType.STRING, widget=Widget.TEXTAREA,
+        )
+        widget = TextAreaWidget(p)
+        form.add_param_row("msg", "Message", widget)
+
+        # Capture the row height before drag.
+        item = form.item(0)
+        h_before = item.sizeHint().height()
+
+        # Grow the inner edit by 80 px via the wrapper's drag path.
+        widget._resize._on_dragged(80)
+
+        # The row's QListWidgetItem sizeHint should have grown by
+        # roughly the same amount.  Allow some slack for margins
+        # but require a meaningful increase, not just zero.
+        h_after = form.item(0).sizeHint().height()
+        assert h_after > h_before + 40, (
+            f"Row sizeHint did not grow with the widget: "
+            f"{h_before} -> {h_after}"
+        )
+
     def test_folder_list_wraps_list(self) -> None:
         p = ParamDef(
             id="dirs", label="Folders",

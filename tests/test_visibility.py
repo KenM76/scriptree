@@ -563,7 +563,15 @@ class TestStandaloneWindowDocks:
         runner = win._runners[0]
 
         # The dock should report each panel as its current widget.
-        assert win._form_dock.widget() is runner.form_panel
+        # v0.8.0a16+: form_panel is wrapped in a QStackedWidget
+        # before being installed in the dock (mirrors MainWindow's
+        # form-dock shape so QtAds geometry negotiation honours the
+        # inner bottom-band's Fixed sizePolicy).  The form_panel is
+        # accessible via stack.currentWidget().
+        from PySide6.QtWidgets import QStackedWidget
+        form_widget = win._form_dock.widget()
+        assert isinstance(form_widget, QStackedWidget)
+        assert form_widget.currentWidget() is runner.form_panel
         assert win._output_dock.widget() is runner.output_panel
         assert win._run_controls_dock.widget() is runner.bottom_panel
 
