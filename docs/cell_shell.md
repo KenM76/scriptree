@@ -536,6 +536,81 @@ When the master moves to a corner that pushes a member off-screen, the member's 
 
 When the master returns to a position where HOME is back on-screen, the next reflow pass restores the member to HOME. Members **take precedence for their own ordinary space** over any temp arrangement; only members whose HOME is genuinely off-screen at the master's current position settle for a temp slot.
 
+## Tree auto-discovery (v0.8.0a21+)
+
+A `.scriptreetree`-bound cell can scan its own folder for new `.scriptree` files and offer to add them. Same feature shape as the forest's auto-discovery, scoped to a single tree.
+
+### Right-click → "Tree" submenu
+
+When you right-click a cell bound to a `.scriptreetree`, the context menu gains a **Tree** submenu with four entries:
+
+| Entry | What it does |
+|---|---|
+| **Refresh from sources** | Run the walker against the tree's `roots`, diff against current leaves, and react per the tree's `update_mode`: `prompt` opens the diff dialog, `auto` applies silently, `off` is a no-op. |
+| **Auto-add from this folder now** | Always opens the diff dialog regardless of `update_mode`. Use when you want a one-shot scan + decide even on a tree configured for `off`. |
+| **Tree settings…** | Opens the `TreeSettingsDialog`: toggle enabled, edit `roots`, toggle sibling-tree surfacing, pick `update_mode`. "Save && Run discovery" persists then immediately re-scans. |
+| **Excluded items…** | Lists every path the user has explicitly removed (the `tree.excluded` list). Each row is selectable; "Re-include selected" drops the chosen paths from `excluded` and persists. |
+
+### First-load chooser
+
+The first time you open a `.scriptreetree` written before this feature existed (or any tree whose `auto_discover` key is missing), a small dialog pops up asking *"How should ScripTree keep this tree in sync with new .scriptree files in its folder?"* — three radio buttons:
+
+- **Prompt** *(default, recommended)* — every load and every Refresh scans; if anything new is found, a diff dialog appears so you can pick what to add.
+- **Auto** — silently add everything new on every load. Use when the on-disk folder IS the source of truth.
+- **Off** — never scan automatically. The "Refresh from sources" menu entry still works as a one-shot.
+
+Your choice is persisted as an `auto_discover` block in the tree's JSON, so this chooser only fires once per tree. Closing the window without picking is treated as "Prompt" so an accidental close doesn't strand the tree in the "never asked" state forever.
+
+### The diff dialog
+
+Three sections, each a list of rows with checkboxes:
+
+- **Add to tree** — newly-found `.scriptree` files (and, when `include_sibling_trees=true`, sibling `.scriptreetree` files). Default checked.
+- **Remove from tree — file no longer on disk** — leaves whose underlying file has vanished. Default checked.
+- **Previously excluded — found again** — candidates whose path is in the tree's `excluded` list. Default **unchecked** (you previously said no; we don't undo that silently).
+
+Tick the rows you want. Hit **Apply** to mutate the tree (the JSON is saved automatically) or **Cancel** to discard.
+
+### Walking rule
+
+The walker descends the tree's `roots` (default `["."]`, i.e. the tree's own folder) and applies a boundary rule at every directory:
+
+- If the directory contains another `.scriptreetree`, **stop descending**. That subtree is owned by the other file. When `include_sibling_trees` is on, the boundary `.scriptreetree` itself is surfaced as a candidate sub-tree leaf you can add.
+- Otherwise, emit every `.scriptree` file in the directory and recurse into subdirectories.
+
+So a folder shape like:
+
+```
+solidworks/
+├── solidworks.scriptreetree   ← the tree you're scanning
+├── export/
+│   ├── dxf.scriptree          ← surfaced as ./export/dxf.scriptree
+│   └── step.scriptree         ← surfaced as ./export/step.scriptree
+└── subtree/
+    ├── owned.scriptreetree    ← surfaced as sibling-tree candidate
+    └── owned-tool.scriptree   ← NOT surfaced (owned by owned.scriptreetree)
+```
+
+…yields three candidates for the current tree, plus one sibling-tree candidate (the user can decide whether to nest it).
+
+### Recommended folder convention
+
+Authors who want auto-discovery to give the cleanest UX should organise tools as:
+
+```
+ScripTreeApps/
+└── <program>/                   solidworks, outlook, git, pwsh, …
+    ├── <program>.scriptreetree
+    ├── <purpose>/               export, cleanup, migration, analysis, …
+    │   └── *.scriptree
+    └── <purpose>/
+        └── *.scriptree
+```
+
+With this layout, each `<program>.scriptreetree`'s default `roots: ["."]` auto-discovers every tool in its purpose-subfolders. The hashtag / view-modes system planned for a future release will let the menu re-bucket discovered tools across the program-axis at render time, regardless of how they sit on disk.
+
+Full schema for the `auto_discover` block and the `excluded` list is in [LLM/scriptreetree_format.md](LLM/scriptreetree_format.md).
+
 ## Out of scope for v3.x
 
 - 3+ way recursive docking (masters are pairwise; a triangle of cells produces three pairwise masters, not one 3-way master).
