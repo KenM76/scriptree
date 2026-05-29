@@ -176,6 +176,6 @@ gets clear close-the-loop feedback.  Only deviate from that recipe
 when a specific control is genuinely useful for the tool's
 purpose (e.g. a diagnostic tool that needs `command_line` visible).
 
-See `help/LLM/configurations_sidecar.md` → "Standalone-mode recipe"
+See `docs/LLM/configurations_sidecar.md` → "Standalone-mode recipe"
 for the full JSON shape, the per-element rationale, and the
 exceptions.

@@ -1,4 +1,4 @@
-"""The shipped ``icons/`` set must obey help/host-software-icon-style.md.
+"""The shipped ``icons/`` set must obey docs/host-software-icon-style.md.
 
 Locks the invariant skeleton so any icon added later (by a human or
 an LLM) that breaks the style is caught in CI rather than shipping a

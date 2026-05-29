@@ -129,7 +129,7 @@ safe because every spawn is `shell=False`.
 ## Security
 
 Running an arbitrary command to build a form is gated by the
-`dynamic_choices` capability (see `help/security.md`). Shipped
+`dynamic_choices` capability (see `docs/security.md`). Shipped
 **allowed** by default; an admin denies it by making
 `permissions/running/dynamic_choices` read-only. When denied, a tool
 with `choices_provider` still loads but the dynamic params render

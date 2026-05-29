@@ -44,7 +44,7 @@
 
 8. **Custom menus on tools and trees** — add menu bars with commands, submenus, shortcuts, and tooltips to any `.scriptree` or `.scriptreetree` file.
 
-9. **AI-generated tool files** — point any LLM at the `help/LLM/` folder and it can generate valid `.scriptree` files from a plain-English description. Complete schemas and invariants included.
+9. **AI-generated tool files** — point any LLM at the `docs/LLM/` folder and it can generate valid `.scriptree` files from a plain-English description. Complete schemas and invariants included.
 
 10. **Drag-and-drop everywhere** — rearrange form fields by dragging the row handle, drop files from Explorer onto any text or path widget to fill in the path, drop multiple files onto a textarea to insert one path per line. In the cell shell, drop catalogs onto cells to spawn new bound siblings.
 

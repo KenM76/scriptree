@@ -418,7 +418,7 @@ legacy files stay byte-identical.
 2. `icon` (file path) → render the file the same way.
 3. `text_label` → render the explicit text at `label_opacity`.
 4. **Auto-derived letters** from `name` (CamelCase precedence, skip-word
-   filter, two-letter fallback). See `help/cell_shell.md` for the full
+   filter, two-letter fallback). See `docs/cell_shell.md` for the full
    rules.
 5. `?` if all of the above produce nothing.
 

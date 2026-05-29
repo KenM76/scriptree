@@ -97,7 +97,7 @@ def test_help_dialog_renders_first_page():
     dlg = HelpDialog()
     try:
         assert dlg._browser.current_path() is not None
-        # First page in the curated tree is help/README.md.
+        # First page in the curated tree is docs/README.md.
         assert dlg._browser.current_path().name == "README.md"
     finally:
         dlg.deleteLater()

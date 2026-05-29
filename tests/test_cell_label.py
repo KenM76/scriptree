@@ -896,7 +896,7 @@ class TestComputeLayout:
     Pins the bridge between the pure-Python algorithm (proven by
     ``tests/test_layout_algorithm.py``) and the Qt widget code.
     See ``scriptree/shell/layout.py`` for the algorithm and
-    ``help/LLM/scenegraph_layout_plan.md`` for the model docs.
+    ``docs/LLM/scenegraph_layout_plan.md`` for the model docs.
     """
 
     def test_compute_layout_assigns_slots_to_unassigned_members(self) -> None:

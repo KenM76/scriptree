@@ -25,7 +25,7 @@ YourProject/
 │   ├── scriptree/          ← Python package
 │   ├── tests/
 │   ├── examples/
-│   └── help/               ← you are here
+│   └── docs/               ← you are here
 └── ScripTreeApps/          ← your tools and tree launchers
 ```
 
@@ -60,11 +60,11 @@ Or on Windows, double-click `run_scriptree.bat`.
 ### Option B: Ask an AI
 
 Point any AI assistant (Claude, ChatGPT, Copilot, etc.) at the
-`help/LLM/` folder and ask it to create a `.scriptree` file. The LLM
+`docs/LLM/` folder and ask it to create a `.scriptree` file. The LLM
 docs contain complete JSON schemas and rules — the AI can generate
 valid tool files on the first try.
 
-Example: *"Read help/LLM/ and create a .scriptree for ffmpeg that
+Example: *"Read docs/LLM/ and create a .scriptree for ffmpeg that
 converts video files with resolution and codec options."*
 
 ### PowerShell cmdlets

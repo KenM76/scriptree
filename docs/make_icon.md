@@ -163,7 +163,7 @@ direction evolved. Only one is `ACTIVE` at any time (currently
 | 04 | `upright_tree_windows` | Concept 02 trunk re-stood upright | Iteration on 02. |
 | 05 | `upright_branch_windows` | Concept 03 with trunk re-stood upright | First concept to also emit `.svg`. |
 | 06 | `hex_fractal_tree` | Recursive hex-fractal canopy on a dark tile | Coloured mint with brown trunk + gold ">_" prompt. Size-adaptive ICO ladder. |
-| 07 | `glyph_fractal_tree` | Pure-stroke line glyph on a 48-grid | Matches `help/host-software-icon-style.md`. SVG uses `currentColor`. |
+| 07 | `glyph_fractal_tree` | Pure-stroke line glyph on a 48-grid | Matches `docs/host-software-icon-style.md`. SVG uses `currentColor`. |
 | 08 | `mono_fractal_tree` | Concept 06 with a single mint hue + straight trunk | Drops the brown trunk + gold prompt for monochrome. |
 | 09 | `grayscale_fractal_tree` | Grayscale, straight trunk, transparent background | First palette-free fractal; reads on light or dark surfaces. |
 | 10 | `grayscale_leveled_tree` | **Current ACTIVE.** Per-level brightness ladder, full junction nodes | All four palette flags apply here. |
@@ -358,9 +358,9 @@ python make_icon.py --concept 07_glyph_fractal_tree --svg-out /tmp/glyph.svg
 
 ## See also
 
-* `help/host-software-icon-style.md` — the line-glyph icon family
+* `docs/host-software-icon-style.md` — the line-glyph icon family
   that concept 07 belongs to.
 * `scriptree/resources/make_icon.py` — the script's own module
   docstring has a deeper architectural tour.
-* `help/cell_shell.md` — the cell + ring shell that consumes the
+* `docs/cell_shell.md` — the cell + ring shell that consumes the
   forest hub glyph.

@@ -526,7 +526,7 @@ class ActionDef:
         a "Are you sure? — <text>" modal must be accepted before
         the action runs.  For destructive presets.
       * ``icon`` — optional bundled-icon-library name (see
-        ``help/LLM/icon_library.md``).  Empty = label-only button.
+        ``docs/LLM/icon_library.md``).  Empty = label-only button.
       * ``hidden`` — when True the action is registered but not
         rendered as a button; useful for actions surfaced
         elsewhere (custom menus, hotkeys in a future version).

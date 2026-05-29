@@ -81,7 +81,7 @@ parsing an edited command line back into widget values
   applies to a standalone ``{id}`` of a STRING param without
   ``no_split``. Embedded/conditional/non-string keep single-token
   semantics. This is observable tool behaviour — see
-  ``help/LLM/argument_template.md``; don't widen it silently.
+  ``docs/LLM/argument_template.md``; don't widen it silently.
 * ``resolve`` honours ``visible_when`` / ``required_when``: a field
   hidden by ``visible_when`` is exempt from the required check
   (lazy-imports ``visible_when.evaluate``). Preview callers pass
@@ -336,7 +336,7 @@ def resolve(
             # field) work as users intuitively expect — emit four argv
             # tokens, not one big concatenated string. Quoted phrases
             # are preserved as single tokens (shlex respects them).
-            # See help/LLM/argument_template.md for the full rule.
+            # See docs/LLM/argument_template.md for the full rule.
             if _is_string_passthrough(entry, param_map):
                 argv.extend(_argv_split(emitted))
             else:

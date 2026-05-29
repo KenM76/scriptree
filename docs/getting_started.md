@@ -50,12 +50,12 @@ the primary workflow for any tool that doesn't emit structured help.
 
 You can have an AI assistant (Claude, ChatGPT, Copilot, etc.) generate
 `.scriptree` and `.scriptreetree` files for you. Point the AI at the
-`help/LLM/` folder in this project and ask it to follow those specs.
+`docs/LLM/` folder in this project and ask it to follow those specs.
 The LLM docs contain the complete JSON schemas, field rules, loader
 invariants, and argument template grammar — everything an AI needs to
 produce valid tool files on the first try.
 
-Example prompt: *"Read the files in help/LLM/ and create a .scriptree
+Example prompt: *"Read the files in docs/LLM/ and create a .scriptree
 file for robocopy with parameters for source, destination, and common
 flags."*
 

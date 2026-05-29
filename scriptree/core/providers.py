@@ -14,7 +14,7 @@ Refresh click), shows spinner / error state, and never parses
 provider output itself.
 
 Hard rules honoured here (from ``architecture.md`` /
-``help/LLM/README.md``):
+``docs/LLM/README.md``):
 
 * ``Popen`` always gets a **list argv**, never ``shell=True``.
 * Path / cwd resolution reuses ``runner.resolve_tool_path`` so a

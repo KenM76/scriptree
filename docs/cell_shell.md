@@ -62,9 +62,9 @@ The two usually coincide. They diverge in two practical cases:
   Collapse the forest, the ring shrinks into it AND the ring's own
   cells shrink into the ring (recursive).
 
-See `help/LLM/icon_library.md` for the icon vocabulary
+See `docs/LLM/icon_library.md` for the icon vocabulary
 (`icon-forest`, `icon-ring`, …) and
-`help/LLM/menu_appearance.md` for the menu font / icon scale UI
+`docs/LLM/menu_appearance.md` for the menu font / icon scale UI
 that lives in the cell **Settings → Shape & Size** tab.
 
 ## Menu font & icon scale (v0.6.21+)
@@ -78,7 +78,7 @@ by the `menu_appearance_shared_write` capability).  The same
 save checkboxes also publish the current cell's shape /
 orientation / size to the global cell defaults so new cells you
 spawn afterwards inherit those choices.  Storage paths and
-resolution order in `help/LLM/menu_appearance.md`.
+resolution order in `docs/LLM/menu_appearance.md`.
 | **Shake during drag** | Break free from the current ring. The cell un-docks; the master destroys itself if fewer than 2 members remain. | — |
 
 ### How the master ("ring" / "tree ring") spawns
@@ -295,9 +295,9 @@ Icon, text, scale and opacity are stored in the **catalog JSON**
 (`.scriptree` or `.scriptreetree`) under a `cell` sub-object on the
 top-level `ToolDef` / `TreeDef`. The full schema is in the LLM docs:
 
-- [`help/LLM/scriptree_format.md`](LLM/scriptree_format.md) — `cell`
+- [`docs/LLM/scriptree_format.md`](LLM/scriptree_format.md) — `cell`
   section under top-level shape.
-- [`help/LLM/scriptreetree_format.md`](LLM/scriptreetree_format.md)
+- [`docs/LLM/scriptreetree_format.md`](LLM/scriptreetree_format.md)
   — same `cell` sub-object on the tree.
 
 Defaults are omitted on save, so a `.scriptree` that doesn't customise
@@ -316,7 +316,7 @@ A `.scriptreering` file captures either:
 - a **single standalone cell** (`master.role = "standalone"`, `members = []`), OR
 - a **whole ring** (the master cell plus all its member cells).
 
-The format is plain UTF-8 JSON; `format = "scriptreering"`, `version = 1`. Full spec lives at [`help/LLM/scriptreering_format.md`](LLM/scriptreering_format.md).
+The format is plain UTF-8 JSON; `format = "scriptreering"`, `version = 1`. Full spec lives at [`docs/LLM/scriptreering_format.md`](LLM/scriptreering_format.md).
 
 When ScripTreeRing starts, it reads:
 

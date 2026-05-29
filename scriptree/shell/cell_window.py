@@ -3141,7 +3141,7 @@ class CellWindow(QMainWindow):
         # (``_slot = None``, ``_floating_intent = True``); the link
         # to the master via ``_group_master_id`` is preserved so
         # collapse / forest-click still pulls the cell back.
-        # See ``help/LLM/scenegraph_layout_plan.md`` for the model.
+        # See ``docs/LLM/scenegraph_layout_plan.md`` for the model.
         self._slot: tuple[str, int] | None = None
         self._floating_intent: bool = False
 
@@ -4277,7 +4277,7 @@ class CellWindow(QMainWindow):
         # path for now; that one is a tight in-drag inner loop and
         # the slot model + on-demand recompute haven't been wired
         # into it yet.  Listed in
-        # ``help/LLM/scenegraph_layout_plan.md`` as a follow-up.
+        # ``docs/LLM/scenegraph_layout_plan.md`` as a follow-up.
         if fixed is None:
             self._compute_layout(instant=instant)
             return

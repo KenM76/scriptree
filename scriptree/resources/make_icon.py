@@ -45,7 +45,7 @@ the constants block) names the one that's currently shipping.
 | ``04_upright_tree_windows``      | Concept 02 trunk re-stood upright                            | Iteration on 02.                                                                                        |
 | ``05_upright_branch_windows``    | Concept 03 with the trunk re-stood upright                   | First concept to also emit ``.svg``.                                                                    |
 | ``06_hex_fractal_tree``          | Recursive hex-fractal canopy on a dark tile                  | Size-adaptive ICO depth ladder.  Coloured mint with brown trunk and gold ``>_`` prompt.                 |
-| ``07_glyph_fractal_tree``        | Pure-stroke line glyph on a 48 grid, ``currentColor`` SVG    | Matches the bundled facet-icon style (see ``help/host-software-icon-style.md``).                        |
+| ``07_glyph_fractal_tree``        | Pure-stroke line glyph on a 48 grid, ``currentColor`` SVG    | Matches the bundled facet-icon style (see ``docs/host-software-icon-style.md``).                        |
 | ``08_mono_fractal_tree``         | Concept 06 with a single mint hue and a straight trunk       | Drops the brown trunk + gold prompt for a monochrome look.                                              |
 | ``09_grayscale_fractal_tree``    | Grayscale, straight trunk, transparent background            | First palette-free fractal; reads on light or dark surfaces.                                            |
 | ``10_grayscale_leveled_tree``    | **Current ACTIVE.** Per-level brightness ladder + full nodes | Trunk colour matches depth-0 branches, every junction has a connector dot, brightness steps per level.  |
@@ -141,7 +141,7 @@ Single-shot a coloured ladder, PNG + SVG together::
     python make_icon.py --depth 4 --size 1024 --color '#3B82F6' \\
         --out /tmp/blue.png --svg-out /tmp/blue.svg
 
-See ``help/make_icon.md`` for the user-facing manual.
+See ``docs/make_icon.md`` for the user-facing manual.
 """
 from __future__ import annotations
 
@@ -2219,7 +2219,7 @@ def save_concept_08() -> None:
 # ---------------------------------------------------------------------------
 #
 # Matches the program's bundled facet-icon style as documented in
-# ``help/host-software-icon-style.md``:
+# ``docs/host-software-icon-style.md``:
 #
 #   * 48-grid composition, content within the 4→44 band.
 #   * Stroke-only, no fill, no background tile, no gradient.

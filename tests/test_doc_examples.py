@@ -43,12 +43,12 @@ from scriptree.core.io import (
 )
 
 
-_LLM_DIR = Path(__file__).resolve().parents[1] / "help" / "LLM"
+_LLM_DIR = Path(__file__).resolve().parents[1] / "docs" / "LLM"
 
 
 def _iter_json_blocks() -> list[tuple[Path, int, str]]:
     """Yield (path, line_no, raw_json_str) for every ```json fenced
-    block in help/LLM/*.md.  Recurses into subdirectories so
+    block in docs/LLM/*.md.  Recurses into subdirectories so
     parser-specific doc pages are covered too.
     """
     blocks: list[tuple[Path, int, str]] = []

@@ -5,7 +5,7 @@ tools were falling back to one generic glyph.  This script:
 
   1. Writes any *missing* ``icons/icon-<name>.svg`` from the curated
      table below — every entry is a trademark-safe, ``currentColor``,
-     2.5-stroke line glyph that obeys ``help/host-software-icon-style.md``
+     2.5-stroke line glyph that obeys ``docs/host-software-icon-style.md``
      (and therefore ``tests/test_icon_library.py``).  Existing SVGs are
      left untouched (hand-edits win; this is additive).
   2. Rasterises **every** ``icons/*.svg`` to a sibling ``.png`` (the

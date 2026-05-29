@@ -253,7 +253,7 @@ Aim for >90% coverage of `core/`. UI layer coverage is lower by design
 
 ## Security architecture
 
-See `help/security.md` for the full human-readable reference.
+See `docs/security.md` for the full human-readable reference.
 
 Key modules:
 

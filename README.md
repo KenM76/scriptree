@@ -6,10 +6,10 @@ V3 ships with **three launchers and a headless screenshot tool in one installati
 
 | Launcher | What it does |
 |---|---|
-| **`run_scriptreeforest.bat`** | **Primary entry point.** The **forest workspace**: a persistent root cell on your desktop plus every other cell linked under it.  Auto-discovers nearby `.scriptreering` / `.scriptreetree` / `.scriptree` catalogs at startup, restores the saved layout, and adopts new tools as they appear in the workspace folder.  This is what most users double-click after install.  Internally chains into `run_scriptreering.py` with `SCRIPTREE_FOREST_MODE=1` — same Python search, same dependency check, same self-healing.  See [`help/cell_shell.md`](help/cell_shell.md). |
+| **`run_scriptreeforest.bat`** | **Primary entry point.** The **forest workspace**: a persistent root cell on your desktop plus every other cell linked under it.  Auto-discovers nearby `.scriptreering` / `.scriptreetree` / `.scriptree` catalogs at startup, restores the saved layout, and adopts new tools as they appear in the workspace folder.  This is what most users double-click after install.  Internally chains into `run_scriptreering.py` with `SCRIPTREE_FOREST_MODE=1` — same Python search, same dependency check, same self-healing.  See [`docs/cell_shell.md`](docs/cell_shell.md). |
 | **`run_scriptreering.bat`** | The **bare cell + ring shell** (no forest workspace).  Floating hexagonal launchers with no implicit root: each cell stands alone unless you drag two together to dock them into a *ring*.  Single-click pops up the cell's tool menu; double-click opens the full editor on the cell's catalog.  Save layouts as `.scriptreering` files.  Useful when you want a one-off cell on the desktop without the workspace persistence. |
 | **`run_scriptree.bat`** | The classic **V1 editor**: tool runner, configurations, parser, save/load.  Identical behaviour to v0.1.x.  All three shells (forest / ring / cell) shell out to this whenever you click a tool — V1 stays the editor; the shells are just launchers. |
-| **`run_screenshooter.bat`** | The **headless screenshot tool**.  No arguments → opens the screenshooter's GUI form via the V1 editor (labeled fields, dropdowns, file picker — pick what to render and click Run).  With arguments → CLI passthrough to `screenshooter.py` for batch / scripted use.  Captures cells, parameter forms, popup trees, the full editor MainWindow (tree + form + output + cmd-line), the tabbed StandaloneWindow view, the forest hub + cell composite, and the forest hub + merged menu composite — every view ScripTree ships, rendered as PNG without ever flashing a window onto the user's desktop.  Used to generate the per-demo previews on [`scriptree-demos`](https://github.com/KenM76/scriptree-demos) and the documentation screenshots in `help/`. |
+| **`run_screenshooter.bat`** | The **headless screenshot tool**.  No arguments → opens the screenshooter's GUI form via the V1 editor (labeled fields, dropdowns, file picker — pick what to render and click Run).  With arguments → CLI passthrough to `screenshooter.py` for batch / scripted use.  Captures cells, parameter forms, popup trees, the full editor MainWindow (tree + form + output + cmd-line), the tabbed StandaloneWindow view, the forest hub + cell composite, and the forest hub + merged menu composite — every view ScripTree ships, rendered as PNG without ever flashing a window onto the user's desktop.  Used to generate the per-demo previews on [`scriptree-demos`](https://github.com/KenM76/scriptree-demos) and the documentation screenshots in `docs/`. |
 
 ## Installing the portable zip
 
@@ -71,7 +71,7 @@ Or on Windows, double-click **`run_scriptreeforest.bat`** to launch the forest w
 - **Standalone mode** — strip the IDE down to just the form for end users
 - **Tree launchers** — group tools into `.scriptreetree` files with tabbed standalone view
 - **Custom menus** — add menu bars to tools and trees
-- **AI-compatible** — point any LLM at `help/LLM/` to generate tool files
+- **AI-compatible** — point any LLM at `docs/LLM/` to generate tool files
 - **No shell execution** — `shell=False` everywhere, input sanitization on every run
 - **File-based permissions** — 22 capability files, secure defaults, NTFS ACL compatible
 - **Fully portable** — INI settings, zero registry, copy and run
@@ -105,7 +105,7 @@ ScripTree/
 │   ├── ui/                  ← V1 editor + standalone window
 │   └── plugins/             ← capability plugins
 ├── tests/                   ← test suite (1800+ tests)
-├── help/                    ← documentation + LLM authoring docs
+├── docs/                    ← documentation + LLM authoring docs
 ├── pyproject.toml
 └── ScripTreeApps/           ← user tools and trees
 ```
@@ -144,7 +144,7 @@ python lib/update_lib.py --apps-only         # just the tools
 python ScripTreeApps/audit_vendored.py       # writes VENDORED_DEPS.md audit
 ```
 
-The `ScripTreeApps/ScripTreeManagement/ScripTreeManagement.scriptreetree` wraps all four management scripts (`update_lib.py`, `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`) as clickable GUI tools inside ScripTree itself. See [`help/vendored_dependencies.md`](help/vendored_dependencies.md) for the full explanation.
+The `ScripTreeApps/ScripTreeManagement/ScripTreeManagement.scriptreetree` wraps all four management scripts (`update_lib.py`, `audit_vendored.py`, `make_portable.py`, `make_shortcut.py`) as clickable GUI tools inside ScripTree itself. See [`docs/vendored_dependencies.md`](docs/vendored_dependencies.md) for the full explanation.
 
 ## Building a portable distribution
 
@@ -160,10 +160,10 @@ python make_shortcut.py
 
 ## Documentation
 
-- **[Quickstart](help/quickstart.md)** — get running in 60 seconds
-- **[Features](help/features.md)** — top 10 and top 20 feature lists
-- **[Security Guide](help/security.md)** — permissions, sanitization, deployment
-- **[Full Help Index](help/README.md)** — all documentation
+- **[Quickstart](docs/quickstart.md)** — get running in 60 seconds
+- **[Features](docs/features.md)** — top 10 and top 20 feature lists
+- **[Security Guide](docs/security.md)** — permissions, sanitization, deployment
+- **[Full Help Index](docs/README.md)** — all documentation
 
 ## For IT Administrators
 
@@ -174,7 +174,7 @@ ScripTree is designed for corporate deployment:
 3. Grant write on specific files per AD group
 4. Set `.scriptree` files read-only — users can run but not edit
 
-No per-user config, no registry, no cloud, no agents. See the [Security Guide](help/security.md).
+No per-user config, no registry, no cloud, no agents. See the [Security Guide](docs/security.md).
 
 ## Contributors
 

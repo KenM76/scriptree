@@ -64,19 +64,32 @@ from PySide6.QtWidgets import (
 def help_root() -> Path:
     """Return the directory containing the help markdown files.
 
-    Resolution order:
+    Resolution order (v0.8.0a20+):
 
-    1. ``<package parent>/help`` — the standard source-checkout layout.
-    2. ``<cwd>/help`` — a fallback for unusual install layouts.
+    1. ``<package parent>/docs`` — the standard source-checkout layout.
+       (Was ``help/`` prior to v0.8.0a20; renamed to match the
+       universal open-source ``docs/`` convention.)
+    2. ``<cwd>/docs`` — a fallback for unusual install layouts.
+    3. ``<package parent>/help`` — legacy fallback so end-user
+       installs that haven't been refreshed since the rename still
+       find their docs.
+    4. ``<cwd>/help`` — legacy CWD fallback for the same reason.
 
     The function does not validate that the directory exists; callers
     that care should check :meth:`Path.is_dir`.
     """
     pkg_parent = Path(__file__).resolve().parent.parent.parent
-    candidate = pkg_parent / "help"
-    if candidate.is_dir():
-        return candidate
-    return Path.cwd() / "help"
+    for candidate in (
+        pkg_parent / "docs",
+        Path.cwd() / "docs",
+        pkg_parent / "help",
+        Path.cwd() / "help",
+    ):
+        if candidate.is_dir():
+            return candidate
+    # Nothing exists -- return the *preferred* path so error messages
+    # point at the right modern location.
+    return pkg_parent / "docs"
 
 
 # --- tree structure ----------------------------------------------------

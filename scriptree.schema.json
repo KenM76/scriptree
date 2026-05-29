@@ -140,7 +140,7 @@
         },
         "visible_when": {
           "type": "string",
-          "description": "Conditional visibility expression. Tiny grammar: <ident> == 'value', <ident> in ('a', 'b'), AND/OR/NOT, parens. Empty = always visible. See help/LLM/scriptree_format.md."
+          "description": "Conditional visibility expression. Tiny grammar: <ident> == 'value', <ident> in ('a', 'b'), AND/OR/NOT, parens. Empty = always visible. See docs/LLM/scriptree_format.md."
         },
         "required_when": {
           "type": "string",
@@ -148,7 +148,7 @@
         },
         "choices_provider": {
           "type": "object",
-          "description": "v0.6.0 — dynamic provider. Run an external command at form-open/refresh time to populate this param's choices (enum/multiselect/checkbox_list) or scalar value (text/path/number/…). Mutually exclusive with a non-empty static `choices`. See help/LLM/dynamic_providers.md.",
+          "description": "v0.6.0 — dynamic provider. Run an external command at form-open/refresh time to populate this param's choices (enum/multiselect/checkbox_list) or scalar value (text/path/number/…). Mutually exclusive with a non-empty static `choices`. See docs/LLM/dynamic_providers.md.",
           "required": ["command"],
           "properties": {
             "command": {

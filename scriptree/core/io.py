@@ -805,5 +805,5 @@ def _check_schema(data: dict[str, Any]) -> None:
             f"version {SCHEMA_VERSION}.\n"
             f"Run `scriptree migrate <path>` (or "
             f"`scriptree migrate <dir>` for a whole tree) to upgrade.\n"
-            f"See help/LLM/scriptree_format.md for the rename map."
+            f"See docs/LLM/scriptree_format.md for the rename map."
         )

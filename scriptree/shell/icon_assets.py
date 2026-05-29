@@ -2,7 +2,7 @@
 
 The repo/deploy ships a curated, trademark-safe monochrome line-icon
 set at ``<project root>/icons/icon-<name>.svg`` (see
-``help/host-software-icon-style.md``).  This module locates that
+``docs/host-software-icon-style.md``).  This module locates that
 directory and hands back an icon's bytes / base64 so the shell can
 give a bare ring/forest hub a real glyph instead of derived letters.
 
@@ -49,7 +49,7 @@ def icons_dir() -> Path | None:
 # embedded-SVG icon resolved blank on the R: drive.  PNG decoding
 # is built into QtGui core (no plugin), so it works in every
 # deploy.  The .svg files remain the design source-of-truth
-# (spec-compliant per help/host-software-icon-style.md); the .png
+# (spec-compliant per docs/host-software-icon-style.md); the .png
 # is the rasterised runtime artifact embedded into catalogs / hubs.
 BUNDLED_FORMAT = "png"
 
