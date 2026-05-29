@@ -331,9 +331,9 @@ class TestAttachToCell:
         ctl = TreeController(tree_path)
         cell = _FakeCell()
 
-        # Suppress the auto-fired refresh so we can assert the
-        # attachment cleanly.
-        ctl.attach_to_cell(cell, fire_first_load_chooser=False)
+        # Suppress all post-attach deferred work so the test
+        # never spins the event loop into a modal dialog.
+        ctl.attach_to_cell(cell, fire_post_attach_work=False)
 
         assert getattr(cell, "_tree_controller", None) is ctl
         # Bound-method comparison: two `getattr` calls on the same
@@ -357,7 +357,7 @@ class TestAttachToCell:
         cell = _FakeCell()
 
         with patch.object(ctl, "_show_first_load_chooser") as chooser:
-            ctl.attach_to_cell(cell)  # fire_first_load_chooser defaults True
+            ctl.attach_to_cell(cell)  # fire_post_attach_work defaults True
             # Chooser is scheduled but not yet called.
             assert chooser.call_count == 0
             _app.processEvents()
@@ -384,6 +384,161 @@ class TestAttachToCell:
 # ============================================================================
 # Menu builder
 # ============================================================================
+
+
+@pytest.fixture
+def _no_deferred_dialogs():
+    """Suppress every ``QTimer.singleShot`` scheduled by
+    ``TreeController.attach_to_cell`` for the duration of a test.
+
+    Without this, the helper schedules either
+    ``_show_first_load_chooser`` (for legacy trees) or
+    ``refresh_from_sources`` (for configured trees) on the next
+    event tick.  pytest's event-loop pumping then fires the
+    callback inside the test thread; the callback opens a
+    *modal* ``exec()`` dialog and the test hangs forever.
+
+    The fixture patches the singleShot call inside the
+    ``tree_controller`` module so the deferred dialog never
+    runs.  Tests can still verify that the helper attached
+    correctly (controller + menu hook) without triggering UI.
+    """
+    with patch("scriptree.shell.tree_controller.QTimer.singleShot"):
+        yield
+
+
+class TestCatalogRebind:
+    """v0.8.0a21+: the cell's
+    ``_attach_tree_controller_if_applicable`` helper must handle
+    three transitions cleanly: attach (no controller, catalog
+    is a tree), rebind (controller exists but pointing at a
+    different tree file), and detach (controller exists but
+    catalog is now None or a non-tree).
+
+    Constructs a minimal stand-in for the cell rather than a
+    full ``CellWindow`` to keep tests fast and focused on the
+    transition logic.  The same helper is wired into the real
+    cell's catalog-mutation sites (Load ScripTree…, Clear
+    catalog, drag-drop, Save as…).
+    """
+
+    def _make_stand_in_cell(self, tmp_path: Path) -> Any:
+        """Build a minimal object that mimics the cell-side
+        contract: has ``_catalog_path`` and the two attribute
+        holders the helper touches."""
+        cell = QWidget()
+        cell._catalog_path = None  # type: ignore[attr-defined]
+        cell._tree_controller = None  # type: ignore[attr-defined]
+        cell._tree_menu_extension = None  # type: ignore[attr-defined]
+        # Bind the helper method (the real one defined on
+        # CellWindow) to this stand-in by lifting the function
+        # off the class.  Keeps test independent of the rest of
+        # CellWindow's heavy ``__init__``.
+        from scriptree.shell.cell_window import CellWindow
+        import types
+        cell._attach_tree_controller_if_applicable = types.MethodType(  # type: ignore[attr-defined]
+            CellWindow._attach_tree_controller_if_applicable, cell,
+        )
+        return cell
+
+    def test_attach_when_catalog_is_a_tree(
+        self, tmp_path: Path, _no_deferred_dialogs,
+    ) -> None:
+        tree_path = _seed_tree(tmp_path)
+        cell = self._make_stand_in_cell(tmp_path)
+        cell._catalog_path = str(tree_path)
+
+        cell._attach_tree_controller_if_applicable()
+
+        assert cell._tree_controller is not None
+        assert isinstance(cell._tree_menu_extension, type(lambda: None).__class__) or callable(
+            cell._tree_menu_extension
+        )
+
+    def test_detach_when_catalog_cleared(
+        self, tmp_path: Path, _no_deferred_dialogs,
+    ) -> None:
+        """User does Clear catalog -> ``_catalog_path = None``
+        -> helper detaches the existing controller."""
+        tree_path = _seed_tree(tmp_path)
+        cell = self._make_stand_in_cell(tmp_path)
+        cell._catalog_path = str(tree_path)
+        cell._attach_tree_controller_if_applicable()
+        assert cell._tree_controller is not None
+
+        # Now simulate Clear catalog.
+        cell._catalog_path = None
+        cell._attach_tree_controller_if_applicable()
+
+        assert cell._tree_controller is None
+        assert cell._tree_menu_extension is None
+
+    def test_detach_when_catalog_becomes_non_tree(
+        self, tmp_path: Path, _no_deferred_dialogs,
+    ) -> None:
+        """User loads a ``.scriptree`` instead -> helper detaches
+        because the new catalog isn't a tree."""
+        tree_path = _seed_tree(tmp_path)
+        cell = self._make_stand_in_cell(tmp_path)
+        cell._catalog_path = str(tree_path)
+        cell._attach_tree_controller_if_applicable()
+        assert cell._tree_controller is not None
+
+        # Switch to a .scriptree (just any path with that suffix
+        # is enough -- the helper only looks at the extension).
+        cell._catalog_path = str(tmp_path / "some_tool.scriptree")
+        cell._attach_tree_controller_if_applicable()
+
+        assert cell._tree_controller is None
+        assert cell._tree_menu_extension is None
+
+    def test_rebind_to_different_tree_file(
+        self, tmp_path: Path, _no_deferred_dialogs,
+    ) -> None:
+        """User loads a DIFFERENT .scriptreetree -> the existing
+        controller's ``tree_file`` is stale; helper drops it and
+        attaches a fresh one bound to the new file."""
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        tree_a = _seed_tree(tmp_path / "a")
+        tree_b = _seed_tree(tmp_path / "b")
+        cell = self._make_stand_in_cell(tmp_path)
+        cell._catalog_path = str(tree_a)
+        cell._attach_tree_controller_if_applicable()
+        old_ctl = cell._tree_controller
+        assert old_ctl is not None
+        assert str(tree_a.resolve()).lower() in old_ctl.tree_file.lower()
+
+        cell._catalog_path = str(tree_b)
+        cell._attach_tree_controller_if_applicable()
+
+        new_ctl = cell._tree_controller
+        assert new_ctl is not None
+        assert new_ctl is not old_ctl, (
+            "Rebind must create a fresh controller -- the old "
+            "controller's tree_file is stale and any operations "
+            "would write back to the wrong file."
+        )
+        assert str(tree_b.resolve()).lower() in new_ctl.tree_file.lower()
+
+    def test_rebind_is_no_op_when_same_file(
+        self, tmp_path: Path, _no_deferred_dialogs,
+    ) -> None:
+        """A spurious re-attach call (same catalog as before)
+        must not destroy + recreate the controller -- that would
+        re-fire the first-load chooser or otherwise reset state."""
+        tree_path = _seed_tree(tmp_path)
+        cell = self._make_stand_in_cell(tmp_path)
+        cell._catalog_path = str(tree_path)
+        cell._attach_tree_controller_if_applicable()
+        first = cell._tree_controller
+
+        cell._attach_tree_controller_if_applicable()
+        assert cell._tree_controller is first, (
+            "Re-attaching with the same catalog must be a no-op; "
+            "regenerating the controller every time would re-fire "
+            "the first-load chooser."
+        )
 
 
 class TestMenuBuilder:

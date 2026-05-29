@@ -352,7 +352,7 @@ class TreeController:
         self,
         cell: Any,
         *,
-        fire_first_load_chooser: bool = True,
+        fire_post_attach_work: bool = True,
     ) -> None:
         """Wire the controller into a ``CellWindow``.
 
@@ -363,11 +363,22 @@ class TreeController:
         items).  Sets ``self.parent_widget = cell`` so dialogs
         the controller opens parent themselves correctly.
 
-        When ``fire_first_load_chooser`` is true (default) and
-        the tree has no ``auto_discover`` block, schedules the
-        ``ChooseUpdateModeDialog`` on the next event tick so it
-        parents to the cell rather than to a half-constructed
-        window.
+        When ``fire_post_attach_work`` is true (default), schedules
+        one of two callbacks on the next event tick so it parents
+        to the fully-constructed cell rather than a window that's
+        still mid-spawn:
+
+        * If ``tree.auto_discover is None`` (legacy / fresh tree),
+          fires ``ChooseUpdateModeDialog`` — the one-shot
+          first-load chooser.
+        * Otherwise, fires ``refresh_from_sources`` — the regular
+          on-load discovery pass per the persisted mode.
+
+        Tests that don't want either deferred dialog firing should
+        pass ``fire_post_attach_work=False``.  The cell still gets
+        its menu hook installed, but no further work is scheduled
+        until something else (a right-click, a manual refresh)
+        triggers it.
 
         Idempotent: calling twice on the same cell replaces the
         previous controller's menu hook with this one.
@@ -377,7 +388,10 @@ class TreeController:
         cell._tree_controller = self
         cell._tree_menu_extension = self._populate_tree_menu
 
-        if fire_first_load_chooser and self.tree.auto_discover is None:
+        if not fire_post_attach_work:
+            return
+
+        if self.tree.auto_discover is None:
             QTimer.singleShot(0, self._show_first_load_chooser)
         else:
             # Tree already has a configured mode -- fire the

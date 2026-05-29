@@ -277,119 +277,18 @@ def _build_discovery_tree(
 # Helper widgets
 # ---------------------------------------------------------------------------
 
-class _RootsEditor(QWidget):
-    """Add / Remove / Browse list of root folders to scan."""
-
-    def __init__(self, roots: list[str]) -> None:
-        super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._list = QListWidget()
-        for r in roots:
-            self._list.addItem(QListWidgetItem(r))
-        layout.addWidget(self._list)
-
-        row = QHBoxLayout()
-        self._btn_add = QPushButton("Add folder…")
-        self._btn_browse = QPushButton("Browse current…")
-        self._btn_remove = QPushButton("Remove")
-        row.addWidget(self._btn_add)
-        row.addWidget(self._btn_browse)
-        row.addWidget(self._btn_remove)
-        row.addStretch(1)
-        layout.addLayout(row)
-
-        self._btn_add.clicked.connect(self._add_path)
-        self._btn_browse.clicked.connect(self._browse_path)
-        self._btn_remove.clicked.connect(self._remove_selected)
-
-    def _add_path(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Add scan root")
-        if path:
-            self._list.addItem(QListWidgetItem(path))
-
-    def _browse_path(self) -> None:
-        # If the user has a row selected, open browse seeded with
-        # that path; otherwise just open at cwd.
-        seed = ""
-        if self._list.currentItem() is not None:
-            seed = self._list.currentItem().text()
-        path = QFileDialog.getExistingDirectory(self, "Pick scan root", seed)
-        if path:
-            if self._list.currentItem() is not None:
-                self._list.currentItem().setText(path)
-            else:
-                self._list.addItem(QListWidgetItem(path))
-
-    def _remove_selected(self) -> None:
-        for item in list(self._list.selectedItems()):
-            self._list.takeItem(self._list.row(item))
-
-    def values(self) -> list[str]:
-        return [self._list.item(i).text() for i in range(self._list.count())]
-
-
-class _IncludeChecklist(QWidget):
-    """Three checkboxes for ring / tree / tool inclusion."""
-
-    def __init__(self, include: list[ItemKind]) -> None:
-        super().__init__()
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._cb_ring = QCheckBox(".scriptreering (rings)")
-        self._cb_tree = QCheckBox(".scriptreetree (trees)")
-        self._cb_tool = QCheckBox(".scriptree (single tools)")
-        self._cb_ring.setChecked("ring" in include)
-        self._cb_tree.setChecked("tree" in include)
-        self._cb_tool.setChecked("tool" in include)
-        layout.addWidget(self._cb_ring)
-        layout.addWidget(self._cb_tree)
-        layout.addWidget(self._cb_tool)
-        layout.addStretch(1)
-
-    def values(self) -> list[ItemKind]:
-        out: list[ItemKind] = []
-        if self._cb_ring.isChecked():
-            out.append("ring")
-        if self._cb_tree.isChecked():
-            out.append("tree")
-        if self._cb_tool.isChecked():
-            out.append("tool")
-        return out
-
-
-class _UpdateModeChoice(QWidget):
-    """Three radio buttons for off / prompt / auto."""
-
-    def __init__(self, mode: str) -> None:
-        super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._rb_off = QRadioButton(
-            "Off — never auto-update; only manual Add"
-        )
-        self._rb_prompt = QRadioButton(
-            "Prompt — show me changes and let me confirm (recommended)"
-        )
-        self._rb_auto = QRadioButton(
-            "Auto — apply changes silently"
-        )
-        if mode == "off":
-            self._rb_off.setChecked(True)
-        elif mode == "auto":
-            self._rb_auto.setChecked(True)
-        else:
-            self._rb_prompt.setChecked(True)
-        layout.addWidget(self._rb_off)
-        layout.addWidget(self._rb_prompt)
-        layout.addWidget(self._rb_auto)
-
-    def value(self) -> str:
-        if self._rb_off.isChecked():
-            return "off"
-        if self._rb_auto.isChecked():
-            return "auto"
-        return "prompt"
+# v0.8.0a21+ — these three widget classes were promoted to
+# ``scriptree.ui.discovery_widgets`` so the tree settings dialog
+# could import them from a shared canonical home rather than
+# reach into shell.  Re-exported here under the original
+# underscore-prefixed names so any external code importing
+# ``from scriptree.shell.forest_dialogs import _RootsEditor`` (or
+# the other two) keeps working byte-identically.
+from scriptree.ui.discovery_widgets import (
+    IncludeKindsChecklist as _IncludeChecklist,
+    RootsEditor as _RootsEditor,
+    UpdateModeChoice as _UpdateModeChoice,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -105,6 +105,7 @@ from PySide6.QtWidgets import (
 from ..core.discovery import TreeAutoDiscoverConfig
 from ..core.tree_diff import TreeDiscoveryDiff
 from ..core.tree_discover import DiscoveredTreeItem
+from .discovery_widgets import RootsEditor, UpdateModeChoice
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +425,11 @@ class TreeSettingsDialog(QDialog):
         # --- scan folders --------------------------------------------
         roots_box = QGroupBox("Scan folders")
         rl = QVBoxLayout(roots_box)
-        # Import here to avoid pulling forest_dialogs at module
-        # import time (it would chain in the rest of the cell shell).
-        from ..shell.forest_dialogs import _RootsEditor
-        self._roots = _RootsEditor(list(ad.roots))
+        # v0.8.0a21 -- shared widget from ``ui.discovery_widgets``.
+        # Used to import ``_RootsEditor`` from ``shell.forest_dialogs``;
+        # promoted to the shared module so both forest and tree dialogs
+        # import from the same canonical place.
+        self._roots = RootsEditor(list(ad.roots))
         rl.addWidget(self._roots)
         rl.addWidget(QLabel(
             "<i>Folders to scan, relative to this tree's directory "
@@ -446,8 +448,8 @@ class TreeSettingsDialog(QDialog):
         # --- update mode ---------------------------------------------
         mode_box = QGroupBox("Update mode")
         ml = QVBoxLayout(mode_box)
-        from ..shell.forest_dialogs import _UpdateModeChoice
-        self._mode = _UpdateModeChoice(ad.update_mode)
+        # Shared widget; see RootsEditor comment above.
+        self._mode = UpdateModeChoice(ad.update_mode)
         ml.addWidget(self._mode)
         layout.addWidget(mode_box)
 

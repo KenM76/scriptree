@@ -361,6 +361,29 @@ class MainWindow(QMainWindow):
         self._act_save_tree_as.setEnabled(False)
         m_file.addAction(self._act_save_tree_as)
 
+        # ── Scan tree for new tools (v0.8.0a21+) ─────────────────────
+        # Editor-side equivalent of the cell shell's right-click
+        # "Tree → Refresh from sources" entry.  Walks the loaded
+        # tree's discovery roots, diffs against the in-memory
+        # ``TreeDef``, and routes to the diff dialog (prompt mode),
+        # auto-applies (auto mode), or no-ops (off mode).  Enabled
+        # only when a tree is loaded with a backing file (a
+        # never-saved fresh tree has nowhere to scan from).
+        self._act_scan_tree = QAction(
+            "Scan tree for &new tools...", self,
+        )
+        self._act_scan_tree.setToolTip(
+            "Run the auto-discover scan against the loaded tree's "
+            "configured roots.  Same feature as the cell shell's "
+            "right-click Tree → Refresh from sources, surfaced here "
+            "for users in the editor.  Opens the diff dialog when "
+            "the tree's update_mode is 'prompt'; silently applies "
+            "for 'auto'; does nothing for 'off'."
+        )
+        self._act_scan_tree.triggered.connect(self._scan_tree_for_new_tools)
+        self._act_scan_tree.setEnabled(False)
+        m_file.addAction(self._act_scan_tree)
+
         # ── Open in ScripTreeRing ─────────────────────────────────────
         # Hand the currently-loaded file off to the cell shell:
         #   Open in cell shell  →  one cell bound to the file (works
@@ -929,6 +952,62 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Tree saved to {path.name}")
                 self._add_recent_file(str(path))
 
+    def _scan_tree_for_new_tools(self) -> None:
+        """Editor-side equivalent of the cell shell's right-click
+        Tree → Refresh from sources entry.
+
+        v0.8.0a21+.  Builds a transient ``TreeController`` bound
+        to the currently-loaded tree (in-memory state from the
+        launcher, file path from ``tree_file()``), then calls
+        ``run_one_shot_prompt()`` so the user always sees the
+        diff dialog regardless of the tree's persisted mode.
+
+        Why ``run_one_shot_prompt`` and not ``refresh_from_sources``:
+        the user explicitly clicked a menu item asking to scan,
+        which is a definitive opt-in.  Honouring an ``"off"``
+        mode here would be confusing UX ("I clicked the button
+        and nothing happened").  The persisted mode still
+        governs the *automatic* behaviour the next time the
+        tree opens — only this manual entry forces a prompt.
+
+        After the dialog applies, re-loads the tree from disk so
+        the editor's view reflects the new state.  An alternative
+        (mutating the in-memory tree and prodding the launcher
+        to re-render) would skip the disk round-trip but adds
+        coupling between the controller and the launcher's
+        rendering internals; the re-load is simpler and never
+        wrong.
+
+        Does nothing (silently) when no tree is loaded — the
+        menu item is also greyed out in that state, but the
+        defensive check guards against a stray keyboard
+        shortcut.
+        """
+        tree_path = self._launcher.tree_file()
+        if tree_path is None:
+            self.statusBar().showMessage(
+                "Load a tree first; there's nothing to scan.", 4000,
+            )
+            return
+        loaded_tree = getattr(self._launcher, "_tree", None)
+        if loaded_tree is None:
+            self.statusBar().showMessage(
+                "Tree state is empty; nothing to scan against.", 4000,
+            )
+            return
+        # Lazy import: tree_controller pulls Qt-dialog code which
+        # we don't want on the import path of the editor module.
+        from ..shell.tree_controller import TreeController
+        ctl = TreeController(str(tree_path), tree=loaded_tree)
+        ctl.parent_widget = self
+        ctl.run_one_shot_prompt()
+        # Re-load so the editor's view reflects what got applied.
+        # ``run_one_shot_prompt`` only saves when the user
+        # actually clicked Apply on the diff dialog, so a Cancel
+        # leaves the file untouched and the re-load is a no-op.
+        self._launcher.load(str(tree_path))
+        self.statusBar().showMessage("Tree scan complete.", 4000)
+
     def _save_active(self) -> None:
         """Ctrl+S dispatcher — save whatever the user is actually
         looking at.
@@ -1268,6 +1347,13 @@ class MainWindow(QMainWindow):
         self._act_open_in_ring.setEnabled(
             self._launcher.tree_file() is not None
         )
+        # Scan tree for new tools (v0.8.0a21+).  Same gate as Open
+        # in ring -- requires a tree that's backed by an on-disk
+        # file (a never-saved fresh tree has no folder to walk).
+        if hasattr(self, "_act_scan_tree"):
+            self._act_scan_tree.setEnabled(
+                self._launcher.tree_file() is not None
+            )
 
     def _refresh_tool_save_actions(self) -> None:
         """Sync Save tool / Save tool As enabled state to the editor.

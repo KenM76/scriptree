@@ -4659,42 +4659,90 @@ class CellWindow(QMainWindow):
         )
 
     def _attach_tree_controller_if_applicable(self) -> None:
-        """Attach a ``TreeController`` to this cell when (and only
-        when) its bound catalog is a ``.scriptreetree``.
+        """Synchronise the cell's ``TreeController`` attachment
+        with the currently-bound catalog.  Three transitions:
 
-        Called from ``__init__`` after the initial catalog binding
-        settles.  Idempotent at the call-site sense: a cell that
-        already has ``self._tree_controller`` set returns
-        immediately.
+        * **Attach**: no controller, catalog is a ``.scriptreetree``
+          → instantiate ``TreeController(catalog)``, call
+          ``attach_to_cell(self)``.  The first-load chooser may
+          fire on the next event tick if the tree has no
+          ``auto_discover`` block.
+        * **Rebind**: controller exists but ``controller.tree_file``
+          doesn't match the current catalog (user did "Load
+          ScripTree…" → different ``.scriptreetree``, or "Save
+          as…" → renamed the catalog on disk).  Drop the existing
+          controller and re-attach with the new file.
+        * **Detach**: controller exists but the catalog is now
+          ``None`` or a non-tree file (user did "Clear catalog"
+          or loaded a ``.scriptree``).  Clear the menu hook + the
+          back-reference so the right-click menu drops the
+          stale Tree submenu.
 
         Failure modes are swallowed (logged, not raised):
 
-        * Catalog path is set but the file doesn't exist or
-          fails to parse → log and skip; the right-click menu
-          simply won't have the Tree submenu.
-        * ``TreeController`` import fails (Qt unavailable in
-          some headless test paths) → log and skip.
+        * Catalog file vanished between bind and attach → log and
+          skip; the right-click menu won't have the Tree submenu.
+        * ``TreeController`` import fails (Qt unavailable in some
+          headless test paths) → log and skip.
 
         The cell remains fully functional in all failure cases;
         only the discovery feature is unavailable.
+
+        Called from ``__init__`` for the constructor binding AND
+        from every runtime ``_catalog_path`` mutation site:
+
+        * Context-menu "Clear catalog"   (catalog → None)
+        * Context-menu "Load ScripTree…" / drag-drop / recent
+          (catalog → new path)  -- via ``_bind_catalog_to_self``
+        * Context-menu "Save as…"        (catalog → new path)
+
+        Always call AFTER the assignment to ``_catalog_path`` and
+        the matching ``_save_settings`` so the new state is fully
+        persisted before any first-load chooser fires.
         """
-        if getattr(self, "_tree_controller", None) is not None:
-            return
         cat = getattr(self, "_catalog_path", None)
-        if not cat or not cat.lower().endswith(".scriptreetree"):
-            return
-        try:
-            # Lazy import: tree_controller imports tree_dialogs which
-            # imports PySide6.  Importing here rather than at module
-            # load keeps the cost off cells that don't need it.
-            from .tree_controller import TreeController
-            ctl = TreeController(cat)
-            ctl.attach_to_cell(self)
-        except Exception as exc:  # noqa: BLE001
-            _log(
-                f"attach_tree_controller failed for {cat!r}: {exc!r}; "
-                f"cell will work but Tree submenu won't appear."
-            )
+        is_tree = bool(cat) and cat.lower().endswith(".scriptreetree")
+        current = getattr(self, "_tree_controller", None)
+
+        # --- DETACH or REBIND when the current controller no longer
+        # matches the current catalog.
+        if current is not None:
+            current_file = getattr(current, "tree_file", "")
+            try:
+                # Compare normalised absolute paths so case / slash
+                # variation doesn't trigger a needless rebind.
+                from pathlib import Path
+                same = bool(cat) and (
+                    Path(current_file).resolve()
+                    == Path(cat).resolve()
+                )
+            except (OSError, ValueError):
+                same = (cat or "").lower() == (current_file or "").lower()
+            if not is_tree or not same:
+                # Detach: drop the menu hook + back-reference.  The
+                # controller object itself is garbage-collected once
+                # there are no more references; we don't need to
+                # call any explicit ``.close()`` on it.
+                self._tree_menu_extension = None  # type: ignore[assignment]
+                self._tree_controller = None  # type: ignore[assignment]
+                current = None  # fall through to attach if is_tree
+
+        # --- ATTACH when the current catalog is a tree and we have
+        # no controller.
+        if is_tree and current is None:
+            try:
+                # Lazy import: tree_controller imports tree_dialogs
+                # which imports PySide6.  Importing here keeps the
+                # cost off cells that don't need it.
+                from .tree_controller import TreeController
+                ctl = TreeController(cat)
+                ctl.attach_to_cell(self)
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"attach_tree_controller failed for {cat!r}: "
+                    f"{exc!r}; cell will work but Tree submenu "
+                    f"won't appear."
+                )
 
     def _refresh_label_from_catalog(self) -> None:
         """Pull cell label state from the currently-bound catalog file
@@ -6811,6 +6859,9 @@ class CellWindow(QMainWindow):
             self._catalog_path = None
             self._save_settings()
             self._update_hover_tooltip()
+            # v0.8.0a21+ -- detach any tree controller since the
+            # catalog is now empty.  See the method docstring.
+            self._attach_tree_controller_if_applicable()
             _log(f"Catalog cleared for id={self._id[:8]}")
         elif chosen == save_as_action:
             self._save_catalog_as_dialog()
@@ -7212,6 +7263,11 @@ class CellWindow(QMainWindow):
             self._save_settings()
         except Exception as exc:  # noqa: BLE001
             _log(f"_bind_catalog_to_self: _save_settings raised {exc!r}")
+        # v0.8.0a21+ -- catalog binding changed via Load ScripTree…,
+        # drag-drop, or "Open recent…".  Re-sync the tree controller.
+        # The helper handles attach (new tree), rebind (different
+        # tree), and detach (non-tree catalog) in one call.
+        self._attach_tree_controller_if_applicable()
         try:
             _rf.add(resolved)
         except Exception as exc:  # noqa: BLE001
@@ -7379,6 +7435,11 @@ class CellWindow(QMainWindow):
         self._save_settings()
         _rf.add(str(dest))
         self._update_hover_tooltip()
+        # v0.8.0a21+ -- Save-as redirects the cell to a new path on
+        # disk; the existing tree controller's ``tree_file`` is now
+        # stale.  Re-sync so the new path is what the right-click
+        # menu's Tree actions operate on.
+        self._attach_tree_controller_if_applicable()
         _log(f"Catalog saved-as {dest!r} for id={self._id[:8]}")
 
     def _explicit_leave_group(self) -> None:
