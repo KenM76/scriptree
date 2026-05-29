@@ -1,14 +1,14 @@
 """Doc-example regression guard.
 
 Premise (a real bug we shipped): an LLM session followed a stale
-``schema_version: 2`` example in ``help/LLM/scriptreetree_format.md``
+``schema_version: 2`` example in ``docs/LLM/scriptreetree_format.md``
 after the loader had rolled to v3.  The runtime hard-rejected the
 file because the doc number was below the build's
 ``SCHEMA_VERSION``.  Worse, a *higher* number would also break
 because ``core/io.py`` is a forward-compat tripwire.
 
 This test enumerates every fenced ``json`` block in the LLM
-help directory and:
+docs directory and:
 
   * JSON-parses it; if the block is a *shape sketch* (placeholder
     string values like ``"string, required"`` or a non-int
