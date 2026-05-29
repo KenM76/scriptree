@@ -47,6 +47,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .discovery import TreeAutoDiscoverConfig
 from .model import (
     SCHEMA_VERSION,
     ActionDef,
@@ -619,6 +620,57 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
         cell_d["text_color"] = str(tree.cell_text_color)
     if cell_d:
         d["cell"] = cell_d
+    # --- v0.8.0a21+ auto-discover serialisation ----------------------
+    #
+    # The ``auto_discover`` block and the ``excluded`` list are both
+    # emitted only when they carry user-meaningful content, so legacy
+    # ``.scriptreetree`` files round-trip byte-identical when loaded
+    # and re-saved without ever touching the discovery feature.
+    #
+    # ``auto_discover`` rules:
+    #   * ``None``                       — omit entirely.  Means "the
+    #                                      user has never been asked
+    #                                      what mode they want"; the
+    #                                      MainWindow loader uses
+    #                                      this to fire the
+    #                                      ``ChooseUpdateModeDialog``
+    #                                      on first open.
+    #   * default-valued instance         — omit entirely.  Pre-feature
+    #                                      semantics: a clean
+    #                                      round-trip preserves the
+    #                                      original file's byte
+    #                                      content even after the
+    #                                      author has invoked the
+    #                                      feature once and accepted
+    #                                      every default.  When the
+    #                                      MainWindow loader sees an
+    #                                      omitted block it tries the
+    #                                      first-open flow again; that
+    #                                      is a deliberate ergonomic
+    #                                      trade-off (the alternative
+    #                                      would be a forced dirty
+    #                                      diff on every save).
+    #   * non-default instance            — emit every non-default
+    #                                      field; omit defaults.
+    if tree.auto_discover is not None:
+        ad = tree.auto_discover
+        ad_default = TreeAutoDiscoverConfig()
+        ad_d: dict[str, Any] = {}
+        if ad.enabled != ad_default.enabled:
+            ad_d["enabled"] = bool(ad.enabled)
+        if list(ad.roots) != list(ad_default.roots):
+            ad_d["roots"] = list(ad.roots)
+        if ad.include_sibling_trees != ad_default.include_sibling_trees:
+            ad_d["include_sibling_trees"] = bool(ad.include_sibling_trees)
+        if ad.update_mode != ad_default.update_mode:
+            ad_d["update_mode"] = str(ad.update_mode)
+        # Only emit the block when at least one field differs from
+        # the default.  See the comment above re. byte-identical
+        # round-trip ergonomics.
+        if ad_d:
+            d["auto_discover"] = ad_d
+    if tree.excluded:
+        d["excluded"] = list(tree.excluded)
     return d
 
 
@@ -633,6 +685,49 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
             return float(cell_d.get(key, default))
         except (TypeError, ValueError):
             return default
+
+    # --- v0.8.0a21+ auto-discover deserialisation ------------------
+    #
+    # Two distinct "absent" cases drive the TreeDef state:
+    #
+    #   1. The ``auto_discover`` key is missing OR null.
+    #      → ``TreeDef.auto_discover = None``.
+    #      The runtime treats this as "user has never been asked
+    #      what mode they want"; the editor's first-open path will
+    #      fire ``ChooseUpdateModeDialog`` instead of the diff
+    #      dialog.  All legacy ``.scriptreetree`` files that
+    #      pre-date this feature land here, which is the intended
+    #      upgrade ergonomic.
+    #
+    #   2. The ``auto_discover`` key is present (even as ``{}``).
+    #      → ``TreeDef.auto_discover = TreeAutoDiscoverConfig(...)``
+    #      with each field falling back to its dataclass default
+    #      when the corresponding JSON key is absent.
+    #      The runtime treats this as "user has been asked, honour
+    #      the chosen mode" — no first-open prompt.
+    #
+    # Be deliberately liberal in what we accept: a malformed
+    # ``update_mode`` value (anything other than ``"off"``,
+    # ``"auto"``, ``"prompt"``) falls back to the safe ``"off"``
+    # rather than raising, so a hand-edited file that typos the
+    # value doesn't break tree loading.
+    ad_raw = data.get("auto_discover")
+    if ad_raw is None:
+        auto_discover: TreeAutoDiscoverConfig | None = None
+    else:
+        if not isinstance(ad_raw, dict):
+            ad_raw = {}
+        raw_mode = str(ad_raw.get("update_mode", "prompt"))
+        if raw_mode not in ("off", "auto", "prompt"):
+            raw_mode = "off"
+        auto_discover = TreeAutoDiscoverConfig(
+            enabled=bool(ad_raw.get("enabled", True)),
+            roots=[str(r) for r in ad_raw.get("roots", ["."])],
+            include_sibling_trees=bool(
+                ad_raw.get("include_sibling_trees", True),
+            ),
+            update_mode=raw_mode,  # type: ignore[arg-type]
+        )
 
     return TreeDef(
         name=data["name"],
@@ -651,6 +746,8 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         cell_click_run_mode=str(cell_d.get("click_run_mode", "sequential")),
         cell_fill_color=str(cell_d.get("fill_color", "")),
         cell_text_color=str(cell_d.get("text_color", "")),
+        auto_discover=auto_discover,
+        excluded=[str(p) for p in data.get("excluded", [])],
         schema_version=data.get("schema_version", SCHEMA_VERSION),
     )
 

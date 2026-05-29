@@ -46,6 +46,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+# Re-exported for callers that want the discovery dataclass via the
+# model module they already import.  Kept as a re-export rather than
+# a "from .discovery import *" so the explicit ``__all__`` of
+# ``core.discovery`` controls what leaks out.
+from .discovery import TreeAutoDiscoverConfig, UpdateMode  # noqa: F401
+
 
 SCHEMA_VERSION = 3
 """Bumped to 3 in May 2026 — JSON-Schema-aligned type names.
@@ -950,6 +956,44 @@ class TreeDef:
     cell_fill_color: str = ""
     # Cell text colour override (V3 v0.3.8+).  See ToolDef.
     cell_text_color: str = ""
+    # --- v0.8.0a21+ new-tool-found / auto-discovery feature -----------
+    #
+    # Optional ``TreeAutoDiscoverConfig`` (see
+    # ``scriptree.core.discovery`` for the dataclass shape and the
+    # full WHY).  ``None`` carries a meaningful runtime semantic
+    # distinct from a default-valued config: it means "this tree has
+    # never been configured for discovery" and triggers the one-shot
+    # ``ChooseUpdateModeDialog`` on first open, not the diff dialog.
+    # A non-``None`` value — even one constructed with all defaults —
+    # signals "the user has been asked; honour the chosen mode".
+    # This mirrors the forest's behaviour: see ``ForestDef``'s
+    # ``auto_discover`` field for the analogous (but mandatorily-
+    # present) parallel.
+    #
+    # Stored under the ``auto_discover`` key of the JSON.  Omitted
+    # entirely from the serialised dict when ``None`` so legacy
+    # ``.scriptreetree`` files that pre-date this feature stay
+    # byte-identical on round-trip.
+    auto_discover: TreeAutoDiscoverConfig | None = None
+    # Paths the user has explicitly removed from this tree via the
+    # discovery diff dialog.  Discovery still emits these as found
+    # (so the diff dialog can route them to the "previously
+    # excluded" section for potential re-inclusion), but they do
+    # NOT enter the "Added" bucket — the exclusion is the user's
+    # way of saying "stop re-suggesting this".
+    #
+    # Stored relative to the tree file's directory when possible,
+    # absolute otherwise; the resolution rules match ``TreeNode.path``.
+    # Empty by default; the JSON ``excluded`` key is omitted when
+    # this list is empty so legacy trees stay byte-identical.
+    #
+    # Kept on ``TreeDef`` rather than on the
+    # ``TreeAutoDiscoverConfig`` because exclusion is *state* the
+    # user has built up over time, while ``auto_discover`` is
+    # *settings*.  Keeping them separate makes "reset settings to
+    # default" a sensible operation that doesn't wipe accrued
+    # exclusions.
+    excluded: list[str] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
 
