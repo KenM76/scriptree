@@ -244,6 +244,227 @@ Master cells themselves have no persistent `catalog_path` — their
 tree would behave identically when bound to a cell, but the on-disk
 form is reserved for member catalogs.
 
+## Auto-discover: `auto_discover` and `excluded` (v0.8.0a21+)
+
+A `.scriptreetree` can ask ScripTree to keep itself in sync with a
+folder of `.scriptree` files on disk.  This is the **new-tool-found
+feature** — parallel to the forest's auto-discover, scoped to trees.
+
+Two new top-level fields participate:
+
+```json
+{
+  "auto_discover": {/* TreeAutoDiscoverConfig, optional */},
+  "excluded":      [/* list[string], optional */]
+}
+```
+
+### Why it exists
+
+Hand-curated trees age badly when the underlying tool folder grows.
+Authors add new `.scriptree` files but forget to mention them in the
+tree; users miss tools because the menu shows yesterday's snapshot.
+The auto-discover feature closes that gap: ScripTree walks the
+tree's containing folder, finds anything new, and offers to add it
+through a diff dialog.  The user picks what to accept; the
+`.scriptreetree` is rewritten to include the chosen leaves.
+
+### `auto_discover` field shape
+
+```json
+{
+  "auto_discover": {
+    "enabled":                "bool, default true — master kill switch",
+    "roots":                  ["./", "list of folders to scan, relative to the tree file's directory"],
+    "include_sibling_trees":  "bool, default true — surface sub-.scriptreetree files as candidate sub-tree leaves",
+    "update_mode":            "off | auto | prompt, default 'prompt'"
+  }
+}
+```
+
+**`enabled`** (bool, default `true`).  When `false`, the walker is
+never invoked: no auto-discovery on load, and the "Scan tree for
+new tools" menu entry is disabled (the tooltip explains why).
+Distinct in spirit from `update_mode: "off"` — `enabled=false` is
+the author's long-term "this tree is frozen" toggle; `update_mode`
+is the user's per-session "stop asking but keep the manual menu
+available" preference.
+
+**`roots`** (list of strings, default `["."]`).  Folders to scan,
+each resolved against the tree file's own directory at the moment
+discovery runs.  The default `["."]` means "this tree's folder and
+everything below it".  Use multiple roots for the rare case where
+one tree aggregates two parallel folders (e.g.
+`roots=["./shared", "../bespoke"]`).  Absolute paths are honoured
+but make the tree non-portable across machines.  Folders that
+don't exist are skipped silently.
+
+**`include_sibling_trees`** (bool, default `true`).  When the
+walker encounters another `.scriptreetree` file during the scan,
+this flag controls whether that file becomes a candidate sub-tree
+leaf in the current tree's diff dialog.  Either way, the walker
+**stops descending** at the `.scriptreetree` boundary (that
+subtree is owned by that other file); the flag only affects
+whether the boundary file itself is surfaced as something the
+current tree could add.
+
+Set to `false` for a master / aggregator tree that should remain
+flat — direct `.scriptree` leaves only, no nested trees.
+
+**`update_mode`** (one of `"off"`, `"auto"`, `"prompt"`, default
+`"prompt"`).  How the discovery pass applies its diff:
+
+* `"off"` — discovery does not run.  The walker, diff, and prompt
+  are all skipped.  Set this when a user explicitly opts out of
+  the feature for this tree.  The manual "Scan tree for new
+  tools" menu entry still works (it temporarily upgrades to a
+  one-shot prompt).
+* `"auto"` — discovery runs and applies adds/removes/re-includes
+  **silently**.  No dialog.  Suits authoritative trees where the
+  on-disk folder IS the source of truth and the
+  `.scriptreetree` is just a cache.  The user can still inspect
+  the result in the editor; nothing destructive happens (a
+  removed leaf is one click to re-add).
+* `"prompt"` — discovery runs but mutations go through the diff
+  dialog.  The user picks which adds to accept and confirms each
+  remove.  Default for hand-curated trees.
+
+### `excluded` field shape
+
+```json
+{
+  "excluded": [
+    "./deprecated/old-tool.scriptree",
+    "./experimental/scratch.scriptree"
+  ]
+}
+```
+
+Paths the user has explicitly removed via the diff dialog.
+Stored relative to the tree file's directory when possible,
+absolute otherwise — same resolution rules as `TreeNode.path`.
+
+Discovery still emits these paths so the diff dialog can route
+them to the "Previously excluded" section (in case the user
+changes their mind), but they do NOT enter the "Added" bucket
+on a regular pass — the exclusion is the user's way of saying
+"stop re-suggesting this."
+
+Kept at the top level of the tree (not inside `auto_discover`)
+because exclusion is *state* the user has built up over time,
+while `auto_discover` is *settings*.  Separating them makes
+"reset settings to default" a sensible operation that doesn't
+wipe accrued exclusions.
+
+### The walker's priority rule
+
+The walker descends the tree's `roots` depth-first with the
+following per-directory rules:
+
+1. If the directory contains a `.scriptreetree` file other than
+   the one being scanned, **stop descending**.  That subtree is
+   owned by that other file.  When `include_sibling_trees: true`,
+   the `.scriptreetree` is emitted as a candidate sub-tree leaf.
+2. Otherwise, emit every `.scriptree` file in the directory as
+   a candidate tool leaf, then recurse into subdirectories.
+3. Directories whose basename starts with `.` (e.g. `.git`,
+   `.vscode`) are skipped silently — they hold no user tools.
+
+A candidate is only added to the "Added" bucket of the diff if
+all of the following hold:
+
+* The path is not already represented as a leaf anywhere in the
+  current `tree.nodes`.
+* The path is not in `excluded` (matched paths get routed to
+  "Previously excluded" instead).
+* The corresponding file exists and parses (broken files are
+  shown in a separate "errors" expander at the bottom of the
+  dialog rather than offered for inclusion).
+
+### The first-load contract
+
+The `auto_discover` JSON key is **optional**.  Three states are
+possible:
+
+| On disk | In memory | Behaviour on next load |
+|---|---|---|
+| Key absent OR explicit `null` | `TreeDef.auto_discover = None` | Editor fires the one-shot `ChooseUpdateModeDialog` so the user picks `prompt` / `auto` / `off`.  The chosen mode is written back as a non-`None` block, so this dialog only ever fires once per tree. |
+| Key present, value `{}` or all-defaults | `TreeAutoDiscoverConfig()` with default values | Treated as "user has been asked, chose all defaults" — the regular `update_mode` path runs (default `"prompt"`).  On save, the block is **omitted again** (the default-equals-omitted rule) so the file stays byte-identical to the no-block form. |
+| Key present, at least one field non-default | `TreeAutoDiscoverConfig(...)` with the explicit values | Regular `update_mode` path runs.  The block is preserved on save with only the non-default fields written. |
+
+Every pre-feature `.scriptreetree` file in the wild lands in the
+first row — opening it once triggers the chooser, then either
+writes a configured block (if the user picks `auto` or `prompt`
+and a non-default option) or leaves the file byte-identical (if
+the user picks every default).
+
+### Folder-shape convention (recommended)
+
+The walker is folder-agnostic and works against any layout, but
+authors get the cleanest auto-discover ergonomics with the
+following structure:
+
+```
+ScripTreeApps/
+└── <program>/                   e.g. solidworks, outlook, git, pwsh
+    ├── <program>.scriptreetree  the program's top-level tree
+    ├── <purpose>/               e.g. export, cleanup, migration, analysis
+    │   ├── tool-a.scriptree
+    │   └── tool-b.scriptree
+    └── <purpose>/
+        └── ...
+```
+
+With this layout, the `<program>.scriptreetree`'s default
+`roots: ["."]` auto-discovers every tool in the program's
+`<purpose>/` subfolders.  When a sister program's tree wants to
+absorb this one as a nested sub-tree, the
+`include_sibling_trees` flag surfaces it as a candidate.
+
+The hashtag / view-modes system (planned for a future release)
+will use `program`, `purpose`, `tags` fields on individual
+`.scriptree` files to let the menu re-bucket discovered tools
+by axis (by-program, by-purpose, by-program-x-purpose) at
+render time — independent of how they're laid out on disk.
+
+### Worked example
+
+A `.scriptreetree` that scans its own folder, prompts the user
+on changes, and has removed one deprecated tool from past
+suggestions:
+
+```json
+{
+  "schema_version": 3,
+  "name": "SolidWorks Toolkit",
+  "nodes": [
+    { "type": "folder", "name": "export", "children": [
+        { "type": "leaf", "path": "./export/dxf-export-drawing.scriptree" },
+        { "type": "leaf", "path": "./export/step-export.scriptree" }
+      ]
+    },
+    { "type": "folder", "name": "cleanup", "children": [
+        { "type": "leaf", "path": "./cleanup/hide-sketches.scriptree" }
+      ]
+    }
+  ],
+  "auto_discover": {
+    "update_mode": "prompt"
+  },
+  "excluded": [
+    "./deprecated/old-batch-export.scriptree"
+  ]
+}
+```
+
+Next time this file is opened, the walker scans `./` (the file's
+folder), descends into `./export/`, `./cleanup/`, and any other
+subdirs *except* those containing their own `.scriptreetree`.
+Newly-found `.scriptree` files appear in the "Added" section of
+the diff dialog; the one in `./deprecated/` is routed to
+"Previously excluded" (still visible, still re-includable, but
+unchecked by default).
+
 ## Tree configuration sidecar
 
 Tree-level configurations live in a separate sidecar:
