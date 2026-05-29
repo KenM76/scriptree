@@ -389,7 +389,7 @@ possible:
 | On disk | In memory | Behaviour on next load |
 |---|---|---|
 | Key absent OR explicit `null` | `TreeDef.auto_discover = None` | Editor fires the one-shot `ChooseUpdateModeDialog` so the user picks `prompt` / `auto` / `off`.  The chosen mode is written back as a non-`None` block, so this dialog only ever fires once per tree. |
-| Key present, value `{}` or all-defaults | `TreeAutoDiscoverConfig()` with default values | Treated as "user has been asked, chose all defaults" — the regular `update_mode` path runs (default `"prompt"`).  On save, the block is **omitted again** (the default-equals-omitted rule) so the file stays byte-identical to the no-block form. |
+| Key present, value `{}` or all-defaults | `TreeAutoDiscoverConfig()` with default values | Treated as "user has been asked, chose all defaults" — the regular `update_mode` path runs (default `"prompt"`).  On save, the block is **preserved as `{}`** (the empty dict signals "user has been asked"; without it the loader would re-fire the first-load chooser on the next open). |
 | Key present, at least one field non-default | `TreeAutoDiscoverConfig(...)` with the explicit values | Regular `update_mode` path runs.  The block is preserved on save with only the non-default fields written. |
 
 Every pre-feature `.scriptreetree` file in the wild lands in the

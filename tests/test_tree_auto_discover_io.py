@@ -177,24 +177,35 @@ class TestLegacyRoundTrip:
         save_tree(t, out)
         assert out.read_text(encoding="utf-8") == original
 
-    def test_default_valued_block_round_trips_as_omitted(
+    def test_default_valued_block_round_trips_as_present(
         self, tmp_path: Path,
     ) -> None:
-        """A non-None ``auto_discover`` whose every field equals
-        the dataclass default writes the same JSON as ``None``
-        — the omitted-when-default rule.
+        """A non-None ``auto_discover`` MUST emit a JSON key,
+        even when every field equals the dataclass default.
 
-        Rationale: an interactive editor that creates a
-        ``TreeAutoDiscoverConfig()`` instance to satisfy "user
-        has been asked" semantics shouldn't pollute the saved
-        file with a redundant ``"auto_discover": {}`` block."""
+        Rationale (v0.8.0a21+): the PRESENCE of the
+        ``auto_discover`` key (even as the empty dict ``{}``)
+        is the signal to the loader "the user has already been
+        asked which mode to use; do NOT fire the first-load
+        chooser again."
+
+        An earlier design omitted the block when all-default
+        for byte-identical round-trip elegance, but that meant a
+        user who picked the default mode (``"prompt"``) on the
+        chooser would be re-asked every load — the worst kind
+        of "I already told you" UX.  See ``tree_to_dict``'s
+        block comment for the trade-off discussion.
+        """
         t = TreeDef(name="x", auto_discover=TreeAutoDiscoverConfig())
         d = tree_to_dict(t)
-        assert "auto_discover" not in d, (
-            "Default-valued TreeAutoDiscoverConfig must NOT emit "
-            "an `auto_discover` JSON key -- legacy round-trip "
-            "ergonomics demand the file stay byte-identical."
+        assert "auto_discover" in d, (
+            "Default-valued TreeAutoDiscoverConfig must emit "
+            "an `auto_discover` JSON key (as `{}`) -- the key's "
+            "presence is what tells the loader 'user has been "
+            "asked, don't re-prompt'."
         )
+        # The dict is empty because every field matched its default.
+        assert d["auto_discover"] == {}
 
 
 # ----------------------------------------------------------------------------

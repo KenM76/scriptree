@@ -664,11 +664,19 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
             ad_d["include_sibling_trees"] = bool(ad.include_sibling_trees)
         if ad.update_mode != ad_default.update_mode:
             ad_d["update_mode"] = str(ad.update_mode)
-        # Only emit the block when at least one field differs from
-        # the default.  See the comment above re. byte-identical
-        # round-trip ergonomics.
-        if ad_d:
-            d["auto_discover"] = ad_d
+        # Always emit the block when ``auto_discover`` is non-None,
+        # even when every field equals its default.  The PRESENCE of
+        # the key (even as ``{}``) is the signal to the loader
+        # "user has already been asked which mode to use, do NOT
+        # fire the first-load chooser again".  An earlier
+        # default-equals-omitted rule looked elegant for round-trip
+        # diffs but caused the chooser to re-fire every load for a
+        # tree where the user picked the default (``"prompt"``) --
+        # the worst kind of "I already told you" UX.  The trade-off
+        # is that a user-configured tree introduces a 2-byte
+        # ``"auto_discover": {}`` block when their choice happens to
+        # equal the defaults; acceptable.
+        d["auto_discover"] = ad_d
     if tree.excluded:
         d["excluded"] = list(tree.excluded)
     return d

@@ -2875,6 +2875,21 @@ class CellWindow(QMainWindow):
         # forest master — prepends forest-specific items to the
         # context menu.  See ``_show_context_menu`` for invocation.
         self._forest_menu_extension = None  # type: ignore[assignment]
+        # v0.8.0a21 — same hook, parallel feature.  When this cell is
+        # bound to a ``.scriptreetree``, ``TreeController.attach_to_cell``
+        # registers a callback here that prepends a "Tree" submenu
+        # with auto-discover actions (Refresh from sources, Auto-add
+        # from this folder now, Tree settings…, Excluded items…).
+        # Non-tree-bound cells skip this entirely.  See the parallel
+        # ``forest_menu_extension`` hook + invocation in
+        # ``_show_context_menu``.
+        self._tree_menu_extension = None  # type: ignore[assignment]
+        # Companion soft-reference holder.  ``TreeController`` sets
+        # ``cell._tree_controller = self`` in ``attach_to_cell`` so
+        # later operations (e.g. a deferred refresh, a settings
+        # dialog opened from another path) can find the controller
+        # off the cell instead of via a global registry.
+        self._tree_controller = None  # type: ignore[assignment]
 
         # ----------------------------------------------------------------
         # Branding
@@ -3039,6 +3054,18 @@ class CellWindow(QMainWindow):
                     f"refresh_label_from_catalog at init failed: "
                     f"{exc!r}; cell will use QSettings fallback"
                 )
+
+        # v0.8.0a21 -- if the bound catalog is a ``.scriptreetree``,
+        # wire the auto-discover ``TreeController``.  The attach call
+        # installs the right-click menu hook + schedules the
+        # ``ChooseUpdateModeDialog`` on next-event-tick when
+        # ``tree.auto_discover is None`` (legacy / fresh trees).
+        # Non-tree catalogs (.scriptree / .scriptreering) are
+        # ignored.  Idempotent: a later catalog rebind would need
+        # to call ``_attach_tree_controller_if_applicable`` again
+        # (currently not called from other paths -- TODO follow-up
+        # to hot-reload on right-click "Load ScripTree…").
+        self._attach_tree_controller_if_applicable()
 
         # ----------------------------------------------------------------
         # Pre-compute ShapeGeometry (also used by SnapEngine).
@@ -4630,6 +4657,44 @@ class CellWindow(QMainWindow):
         return (
             "parallel" if md.click_run_mode == "parallel" else "sequential"
         )
+
+    def _attach_tree_controller_if_applicable(self) -> None:
+        """Attach a ``TreeController`` to this cell when (and only
+        when) its bound catalog is a ``.scriptreetree``.
+
+        Called from ``__init__`` after the initial catalog binding
+        settles.  Idempotent at the call-site sense: a cell that
+        already has ``self._tree_controller`` set returns
+        immediately.
+
+        Failure modes are swallowed (logged, not raised):
+
+        * Catalog path is set but the file doesn't exist or
+          fails to parse → log and skip; the right-click menu
+          simply won't have the Tree submenu.
+        * ``TreeController`` import fails (Qt unavailable in
+          some headless test paths) → log and skip.
+
+        The cell remains fully functional in all failure cases;
+        only the discovery feature is unavailable.
+        """
+        if getattr(self, "_tree_controller", None) is not None:
+            return
+        cat = getattr(self, "_catalog_path", None)
+        if not cat or not cat.lower().endswith(".scriptreetree"):
+            return
+        try:
+            # Lazy import: tree_controller imports tree_dialogs which
+            # imports PySide6.  Importing here rather than at module
+            # load keeps the cost off cells that don't need it.
+            from .tree_controller import TreeController
+            ctl = TreeController(cat)
+            ctl.attach_to_cell(self)
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"attach_tree_controller failed for {cat!r}: {exc!r}; "
+                f"cell will work but Tree submenu won't appear."
+            )
 
     def _refresh_label_from_catalog(self) -> None:
         """Pull cell label state from the currently-bound catalog file
@@ -6450,6 +6515,20 @@ class CellWindow(QMainWindow):
                 menu.addSeparator()
             except Exception as _exc:  # noqa: BLE001
                 _log(f"forest_menu_extension failed: {_exc!r}")
+
+        # v0.8.0a21+ — parallel hook for ``.scriptreetree``-bound cells.
+        # ``TreeController.attach_to_cell`` installs the callback;
+        # non-tree-bound cells have ``_tree_menu_extension is None``
+        # and skip this block entirely.  Same try/except shape as the
+        # forest hook above so a buggy menu extension never crashes
+        # the right-click — at worst we log and keep going.
+        tree_hook = getattr(self, "_tree_menu_extension", None)
+        if tree_hook is not None:
+            try:
+                tree_hook(menu)
+                menu.addSeparator()
+            except Exception as _exc:  # noqa: BLE001
+                _log(f"tree_menu_extension failed: {_exc!r}")
 
         # ── ScripTree submenu ─────────────────────────────────────
         # Groups all load / save / clear catalog actions plus the
