@@ -44,4 +44,4 @@ __version__ = "0.8.0a21"
 # value.  Shown in the About dialogs alongside the version number
 # so the user can tell which build they're running when revisions
 # happen quickly.
-__build_date__ = "2026-05-29 13:42 EDT"
+__build_date__ = "2026-05-29 21:51 EDT"
