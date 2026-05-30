@@ -618,6 +618,67 @@ class MenuItemDef:
 
 
 @dataclass
+class PlatformOverride:
+    """Per-OS overrides for a ``ToolDef`` (v0.8.0a22+).
+
+    Lives under ``ToolDef.platforms`` as ``platforms[os_id] =
+    PlatformOverride(...)``.  Each field is **optional** -- when
+    ``None``, the resolution helper inherits the top-level
+    default; when set, it wholly replaces that field's value
+    on the resolved tool.
+
+    Merge rule is per-field, not deep: a platform entry that
+    sets only ``executable`` keeps the top-level
+    ``argument_template`` intact.  This matches the user's
+    mental model ("for this OS, this is THE command") and
+    sidesteps the painful deep-merge edge cases that would
+    arise if e.g. ``argument_template`` lists were partially
+    merged.
+
+    Serialised in the ``.scriptree`` JSON under the platform
+    key (``"windows"`` / ``"macos"`` / ``"linux"``) of the
+    enclosing ``platforms`` block.  Fields with their default
+    ``None`` values are omitted from the JSON so a "supported
+    but identical to default" platform entry round-trips as
+    ``{}``.
+
+    See ``scriptree.core.platform`` for the OS-id contract and
+    ``resolve_for_host`` for the merge implementation.
+    """
+
+    executable: str | None = None
+    """Per-OS executable path.  When set, replaces the
+    top-level ``ToolDef.executable``.  Use an absolute path
+    for non-PATH binaries (``"/usr/bin/osascript"``) or a
+    bare name for PATH-resolved ones (``"python3"``)."""
+
+    argument_template: list[TemplateEntry] | None = None
+    """Per-OS argv template.  When set, REPLACES the top-level
+    ``ToolDef.argument_template`` entirely.  Use this for tools
+    whose argv shape differs by OS -- e.g. combridge on Windows
+    vs osascript on macOS -- not just the binary name."""
+
+    path_prepend: list[str] | None = None
+    """Per-OS PATH-prepend directories.  When set, replaces
+    the top-level ``ToolDef.path_prepend``.  Typical use:
+    ``["C:\\\\Program Files\\\\App"]`` on Windows vs
+    ``["/Applications/App.app/Contents/MacOS"]`` on macOS."""
+
+    env: dict[str, str] | None = None
+    """Per-OS environment variables.  When set, REPLACES the
+    top-level ``ToolDef.env`` entirely (NOT merged into it).
+    A platform entry that wants to add to the default env
+    must repeat the default's entries -- intentional, so the
+    "for this OS the env is THIS" contract stays unambiguous."""
+
+    actions: list[ActionDef] | None = None
+    """Per-OS action button list.  When set, REPLACES the
+    top-level ``ToolDef.actions`` entirely.  Use for tools
+    whose action-button argv shapes differ by OS in the same
+    way ``argument_template`` does."""
+
+
+@dataclass
 class ToolDef:
     """A complete tool definition, serialized as one .scriptree file."""
 
@@ -668,6 +729,31 @@ class ToolDef:
     # legacy ``.scriptree`` round-tripping byte-identical -- nothing
     # is emitted to disk when no actions are declared.
     actions: list[ActionDef] = field(default_factory=list)
+    # --- v0.8.0a22+ cross-platform overrides -------------------------
+    #
+    # Per-OS variants of ``executable``, ``argument_template``,
+    # ``path_prepend``, ``env``, and ``actions``.  Each key in this
+    # dict is an OS identifier (``"windows"``, ``"macos"``,
+    # ``"linux"``) and each value is a ``PlatformOverride`` carrying
+    # only the fields that differ from the top-level defaults.
+    #
+    # The runtime helper ``scriptree.core.platform.resolve_for_host``
+    # merges the host's entry (if any) over the top-level fields
+    # before the runner spawns the tool.  Tools with no
+    # ``platforms`` entries -- the vast majority of existing
+    # files -- skip the resolution pass entirely; the legacy
+    # round-trip stays byte-identical.
+    #
+    # Serialised as a ``platforms`` JSON object; the block is
+    # omitted from the output when this dict is empty.  Empty
+    # ``PlatformOverride()`` entries serialise as ``{}`` to mark
+    # "supported on this OS, all fields identical to default" --
+    # different from omitting the key, which means "no explicit
+    # support claim, inherit the default at run time".
+    #
+    # See ``docs/LLM/scriptree_format.md`` for the schema doc
+    # and ``scriptree.core.platform`` for the merge semantics.
+    platforms: dict[str, PlatformOverride] = field(default_factory=dict)
     # Cell-shell visual settings (V3, optional).  Persisted in the
     # .scriptree JSON so a tool ships with its preferred presentation.
     # All optional; cells fall back to auto-derived letters when none

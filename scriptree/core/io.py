@@ -109,6 +109,17 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
     # every legacy ``.scriptree`` round-trips byte-identical.
     if tool.actions:
         d["actions"] = [_action_to_dict(a) for a in tool.actions]
+    # v0.8.0a22+ — per-OS overrides.  Same compactness rule as
+    # ``actions`` / ``menus``: the block is omitted entirely when
+    # ``tool.platforms`` is empty, preserving byte-identical
+    # round-trip for every legacy ``.scriptree`` written before
+    # this feature.  Each individual override entry's own
+    # serialiser further skips fields that aren't actively
+    # overriding the default, so a "supported but identical"
+    # entry shows up as ``{}`` (vs an omitted key, which means
+    # "no explicit support claim").
+    if tool.platforms:
+        d["platforms"] = _platforms_to_dict(tool.platforms)
     # Cell-shell visual settings (V3, optional).  Each emitted only
     # when set so legacy tools round-trip byte-identical.  A "cell"
     # sub-object groups them so the top-level ToolDef JSON stays
@@ -263,6 +274,133 @@ def _load_actions(raw: Any) -> list[ActionDef]:
     return [_action_from_dict(a) for a in raw if isinstance(a, dict)]
 
 
+# ---------------------------------------------------------------------------
+# Per-OS overrides (v0.8.0a22+) — ``PlatformOverride`` round-trip
+# ---------------------------------------------------------------------------
+
+def _platform_override_to_dict(
+    ovr: "PlatformOverride",  # noqa: F821 — imported below
+) -> dict[str, Any]:
+    """Serialise a ``PlatformOverride`` to its JSON shape.
+
+    Each field is emitted only when it carries a non-default
+    value (``None``-or-empty-collection is treated as "no
+    override").  An override with no fields set serialises as
+    an empty ``{}`` -- which is the canonical "supported on
+    this OS, identical to default" marker (distinct from
+    omitting the OS key entirely, which means "no explicit
+    support claim").
+    """
+    out: dict[str, Any] = {}
+    if ovr.executable is not None:
+        out["executable"] = str(ovr.executable)
+    if ovr.argument_template is not None:
+        # ``argument_template`` entries may be strings or lists
+        # of strings (the ``TemplateEntry`` shape); pass them
+        # through unchanged.  Empty list IS distinct from None
+        # for this field -- it means "spawn the executable with
+        # no arguments", a deliberate user choice.
+        out["argument_template"] = [
+            (list(e) if isinstance(e, list) else str(e))
+            for e in ovr.argument_template
+        ]
+    if ovr.path_prepend is not None:
+        out["path_prepend"] = list(ovr.path_prepend)
+    if ovr.env is not None:
+        out["env"] = {str(k): str(v) for k, v in ovr.env.items()}
+    if ovr.actions is not None:
+        out["actions"] = [_action_to_dict(a) for a in ovr.actions]
+    return out
+
+
+def _platform_override_from_dict(
+    raw: Any,
+) -> "PlatformOverride":  # noqa: F821
+    """Parse a ``PlatformOverride`` from its JSON shape.
+
+    Robust to partial / malformed input -- a missing field
+    yields ``None`` (= inherit default at resolution time); a
+    malformed value falls back to ``None`` with a defensive
+    cast rather than raising.  Tree-loading is too important
+    to gate on perfect platform JSON.
+    """
+    from .model import PlatformOverride  # local import; cycle-safe
+
+    if not isinstance(raw, dict):
+        # Treat anything else (including ``None``) as "empty
+        # override, supported but no field overrides".
+        return PlatformOverride()
+
+    def _str_or_none(v: Any) -> str | None:
+        if v is None:
+            return None
+        try:
+            return str(v)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _list_or_none(v: Any) -> list[Any] | None:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return list(v)
+        return None  # malformed -> inherit default
+
+    def _dict_or_none(v: Any) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return {str(k): str(val) for k, val in v.items()}
+        return None
+
+    return PlatformOverride(
+        executable=_str_or_none(raw.get("executable")),
+        argument_template=_list_or_none(raw.get("argument_template")),
+        path_prepend=_list_or_none(raw.get("path_prepend")),
+        env=_dict_or_none(raw.get("env")),
+        actions=(
+            _load_actions(raw["actions"])
+            if "actions" in raw
+            else None
+        ),
+    )
+
+
+def _platforms_to_dict(
+    platforms: dict[str, "PlatformOverride"],  # noqa: F821
+) -> dict[str, Any]:
+    """Serialise the full ``ToolDef.platforms`` map.
+
+    Returns the dict to assign to JSON's ``platforms`` key.
+    Only OS ids in ``OS_IDS`` are emitted -- a key like
+    ``"freebsd"`` that snuck in via hand-editing is silently
+    dropped to keep the on-disk shape tidy.
+    """
+    from .platform import OS_IDS
+
+    out: dict[str, Any] = {}
+    for os_id in OS_IDS:
+        if os_id in platforms:
+            out[os_id] = _platform_override_to_dict(platforms[os_id])
+    return out
+
+
+def _platforms_from_dict(
+    raw: Any,
+) -> dict[str, "PlatformOverride"]:  # noqa: F821
+    """Parse the JSON ``platforms`` block to the ``ToolDef``
+    map shape.  Unknown OS ids are dropped silently."""
+    from .platform import OS_IDS
+
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, "PlatformOverride"] = {}  # noqa: F821
+    for os_id in OS_IDS:
+        if os_id in raw:
+            out[os_id] = _platform_override_from_dict(raw[os_id])
+    return out
+
+
 def tool_from_dict(data: dict[str, Any]) -> ToolDef:
     _check_schema(data)
     src = data.get("source") or {}
@@ -325,6 +463,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         path_prepend=[str(p) for p in (data.get("path_prepend") or [])],
         menus=_load_menus(data.get("menus")),
         actions=_load_actions(data.get("actions")),
+        platforms=_platforms_from_dict(data.get("platforms")),
         cell_icon=str(cell_d.get("icon", "")),
         cell_icon_data=str(cell_d.get("icon_data", "")),
         cell_icon_format=str(cell_d.get("icon_format", "")),
