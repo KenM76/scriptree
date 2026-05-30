@@ -640,6 +640,131 @@ If you find yourself writing tool-help text like "for X, run the
 underlying CLI directly", that's the smell that says an `actions[]`
 entry would solve it cleanly.
 
+## `platforms` block (optional, v0.8.0a22+)
+
+ScripTree runs on Windows, macOS, and Linux.  A single `.scriptree`
+file can declare per-OS variants of the binary and argv so the
+same tool works everywhere.
+
+```json
+{
+  "platforms": {
+    "windows": {/* optional override fields */},
+    "macos":   {/* optional override fields */},
+    "linux":   {/* optional override fields */}
+  }
+}
+```
+
+### Why it exists
+
+Most CLI tools have different runtime requirements by OS:
+
+- A Python tool runs as `py.exe -3 ./tool.py` on Windows but `python3 ./tool.py` on macOS / Linux.
+- A Microsoft Office automation tool drives COM via `combridge.exe` on Windows; on macOS the equivalent is `osascript` driving AppleScript with a completely different argv shape.
+- A native binary lives under `C:\Program Files\App\` on Windows and `/Applications/App.app/Contents/MacOS/` on macOS.
+
+Without per-OS variants, an author would have to ship one `.scriptree` per OS and the user would see three near-identical entries in their menu.  The `platforms` block keeps the tool definition in one file.
+
+### Field shape
+
+Each OS entry is a `PlatformOverride` with five optional fields:
+
+```json
+{
+  "platforms": {
+    "macos": {
+      "executable":         "string, optional (replaces top-level)",
+      "argument_template":  ["list, optional (replaces top-level entirely)"],
+      "path_prepend":       ["list of strings, optional"],
+      "env":                {"NAME": "value (optional, replaces top-level)"},
+      "actions":            ["list of ActionDef, optional"]
+    }
+  }
+}
+```
+
+**Per-field replace, not deep merge.**  When `platforms.macos.executable` is set, it wholly replaces `tool.executable` on macOS.  When it's `null` or omitted, macOS inherits the top-level default.  Same per field — there's no partial overlay inside a list or dict.
+
+**OS ids.**  Exactly three keys are valid: `"windows"`, `"macos"`, `"linux"`.  Unknown keys (`"mac"`, `"freebsd"`, …) are silently dropped on load.  The loader maps Python's `platform.system()` (`"Windows"` / `"Darwin"` / `"Linux"`) to these canonical ids; unrecognised platforms fall back to `"linux"` (the safest POSIX shape).
+
+**Resolution at run time.**  When the runner spawns a tool, `scriptree.core.platform.resolve_for_host(tool)` returns a new `ToolDef` with the host OS's overrides merged over the top-level defaults.  The original `ToolDef` is never mutated; the editor keeps the full cross-platform view.
+
+**Empty-override entries.**  `"platforms": {"macos": {}}` is a non-default value with semantic meaning: "supported on macOS, all fields identical to default."  Distinct from omitting the `macos` key entirely (which means "no explicit support claim, inherit defaults at run time anyway").  The two paths behave the same at the runner but differ in the editor: an explicit empty entry has its "Override for macOS" toggle off-but-present.
+
+### Worked example: combridge (Windows) vs osascript (macOS)
+
+The classic case the feature was designed for.  One file, both OSes:
+
+```json
+{
+  "schema_version": 3,
+  "name": "Read active Word document",
+
+  "executable": "combridge.exe",
+  "argument_template": [
+    "word", "active-document.text", "--out", "-"
+  ],
+
+  "platforms": {
+    "macos": {
+      "executable": "/usr/bin/osascript",
+      "argument_template": [
+        "-e",
+        "tell application \"Microsoft Word\" to return content of active document as string"
+      ]
+    },
+    "linux": {}
+  }
+}
+```
+
+What happens at run time on each OS:
+
+- **Windows host**: `combridge.exe word active-document.text --out -` (top-level fields; no override applies).
+- **macOS host**: `/usr/bin/osascript -e "tell application ..."` (every field from the `macos` override; nothing inherited from the top level).
+- **Linux host**: An entry exists (`linux: {}`) so the loader treats Linux as "explicitly supported," but every field is inherited.  The runner would try `combridge.exe` — which doesn't exist on Linux — and surface the standard missing-executable recovery dialog.  The empty entry serves as documentation ("the author considered Linux") more than as a functional override.
+
+If the Linux entry were omitted entirely, behaviour would be identical (run tries `combridge.exe`, falls back to recovery dialog).  The block's job is to express *intent*.
+
+### Worked example: simple Python tool, three OSes
+
+```json
+{
+  "name": "Find missing refs",
+  "executable": "py.exe",
+  "argument_template": ["-3", "./find_refs.py", "{path}"],
+
+  "platforms": {
+    "macos": {"executable": "python3"},
+    "linux": {"executable": "python3"}
+  }
+}
+```
+
+Only the `executable` differs; `argument_template` is inherited everywhere.  The argv tokens stay identical because `python3` accepts the same arg-after-script form as `py.exe -3 script`.
+
+### Default-fall-back behaviour at run time
+
+When the runner resolves a tool for the host OS:
+
+1. If `tool.platforms[host_os]` exists, each of its non-null fields overrides the top-level.
+2. Null / missing fields inherit the top-level.
+3. The resolved executable is checked at spawn time; if it doesn't exist on disk, ScripTree surfaces the existing missing-executable recovery dialog (lets the user point at the right binary, edit the tool, or skip).
+
+There's no "this tool is unsupported on macOS" hard block — fundamentally Windows-only tools fail gracefully via the recovery dialog rather than refusing to load.  A `supported_platforms` field is a future possibility if greying-out tools in the menu becomes a stronger UX win than informative-error-on-Run.
+
+### Editor support
+
+The tool editor (`scriptree.ui.tool_editor`) gains a "Per-OS overrides" group between the Tool section and the Parameters splitter.  It contains:
+
+- **Three tabs** (Windows / macOS / Linux), each with an "Override for this OS" toggle and editable fields for `executable`, `argument_template`, `path_prepend`.
+- **"Preview as: [OS]"** dropdown at the bottom — selects which OS the editor's command-line preview should resolve against, independent of which tab is being edited.
+
+When the toggle is off, the tab shows a read-only "Inherited from default" preview so the author can SEE what each field would inherit without leaving the tab.  When the toggle is on, the fields become editable; empty fields still inherit (the per-field replace rule).
+
+Env and Actions per-OS variants are supported by the model but not yet exposed in the editor's per-OS tabs (Phase-3 scope).  Authors who need them today can hand-edit the JSON; the values round-trip cleanly through load / save.
+
 ## Loader invariants
 
 The `tool_from_dict` function enforces:
