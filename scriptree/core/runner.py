@@ -1563,7 +1563,27 @@ def build_full_argv(
     reach the spawned child's PATH.  The runner populates this from
     ``TreeLauncherView.tree_path_prepend()`` whenever a tool is
     opened through a loaded tree.
+
+    v0.8.0a22+ -- per-OS overrides are resolved HERE, before any
+    other field is consulted.  When ``tool.platforms`` contains an
+    entry matching the host OS (``platform.host_os()`` returns the
+    canonical id), its ``executable`` / ``argument_template`` /
+    ``path_prepend`` / ``env`` / ``actions`` replace the top-level
+    defaults via per-field merge.  The original ``tool`` argument
+    is NOT mutated -- the editor keeps the full cross-platform
+    view; only the resolved copy reaches argv assembly.  Tools with
+    no ``platforms`` entries (the vast majority of existing files)
+    pay only a single ``dataclasses.replace`` call.
     """
+    # Per-host resolution.  Returns a new ToolDef whose top-level
+    # fields reflect the host's overrides; the original ``tool``
+    # parameter stays untouched so callers that hold a reference
+    # to the editor's in-memory ToolDef see the full cross-platform
+    # shape.  See ``scriptree.core.platform.resolve_for_host`` for
+    # the full merge contract.
+    from .platform import resolve_for_host
+    tool = resolve_for_host(tool)
+
     cmd = resolve(tool, values, ignore_required=ignore_required)
     env = build_env(
         tool, config_env, config_path_prepend,
@@ -1633,7 +1653,23 @@ def resolve_action(tool: ToolDef, action: ActionDef) -> ResolvedCommand:
 
     Raises :class:`RunnerError` when ``tool.executable`` is empty,
     matching :func:`resolve`'s contract.
+
+    v0.8.0a22+ -- per-OS overrides resolved here too, BEFORE the
+    executable is read.  When ``tool.platforms[host_os].actions``
+    exists, the override action list replaces the top-level one --
+    note that the ``action`` argument passed in must still be a
+    member of the override list (or the top-level list when no
+    override) for the resolved argv to make sense.  Callers that
+    look up actions by id should pass the resolved tool's
+    actions, not the original's.  The ``resolve_for_host`` call
+    returns a new ToolDef leaving the original untouched.
     """
+    # See ``build_full_argv``'s comment for the resolve_for_host
+    # contract.  Same semantic here -- the editor's in-memory
+    # ToolDef is preserved; only the resolved copy drives argv.
+    from .platform import resolve_for_host
+    tool = resolve_for_host(tool)
+
     if not tool.executable:
         raise RunnerError("Tool has no executable.")
 
