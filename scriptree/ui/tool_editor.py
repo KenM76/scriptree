@@ -102,6 +102,11 @@ from ..core.model import (
 )
 from .env_editor import EnvEditorDialog
 from ..core.runner import RunnerError, resolve
+# v0.8.0a22+ -- per-OS overrides editor section.  Self-contained
+# QGroupBox slotted in after the Tool group; data-binds via
+# ``load_from_tool`` / ``apply_to_tool`` and emits ``changed`` /
+# ``previewOsChanged`` to drive the rest of the editor.
+from .platform_overrides_widget import PlatformOverridesWidget
 from .widgets.param_widgets import _DroppableLineEdit, build_widget_for
 
 
@@ -259,6 +264,24 @@ class ToolEditorView(QWidget):
         top_form.addRow("Action buttons:", actions_wrapper)
 
         outer.addWidget(top)
+
+        # v0.8.0a22+ -- per-OS overrides section.  Slots in between
+        # the Tool group and the Parameters splitter so the author
+        # sees it as a natural extension of "executable / argument
+        # template / PATH prepend" rather than an afterthought.
+        # The widget hides its tabs behind a collapsible group box
+        # so tools that don't use the feature aren't visually
+        # taxed.
+        self._platform_overrides = PlatformOverridesWidget()
+        self._platform_overrides.load_from_tool(self._tool)
+        # Live-refresh the inherited-preview rows whenever the
+        # top-level executable / argument_template / path_prepend
+        # change so the read-only side of each tab reflects what
+        # would be inherited at any moment.
+        self._exe_edit.textChanged.connect(
+            self._refresh_platform_overrides_inherited
+        )
+        outer.addWidget(self._platform_overrides)
 
         # Middle: param list | property panel.
         middle = QSplitter(Qt.Orientation.Horizontal)
@@ -1634,6 +1657,33 @@ class ToolEditorView(QWidget):
         same dock the user can also drag/float directly."""
         return self._preview_dock
 
+    def _refresh_platform_overrides_inherited(self) -> None:
+        """Push the editor's current top-level Executable /
+        argument_template / path_prepend values into every
+        platform tab's read-only "inherited from default" preview.
+
+        Hooked to ``self._exe_edit.textChanged`` so a typo
+        correction propagates to every tab without the author
+        having to switch away and back.  ``argument_template``
+        and ``path_prepend`` are edited via separate widgets;
+        their change handlers call this too (added incrementally
+        as those edit paths are wired).  For now the executable
+        is the most-edited field and the highest-value hookup.
+        """
+        if not hasattr(self, "_platform_overrides"):
+            return  # constructor not finished
+        try:
+            self._platform_overrides.refresh_inherited(
+                executable=self._tool.executable,
+                argument_template_text=_template_to_text(
+                    self._tool.argument_template,
+                ),
+                path_prepend=list(self._tool.path_prepend or []),
+            )
+        except Exception:  # noqa: BLE001
+            # Refresh is decorative -- never crash the editor over it.
+            pass
+
     def _on_save(self) -> None:
         if self._read_only and self._file_path is not None:
             QMessageBox.warning(
@@ -1641,6 +1691,13 @@ class ToolEditorView(QWidget):
                 "This file is read-only and cannot be saved.",
             )
             return
+        # v0.8.0a22+ -- flush the per-OS overrides widget into
+        # ``self._tool.platforms`` BEFORE validation / save so
+        # the on-disk file reflects whatever's in the tabs.  The
+        # widget's ``apply_to_tool`` drops keys whose override
+        # toggle is off, so a previously-saved override the user
+        # un-ticked also gets removed correctly.
+        self._platform_overrides.apply_to_tool(self._tool)
         errors = self._tool.validate()
         if errors:
             QMessageBox.warning(self, "Validation errors", "\n".join(errors))
