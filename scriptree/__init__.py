@@ -33,7 +33,7 @@ pulled?" at a glance).
 # so the user always sees the same number the package advertises),
 # the other is consumed by build / package tooling that walks
 # ``pyproject.toml`` directly.
-__version__ = "0.8.0a22"
+__version__ = "0.8.0a23"
 
 # When this version was cut.  Bumped together with ``__version__``
 # in the same commit.  Format: ``"YYYY-MM-DD HH:MM TZ"`` where TZ
