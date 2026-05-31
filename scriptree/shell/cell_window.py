@@ -5573,26 +5573,69 @@ class CellWindow(QMainWindow):
                 out.append(p)
         return out
 
+    def _drop_installables(self, event) -> list[str]:  # noqa: ANN001
+        """Extract installable paths (folders + .zip files) from a
+        drag/drop event.
+
+        v0.8.0a23+ -- enables the "drop a ScripTree app onto the
+        forest" workflow.  Only forest-master cells accept these;
+        on non-forest cells the method returns ``[]`` so the
+        existing extension-based ``_drop_paths`` flow stays the
+        single owner of the drop behaviour.
+
+        Folders are detected via ``Path.is_dir()``; zips by suffix
+        match (``.zip``, case-insensitive).  Anything else is
+        filtered out -- a stray ``.tar.gz`` won't surprise the
+        install flow with an unsupported source.
+        """
+        if not getattr(self, "_is_forest_master", False):
+            return []
+        md = event.mimeData()
+        if not md.hasUrls():
+            return []
+        from pathlib import Path as _Path
+        out: list[str] = []
+        for u in md.urls():
+            if not u.isLocalFile():
+                continue
+            p = u.toLocalFile()
+            path = _Path(p)
+            try:
+                if path.is_dir():
+                    out.append(p)
+                elif (
+                    path.is_file()
+                    and path.suffix.lower() == ".zip"
+                ):
+                    out.append(p)
+            except OSError:
+                # Unreachable / permission-denied paths -- skip.
+                continue
+        return out
+
     def dragEnterEvent(self, event) -> None:  # noqa: ANN001
-        if self._drop_paths(event):
+        if self._drop_paths(event) or self._drop_installables(event):
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:  # noqa: ANN001
-        if self._drop_paths(event):
+        if self._drop_paths(event) or self._drop_installables(event):
             event.acceptProposedAction()
             return
         super().dragMoveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: ANN001
         paths = self._drop_paths(event)
-        if not paths:
+        installables = self._drop_installables(event)
+        if not paths and not installables:
             super().dropEvent(event)
             return
         event.acceptProposedAction()
         for p in paths:
             self._handle_dropped_file(p)
+        for p in installables:
+            self._handle_dropped_installable(p)
 
     def _handle_dropped_file(self, path: str) -> None:
         """Dispatch a dropped file based on extension + this cell's role.
@@ -5647,6 +5690,138 @@ class CellWindow(QMainWindow):
         # → bind-self; bound + tool/tree → spawn sibling; empty +
         # ring → close-self + load; bound + ring → load alongside).
         self._open_catalog_path(str(p.resolve()))
+
+    def _handle_dropped_installable(self, path: str) -> None:
+        """Forest-only: route a folder / zip drop through the
+        drop-install workflow.
+
+        Composed of three pieces that already exist:
+
+        1. ``InstallLocationDialog`` -- where to install
+           (Shared / Personal / Other).
+        2. ``InstallConflictDialog`` -- fired only when the
+           chosen target already exists (Update / Rename /
+           Overwrite / Cancel).
+        3. ``scriptree.core.app_install.install_app`` -- the
+           pure-logic copy/extract.
+
+        On success, calls the forest controller's
+        ``refresh_from_sources`` so the newly-installed app is
+        offered for inclusion in the forest immediately
+        (subject to whatever discovery mode the user has
+        configured: prompt / auto / off).
+
+        Failures surface as a ``QMessageBox.warning`` rather
+        than crashing the cell -- a drop should never break
+        the desktop.
+        """
+        # Defensive guard: ``_drop_installables`` already filters
+        # non-forest cells, but keep this check too in case a
+        # caller invokes the method directly.
+        if not getattr(self, "_is_forest_master", False):
+            _log(f"installable drop ignored on non-forest cell: {path!r}")
+            return
+
+        # Lazy imports keep these out of the cell module's
+        # import-time graph for non-forest cells.
+        from pathlib import Path as _Path
+        from ..core.app_install import (
+            ConflictMode, InstallError, install_app,
+        )
+        from ..ui.install_dialogs import (
+            InstallConflictDialog, InstallLocationDialog,
+        )
+
+        source = _Path(path)
+        if not source.exists():
+            _log(f"installable drop ignored — source not found: {path!r}")
+            return
+
+        _log(
+            f"installable drop: {source.name!r} "
+            f"(kind={'folder' if source.is_dir() else 'zip'})"
+        )
+
+        # Step 1: where?
+        loc = InstallLocationDialog(self, source)
+        if loc.exec() != loc.DialogCode.Accepted:
+            return
+        target_root = loc.chosen_root()
+
+        # Step 2: install (with a one-shot retry on conflict).
+        conflict_mode: ConflictMode | None = None
+        result = None
+        for _attempt in range(2):  # at most: try once, retry once
+            try:
+                result = install_app(
+                    source, target_root,
+                    conflict_mode=conflict_mode,
+                )
+                break
+            except InstallError as exc:
+                msg = str(exc)
+                if "already exists" not in msg:
+                    QMessageBox.warning(
+                        self, "Install failed", msg,
+                    )
+                    return
+                # Target conflict -- prompt the user.
+                existing = target_root / loc.chosen_app_name()
+                cdlg = InstallConflictDialog(
+                    self, loc.chosen_app_name(), existing,
+                )
+                if cdlg.exec() != cdlg.DialogCode.Accepted:
+                    return  # cancel
+                conflict_mode = cdlg.chosen_mode()
+                if conflict_mode == ConflictMode.CANCEL:
+                    return
+
+        if result is None:
+            # Belt-and-braces: shouldn't happen, but fail loudly
+            # rather than silently if the retry-loop logic regresses.
+            QMessageBox.warning(
+                self, "Install failed",
+                "Install did not complete after retry.",
+            )
+            return
+
+        _log(
+            f"installed {result.files_written} files to {result.target}"
+        )
+
+        # Step 3: trigger forest auto-discovery so the new app
+        # appears in the forest right away.  Reached via the
+        # ``_forest_menu_extension`` bound method's ``__self__``
+        # -- the forest controller registers itself there on
+        # cell attach.
+        self._post_install_refresh_forest()
+
+    def _post_install_refresh_forest(self) -> None:
+        """Best-effort: trigger ``refresh_from_sources`` on the
+        forest controller bound to this cell (if any).
+
+        Recovers the controller from
+        ``self._forest_menu_extension.__self__`` -- the forest
+        controller stores its ``_populate_forest_menu`` bound
+        method as the menu extension during attach, so the
+        bound method's ``__self__`` IS the controller.
+        Avoids needing a separate ``cell._forest_controller``
+        attribute; idempotent and harmless when no controller
+        is attached.
+        """
+        hook = getattr(self, "_forest_menu_extension", None)
+        if hook is None:
+            return
+        controller = getattr(hook, "__self__", None)
+        if controller is None:
+            return
+        refresh = getattr(controller, "refresh_from_sources", None)
+        if not callable(refresh):
+            return
+        try:
+            refresh()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"post-install refresh failed: {exc!r}")
 
     def _drop_spawn_member_and_link(self, path):  # noqa: ANN001, ANN201
         """Master case (v0.3.6+): spawn a fresh cell bound to the
