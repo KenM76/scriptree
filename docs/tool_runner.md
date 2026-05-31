@@ -47,7 +47,8 @@ editor; here in the runner the widget is just what it is:
 - `checkbox` — boolean flag
 - `dropdown` — enum choices, with human-readable labels if the tool author
   defined them (see [tool_editor.md](tool_editor.md))
-- `file_open`, `file_save`, `folder` — native Windows file pickers
+- `file`, `save_file`, `folder` — native Windows file pickers (schema
+  v3 names; v2 files used `file_open` / `file_save`)
 
 **Drag-and-drop (v0.1.11):** every text-based widget accepts file/folder
 drops from Explorer. Drop a file on a `text` or `file_*` / `folder`

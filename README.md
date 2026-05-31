@@ -73,7 +73,7 @@ Or on Windows, double-click **`run_scriptreeforest.bat`** to launch the forest w
 - **Custom menus** — add menu bars to tools and trees
 - **AI-compatible** — point any LLM at `docs/LLM/` to generate tool files
 - **No shell execution** — `shell=False` everywhere, input sanitization on every run
-- **File-based permissions** — 22 capability files, secure defaults, NTFS ACL compatible
+- **File-based permissions** — 32 capability files, secure defaults, NTFS ACL compatible (see [`docs/security.md`](docs/security.md) for the full per-capability table)
 - **Fully portable** — INI settings, zero registry, copy and run
 - **Encrypted credentials** — run-as-different-user with XOR pad, immediate zeroization
 
@@ -104,7 +104,7 @@ ScripTree/
 │   ├── shell/               ← cell / ring / forest shell (NEW in V3)
 │   ├── ui/                  ← V1 editor + standalone window
 │   └── plugins/             ← capability plugins
-├── tests/                   ← test suite (1800+ tests)
+├── tests/                   ← test suite (1900+ tests)
 ├── docs/                    ← documentation + LLM authoring docs
 ├── pyproject.toml
 └── ScripTreeApps/           ← user tools and trees

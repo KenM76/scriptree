@@ -7,11 +7,14 @@ human-readable and safe to edit by hand.
 
 The tool definition. Contains everything about how the tool is invoked
 and how its form renders, but *not* any per-user state like the last
-values you typed in. Schema v2.
+values you typed in. Schema v3 (current). v0.5.0 renamed `bool` →
+`boolean`, `float` → `number`, `file_open` → `file`, `file_save` →
+`save_file`, `enum_radio` → `radio`. The runtime hard-rejects v1/v2
+files and points the user at `python -m scriptree migrate`.
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "name": "echo demo",
   "description": "Prints a message",
   "executable": "/bin/echo",
@@ -66,7 +69,9 @@ for the full schema.
 
 Per-tool saved form values. Stored next to the `.scriptree` file as a
 sidecar so the tool definition and the per-user state can be version
-controlled independently. Schema v1.
+controlled independently. Sidecar schema v1 (governed by
+`configs.py::CONFIGS_SCHEMA_VERSION`, independent of the parent
+`.scriptree`'s `SCHEMA_VERSION`).
 
 ```json
 {
@@ -101,11 +106,11 @@ See [configurations.md](configurations.md) for the full lifecycle.
 
 ## `.scriptreetree` — a tree of tools
 
-A launcher that groups several `.scriptree` files into folders. Schema v1.
+A launcher that groups several `.scriptree` files into folders. Schema v3 (same `SCHEMA_VERSION` as `.scriptree`).
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "name": "Demo toolkit",
   "nodes": [
     {
@@ -139,7 +144,10 @@ for the JSON schema.
 
 ## `<name>.scriptreetree.treeconfigs.json` — tree-level configurations
 
-Maps each sub-tool to a named configuration for standalone mode. Schema v1.
+Maps each sub-tool to a named configuration for standalone mode. Sidecar
+schema v1 (this file is governed by `configs.py::CONFIGS_SCHEMA_VERSION`,
+which is independent of the `model.py::SCHEMA_VERSION` of the parent
+`.scriptree` / `.scriptreetree`).
 
 ```json
 {
@@ -233,8 +241,10 @@ Per-file permissions: place a `permissions/` folder alongside any
 
 ## Compatibility notes
 
-- **Legacy schema v1 `.scriptree` files** (no `sections` or `env` fields)
-  load cleanly as flat-mode tools with no environment overrides.
+- **Schema v3 is a hard gate.** The v0.8+ runtime refuses to load v1/v2
+  files with an error pointing at `python -m scriptree migrate`. Run the
+  migrator on old files; it rewrites widget names (`file_open`→`file`,
+  etc.) and bumps the schema header.
 - **Unknown fields** on any object are preserved when possible but not
   guaranteed — avoid stashing your own metadata in these files.
 - **Hand-editing** is fine. ScripTree reformats the file on save, so

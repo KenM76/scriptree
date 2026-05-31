@@ -1,12 +1,8 @@
 # Environment variables and PATH
 
-> ⚠️ **Heads up (v0.1.x):** the user-defined env / PATH-prepend feature
-> is **not fully working yet**. Edits save and persist correctly, but
-> they may not actually reach the child process at run time. Treat
-> this page as the design document for the feature; don't rely on
-> these settings to take effect until the issue is resolved. Use
-> OS-level environment variables if you need a guaranteed effect for
-> now.
+User-defined env vars and PATH-prepends from the tool, configuration,
+and global Settings layers are merged into the child process before
+spawn — see the layering rules in the table below.
 
 ## Built-in `SCRIPTREE_*` variables
 

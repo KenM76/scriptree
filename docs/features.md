@@ -58,7 +58,7 @@
 
 14. **No shell execution, ever** — `shell=False` on every `Popen` call. Argument lists, not command strings. Custom menus split safely. Parser output post-sanitized.
 
-15. **File-based permission system with secure defaults** — 34 capability files control every action. Missing file = denied. Recursive search by filename, most-restrictive-wins on duplicates.
+15. **File-based permission system with secure defaults** — 32 capability files control every action. Missing file = denied. Recursive search by filename, most-restrictive-wins on duplicates.
 
 16. **Input sanitization on every run** — null bytes, control chars, shell metacharacters, path traversal, UNC paths checked before execution. Warning dialog with proceed/cancel.
 

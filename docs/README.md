@@ -2,16 +2,27 @@
 
 Welcome to ScripTree — a universal GUI generator for command-line tools.
 
-**ScripTree V3 ships with two launchers in one installation:**
+**ScripTree V3 ships with three launchers and a headless screenshot tool in one installation:**
 
+- **`run_scriptreeforest.bat`** (PRIMARY) — the **forest workspace**:
+  a persistent root cell plus every other cell linked under it.
+  Auto-discovers nearby `.scriptreering` / `.scriptreetree` /
+  `.scriptree` catalogs at startup, restores the saved layout. The
+  recommended double-click entry point for most users. See
+  **[The cell + ring shell](cell_shell.md)**.
 - **`run_scriptreering.bat`** — the **cell + ring shell**: floating
   cell launchers (hexagons or squares) on your desktop. Click a cell
   to pop up its tool menu, dock two together to form a multi-tool
-  ring, drag-drop catalogs and rings onto cells. See
-  **[The cell + ring shell](cell_shell.md)** for the full UX.
+  ring, drag-drop catalogs and rings onto cells. Layouts save as
+  `.scriptreering` files.
 - **`run_scriptree.bat`** — the classic **V1 editor**: tool runner,
-  configurations, parser, save/load. The cell shell shells out to this
-  whenever you click a tool, so it's the same editor you've always had.
+  configurations, parser, save/load. The shells (forest / ring)
+  shell out to this whenever you click a tool, so it's the same
+  editor you've always had.
+- **`run_screenshooter.bat`** — the **headless screenshot tool**.
+  Renders cells, parameter forms, popup trees, the full editor, and
+  forest composites as PNG without ever flashing a window onto the
+  user's desktop.
 
 This folder contains all the documentation, split into five sections:
 

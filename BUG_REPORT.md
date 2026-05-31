@@ -6,8 +6,8 @@
 > fixed. Each fix carries an inline ``# H1/M3/L9 fix:`` comment at
 > the site explaining the change. Regression tests for the
 > behaviourally-checkable ones live in
-> ``tests/test_bugfixes_v063.py``; the full suite (1400+ tests)
-> is green with zero regressions. A pre-fix snapshot is archived at
+> ``tests/test_bugfixes_v063.py``; the full suite (1400+ tests
+> as of 2026-05-16; current count ~1920) is green with zero regressions. A pre-fix snapshot is archived at
 > ``ScripTree4-v0.6.2-pre-bugfix-20260516_203818.zip``.
 >
 > Notes on a few: **L7** became an exit-time Save/Discard prompt for

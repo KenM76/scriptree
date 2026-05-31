@@ -1,11 +1,13 @@
 # The cell + ring shell (ScripTreeRing)
 
-ScripTree V3 ships with **two launchers in one installation**:
+ScripTree V3 ships with **three launchers + a headless screenshot tool in one installation**:
 
 | Launcher | What it does |
 |---|---|
-| `run_scriptreering.bat` | Floats one or more **cells** (hexagonal or square) on your desktop. A single click on a cell pops up its tool menu; a double click opens the V1 standalone runner or the full editor depending on what's bound to the cell. Two cells dragged close together **dock** into a *Tree Ring* whose menu merges their tools. Drag a cell away to break the ring. Save and reload layouts as `.scriptreering` files. |
-| `run_scriptree.bat` | The classic **V1 editor**. Tool runner, configurations, parser, save/load, the works. ScripTreeRing **calls the V1 editor as a subprocess** for any tool launch — it is a thin desktop launcher; V1 is the toolbox. |
+| `run_scriptreeforest.bat` **(primary)** | The **forest workspace**: a persistent root cell on the desktop plus every cell linked under it. Auto-discovers nearby `.scriptreering` / `.scriptreetree` / `.scriptree` catalogs at startup, restores the saved layout, adopts new tools as they appear. Most users double-click this after install. Internally chains into `run_scriptreering.py` with `SCRIPTREE_FOREST_MODE=1`. |
+| `run_scriptreering.bat` | Floats one or more **cells** (hexagonal or square) on your desktop with **no forest workspace**. A single click pops up its tool menu; a double click opens the V1 standalone runner or the full editor. Two cells dragged close together **dock** into a *Tree Ring*. Save and reload layouts as `.scriptreering` files. |
+| `run_scriptree.bat` | The classic **V1 editor**. Tool runner, configurations, parser, save/load. All three shells (forest / ring / cell) **call the V1 editor as a subprocess** for any tool launch — V1 is the toolbox; the shells are launchers. |
+| `run_screenshooter.bat` | Headless screenshot tool — renders cells, forms, menus, and composites as PNG without ever flashing a window onto the desktop. |
 
 > "Cell" is the user-facing term for the launcher widget. The visible
 > shape can be either `hexagon` or `square` (a Cell preferences setting),

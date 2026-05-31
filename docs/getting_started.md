@@ -10,12 +10,16 @@ For a 60-second walkthrough, see [quickstart.md](quickstart.md).
 ## Project layout
 
 ```
-YourProject/
-├── run_scriptree.py        ← main launcher
-├── run_scriptree.bat       ← Windows double-click launcher
-├── run_scriptree.sh        ← Linux / macOS launcher
+ScripTree/
+├── run_scriptreeforest.py  ← forest workspace (PRIMARY entry point)
+├── run_scriptreering.py    ← bare cell + ring shell
+├── run_scriptree.py        ← classic V1 editor launcher
+├── run_scriptree.bat       ← Windows double-click launcher (V1)
+├── run_scriptree.sh        ← Linux / macOS launcher (V1)
 ├── permissions/            ← capability permission files
-├── ScripTree/              ← application code + tests + help
+├── scriptree/              ← application code (Python package)
+├── tests/
+├── docs/                   ← help and reference
 └── ScripTreeApps/          ← your tool files and trees
 ```
 

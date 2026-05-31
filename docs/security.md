@@ -10,11 +10,12 @@ that users and IT should be aware of.
 
 ## Overview of protections
 
-> **v0.3.3 update.** All 35 capability files in the permissions
-> registry are now actually consulted at runtime.  Previous releases
-> declared 21 of them but never enforced them — putting a read-only
-> `run_tools` file did nothing, etc.  v0.3.3 closed every gap (see
-> the wiring map at the bottom of `### All capability files`).
+> Every capability file documented in the table below is consulted at
+> runtime.  Of the ~35 capability *names* documented, **32 ship as
+> blank files** in `permissions/` (default-allowed); the remaining
+> few (`add_to_user_path`, `add_to_system_path`) ship missing on
+> purpose — they're default-denied and require an admin to opt in.
+> See `### All capability files` for the wiring map.
 
 | Layer | What it does |
 |---|---|
@@ -126,6 +127,21 @@ denied for that user.
 
 The five `add_to_*_path*` capabilities all gate the missing-executable recovery dialog's "add folder to a search path" options. Three ship default-allowed (file present in `permissions/`); two ship default-denied (file missing) and require an admin to create the empty capability file before they appear in the dialog. The default-denied set is the high-blast-radius pair: modifying the user's PATH or the system PATH would persist across sessions and affect every program the user runs, not just ScripTree.
 
+To enable a default-denied capability on a deployment, create the empty
+file:
+
+```powershell
+# Windows / PowerShell
+New-Item -ItemType File -Path "permissions\settings\add_to_user_path"
+```
+
+```bash
+# Linux / macOS
+touch permissions/settings/add_to_user_path
+```
+
+The file's mere presence promotes the capability to "writable / allowed"; mark it read-only to revoke without deleting.
+
 Denied scopes appear in the dialog as greyed-out radio buttons with a "Disabled by IT — to enable, ask an admin to create..." note, so users always understand why an option isn't available.
 
 ### Per-file permissions
@@ -183,7 +199,7 @@ content:
 |---|---|---|
 | **Null bytes** (`\x00`) | All fields | Warned — can truncate strings at the OS level |
 | **Control characters** (`\x01`–`\x1F`) | All fields | Warned — can confuse terminals and log parsers |
-| **Shell metacharacters** (`;|&`$<>{}()!`) | All fields | Warned — dangerous if child process re-interprets them |
+| **Shell metacharacters** ``(`;|&`$<>{}()!`)`` | All fields | Warned — dangerous if child process re-interprets them |
 | **Path traversal** (`../`, `..\`) | Path-type fields only | Warned — may access files outside expected directory |
 | **UNC paths** (`\\server\share`) | Path-type fields only | Warned — can trigger NTLM credential harvesting |
 
@@ -319,7 +335,7 @@ parsers load. In a locked-down deployment, keep this permission denied.
 Regardless of which parser plugin runs, all output is automatically
 sanitized before being saved to a `.scriptree` file:
 
-- Shell metacharacters (`;|&`$<>{}()!`) are stripped from literal
+- Shell metacharacters ``(`;|&`$<>{}()!`)`` are stripped from literal
   tokens in the argument template
 - Shell metacharacters are stripped from parameter default values
 - Control characters are stripped from cached help text

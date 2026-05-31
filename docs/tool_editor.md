@@ -102,12 +102,16 @@ The right pane edits whichever parameter is currently selected:
 - **Label** — what the runner displays next to the widget.
 - **Description** — tooltip text. The parser also reads this to promote
   widgets (see [parsers/](parsers) docs).
-- **Type** — one of `string`, `integer`, `float`, `bool`, `path`, `enum`,
-  `multiselect`. Changing the type filters the Widget dropdown to show
-  only compatible options.
-- **Widget** — which control the runner uses: `text`, `textarea`, `number`,
-  `checkbox`, `dropdown`, `file_open`, `file_save`, `folder`,
-  `enum_radio`.
+- **Type** — one of `string`, `integer`, `number`, `boolean`, `path`,
+  `enum`, `multiselect`. Changing the type filters the Widget dropdown
+  to show only compatible options. (Schema v3 in v0.5.0+ renamed `bool`
+  → `boolean` and `float` → `number`; old files migrate with
+  `python -m scriptree migrate`.)
+- **Widget** — which control the runner uses: `text`, `textarea`,
+  `number`, `checkbox`, `dropdown`, `file`, `save_file`, `folder`,
+  `radio`, `checkbox_list`, `folder_list`, `file_list`. (Schema v3
+  in v0.5.0+ renamed `file_open` → `file`, `file_save` → `save_file`,
+  `enum_radio` → `radio`.)
 - **Required** — if checked, Run fails until this field has a value.
 - **Do not save value** — the value is never persisted into the
   configuration sidecar (useful for passwords, tokens, scratch values).

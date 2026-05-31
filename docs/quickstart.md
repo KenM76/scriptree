@@ -1,32 +1,37 @@
 # Quickstart
 
-Get a tool running in ScripTree in under two minutes.
+Get a tool running in ScripTree in under 60 seconds.
 
-> **V3 ships two launchers.** This quickstart walks through the V1
-> editor (`run_scriptree.bat`) — the same form-driven runner V1 users
-> already know. The cell + ring shell (`run_scriptreering.bat`) is a
-> floating desktop launcher built on top of V1; see
+> **V3 ships three launchers + a headless screenshot tool.** This
+> quickstart walks through the V1 editor (`run_scriptree.bat`) —
+> the same form-driven runner V1 users already know. The forest
+> workspace (`run_scriptreeforest.bat`, the **primary** entry point)
+> and the cell + ring shell (`run_scriptreering.bat`) are floating
+> desktop launchers built on top of V1; see
 > [cell_shell.md](cell_shell.md) once you have at least one
 > `.scriptree` saved.
 
 ## Project layout
 
 ```
-YourProject/
-├── run_scriptree.py        ← double-click or run from terminal
-├── run_scriptree.bat       ← Windows launcher
-├── run_scriptree.sh        ← Linux / macOS launcher
-├── permissions/            ← capability permission files (admin-managed)
+ScripTree/
+├── run_scriptreeforest.bat  ← forest workspace launcher (PRIMARY)
+├── run_scriptreeforest.py
+├── run_scriptreering.bat    ← bare cell + ring shell launcher
+├── run_scriptreering.py
+├── run_scriptree.bat        ← V1 editor launcher
+├── run_scriptree.py
+├── run_screenshooter.bat    ← headless screenshot tool
+├── screenshooter.py
+├── permissions/             ← capability permission files (admin-managed)
 │   ├── files/
 │   ├── editing/
 │   ├── running/
 │   └── settings/
-├── ScripTree/              ← the application code
-│   ├── scriptree/          ← Python package
-│   ├── tests/
-│   ├── examples/
-│   └── docs/               ← you are here
-└── ScripTreeApps/          ← your tools and tree launchers
+├── scriptree/               ← the Python package
+├── tests/
+├── docs/                    ← you are here
+└── ScripTreeApps/           ← your tools and tree launchers
 ```
 
 ## Prerequisites

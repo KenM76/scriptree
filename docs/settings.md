@@ -1,8 +1,10 @@
 # Settings
 
 Access via **Edit → Settings...**. Application-wide preferences that
-persist across sessions (stored in the system registry on Windows,
-`~/.config` on Linux).
+persist across sessions. Settings live in **`scriptree.ini`** in the
+project root (next to `run_scriptree.py`) — zero registry on Windows,
+zero `~/.config` files on Linux. Move the project folder and the
+settings travel with it.
 
 ## Layout
 
@@ -15,16 +17,19 @@ them on next startup.
 Custom path to the `permissions/` folder. By default, ScripTree
 auto-detects it by walking up from the application directory.
 
-To change this:
+Two ways to change it:
 
-1. Add a `change_permissions_path` file to the **current** permissions
-   folder
-2. Ensure the file is writable for your user
-3. Open Settings and set the new path
-
-The field is disabled until the permission is granted. You can also
-set the `SCRIPTREE_PERMISSIONS_DIR` environment variable as an
-alternative (no permission file needed for that).
+1. **Environment variable (no permission needed):** set
+   `SCRIPTREE_PERMISSIONS_DIR=/path/to/perms` before launching
+   ScripTree. This always works — handy for testing, CI, and
+   air-gapped deployments where modifying capability files isn't
+   convenient.
+2. **GUI (requires the `change_permissions_path` capability):**
+   - Add a `change_permissions_path` file to the **current**
+     permissions folder
+   - Ensure the file is writable for your user
+   - Open Settings and edit the path field (disabled until the
+     permission is granted)
 
 ## Global environment variables
 
@@ -71,9 +76,12 @@ Override order:
 
 ## Notes
 
-- Settings are stored via Qt's `QSettings` mechanism — on Windows
-  this is the registry (`HKEY_CURRENT_USER\Software\ScripTree`), on
-  Linux it's `~/.config/ScripTree/ScripTree.conf`
+- Settings are stored in `scriptree.ini` in the project root (Qt
+  `QSettings` running in `IniFormat` mode — explicitly opted out of
+  the native-registry backend so settings travel with the
+  application folder)
+- Set `SCRIPTREE_SETTINGS_PATH=/some/other/path.ini` to redirect
+  the file at launch time
 - Blank lines and lines starting with `#` are ignored in both the
   env and PATH editors
 - The `access_settings` permission must be granted for the user to
