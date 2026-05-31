@@ -5,9 +5,17 @@
 Accessible via Edit → Settings. Provides:
 
 1. **Layout** — checkbox to remember/restore the window layout on restart.
-2. **Global environment variables** — KEY=VALUE pairs with their own
+2. **Permissions / Settings paths** — relocation overrides for the
+   permissions folder and the settings INI file itself.
+3. **Personal configurations folder** — where per-user, hand-edited
+   tool configurations live.
+4. **Drop-install locations** — shared + personal roots for the
+   drag-folder-onto-forest-cell install flow (v0.8.0a23+).  Blank
+   means "use OS defaults" -- see
+   :mod:`scriptree.core.app_install` for fall-back rules.
+5. **Global environment variables** — KEY=VALUE pairs with their own
    override checkbox.
-3. **Global PATH prepend** — directories to prepend to PATH, with their
+6. **Global PATH prepend** — directories to prepend to PATH, with their
    own override checkbox.
 
 ## For maintainers / LLMs
@@ -201,6 +209,72 @@ class SettingsDialog(QDialog):
 
         root.addWidget(pc_group)
 
+        # --- Drop-install roots ---
+        # Two locations where dragged folders/zips land on the forest
+        # cell.  Both default to OS-canonical paths resolved by
+        # ``scriptree.core.app_install.default_shared_root`` /
+        # ``default_personal_root``; leaving these fields blank means
+        # "use the default".  When set, the values are honoured FIRST
+        # before the OS fall-back logic kicks in.  See
+        # ``scriptree/core/app_install.py`` for the resolution order.
+        install_group = QGroupBox("Drop-install locations")
+        install_lay = QVBoxLayout(install_group)
+
+        install_hint = QLabel(
+            "<i>When you drag a folder or zip onto a forest cell, "
+            "ScripTree offers to install it in one of these "
+            "locations.  Leave blank for the OS defaults "
+            "(<code>&lt;install&gt;/ScripTreeApps/</code> for "
+            "<b>shared</b>; per-user app data for "
+            "<b>personal</b>).</i>"
+        )
+        install_hint.setWordWrap(True)
+        install_lay.addWidget(install_hint)
+
+        # Shared row.
+        shared_label = QLabel("Shared root:")
+        install_lay.addWidget(shared_label)
+        shared_row = QHBoxLayout()
+        self._install_shared_edit = QLineEdit()
+        self._install_shared_edit.setPlaceholderText(
+            "(default — <ScripTree install>/ScripTreeApps/)"
+        )
+        saved_shared = settings.value(
+            "install.shared_root", "", type=str,
+        )
+        self._install_shared_edit.setText(saved_shared)
+        shared_row.addWidget(self._install_shared_edit, stretch=1)
+        self._btn_browse_install_shared = QPushButton("Browse...")
+        self._btn_browse_install_shared.clicked.connect(
+            self._browse_install_shared_dir
+        )
+        shared_row.addWidget(self._btn_browse_install_shared)
+        install_lay.addLayout(shared_row)
+
+        # Personal row.
+        personal_label = QLabel("Personal root:")
+        install_lay.addWidget(personal_label)
+        personal_row = QHBoxLayout()
+        self._install_personal_edit = QLineEdit()
+        self._install_personal_edit.setPlaceholderText(
+            "(default — OS per-user app data)"
+        )
+        saved_personal = settings.value(
+            "install.personal_root", "", type=str,
+        )
+        self._install_personal_edit.setText(saved_personal)
+        personal_row.addWidget(
+            self._install_personal_edit, stretch=1,
+        )
+        self._btn_browse_install_personal = QPushButton("Browse...")
+        self._btn_browse_install_personal.clicked.connect(
+            self._browse_install_personal_dir
+        )
+        personal_row.addWidget(self._btn_browse_install_personal)
+        install_lay.addLayout(personal_row)
+
+        root.addWidget(install_group)
+
         # --- Global environment variables ---
         env_group = QGroupBox("Global environment variables")
         env_lay = QVBoxLayout(env_group)
@@ -307,6 +381,30 @@ class SettingsDialog(QDialog):
         if path:
             self._personal_configs_edit.setText(path)
 
+    def _browse_install_shared_dir(self) -> None:
+        """Pick a folder for the shared drop-install root.
+
+        Empty string in the edit means "use the default" -- the
+        browse dialog defaults to the home directory so the user has
+        a sensible starting point if they haven't picked anything
+        yet.
+        """
+        start = self._install_shared_edit.text().strip()
+        path = QFileDialog.getExistingDirectory(
+            self, "Select shared drop-install root", start,
+        )
+        if path:
+            self._install_shared_edit.setText(path)
+
+    def _browse_install_personal_dir(self) -> None:
+        """Pick a folder for the personal drop-install root."""
+        start = self._install_personal_edit.text().strip()
+        path = QFileDialog.getExistingDirectory(
+            self, "Select personal drop-install root", start,
+        )
+        if path:
+            self._install_personal_edit.setText(path)
+
     # --- result accessors ---
 
     def result_permissions_path(self) -> str:
@@ -317,6 +415,21 @@ class SettingsDialog(QDialog):
 
     def result_personal_configs_path(self) -> str:
         return self._personal_configs_edit.text().strip()
+
+    def result_install_shared_root(self) -> str:
+        """Return the user-chosen shared drop-install root.
+
+        Empty string means "use the default" -- ``app_install``
+        treats blank as "no override" and falls back to its OS rules.
+        """
+        return self._install_shared_edit.text().strip()
+
+    def result_install_personal_root(self) -> str:
+        """Return the user-chosen personal drop-install root.
+
+        Empty string means "use the default" (OS per-user app data).
+        """
+        return self._install_personal_edit.text().strip()
 
     def result_remember_layout(self) -> bool:
         return self._chk_remember_layout.isChecked()

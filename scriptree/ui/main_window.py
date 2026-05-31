@@ -1745,4 +1745,16 @@ class MainWindow(QMainWindow):
         self._settings.setValue("settings_path", new_settings_path)
         new_pc_path = dlg.result_personal_configs_path()
         self._settings.setValue("personal_configs_path", new_pc_path)
+        # Drop-install roots: shared + personal.  Blank string means
+        # "no override" -- ``app_install`` will fall back to its OS
+        # defaults.  Stored under the same key names that
+        # ``default_shared_root`` / ``default_personal_root`` read.
+        self._settings.setValue(
+            "install.shared_root",
+            dlg.result_install_shared_root(),
+        )
+        self._settings.setValue(
+            "install.personal_root",
+            dlg.result_install_personal_root(),
+        )
         self.statusBar().showMessage("Settings saved.", 3000)
