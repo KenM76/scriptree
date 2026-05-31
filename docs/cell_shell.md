@@ -174,6 +174,83 @@ normal "open with" association.
 
 ---
 
+## Drop-install: folders and zips onto a forest cell (v0.8.0a23+)
+
+If you drag a **folder** or a **`.zip` archive** onto a forest cell
+(the hub at the top of your forest), ScripTree treats it as an *app
+to install* and walks you through two short dialogs:
+
+### 1. Where to install
+
+| Choice | Default location |
+|---|---|
+| **Shared** | `<ScripTree install>/ScripTreeApps/` — travels with the install. Good for portable / USB setups and for apps that should be visible to every Windows user on the machine. |
+| **Personal** | OS-canonical per-user app data: `%LOCALAPPDATA%/ScripTree/Apps/` on Windows, `~/Library/Application Support/ScripTree/Apps/` on macOS, `$XDG_DATA_HOME/ScripTree/Apps/` (or `~/.local/share/ScripTree/Apps/`) on Linux.  Private to the current user — does not need elevation. |
+| **Other…** | Pick any folder.  ScripTree creates the app's subfolder inside it. |
+
+Below each radio is a **live preview path** that updates as you
+edit the **Install as:** field.  By default the app name is taken
+from the folder name (or zip stem, e.g. `MyTool.zip` → `MyTool`);
+type a new name to rename on install.  Unsafe characters
+(`< > : " | ? *` and control codes) are scrubbed silently — you
+won't see an error, just a sanitised name.
+
+You can override the **Shared** and **Personal** defaults in
+**Edit → Settings… → Drop-install locations** (writes the
+`install.shared_root` / `install.personal_root` INI keys).  Blank
+field means "use the OS default" again.
+
+### 2. Conflict handling
+
+If the chosen target already contains a folder with that name,
+a second dialog opens with four radio buttons:
+
+| Choice | What it does | When to use |
+|---|---|---|
+| **Update** (default) | For every file in the *source*, replace the corresponding file in the *target*.  Files in the target that don't exist in the source are **left untouched** — your `.scriptree.configs.json` sidecars and any user-edited configurations survive. | Upgrading an app to a new release. |
+| **Overwrite** | Delete the existing target folder, then copy/extract fresh.  **Destructive** — you lose any local edits. | Reinstalling a broken or corrupted app. |
+| **Rename** | Install as `<name>-2`, `<name>-3`, … until a free slot is found (capped at 999). | Keeping multiple versions side-by-side, or installing two apps that happen to share a name. |
+| **Cancel** | Abort.  Nothing is written. | Mis-targeted drop. |
+
+If you skip the conflict dialog (close it without picking),
+the safe default is **Cancel** — nothing is written.
+
+### 3. After install
+
+The forest's `refresh_from_sources()` is fired immediately, so
+the newly-installed app appears in the forest's menu and tree on
+the next layout pass.  The forest's `auto_discover` configuration
+governs whether new items are auto-added or prompted-for — same
+flow as the manual **Forest ▶ Auto-add** menu entry.
+
+### Zip extraction details
+
+* **Single-folder wrapper auto-detect.**  If the zip's top level
+  is one directory whose name matches the zip stem
+  (case-insensitive, with `.zip` stripped), ScripTree extracts
+  *that folder's contents* directly into the target.  Otherwise
+  the zip contents are extracted into a folder named after the
+  zip stem.  Either way you get a clean `<target>/<app name>/…`
+  tree without the awkward `<target>/<app name>/<app name>/…`
+  double-wrap.
+* **Path-traversal safety.**  Members with `..` segments or
+  absolute paths are rejected before any byte is written — the
+  install is aborted with an error.
+* **Symlinks inside zips are NOT followed.**  We extract them
+  as ordinary file entries.
+
+### What about non-forest cells?
+
+Drop-install is **gated on the forest master**.  Dropping a
+folder onto a standalone cell, a ring master, or a ring member
+is silently ignored (the standard `.scriptree` / `.scriptreetree`
+/ `.scriptreering` drops still work on every cell — only the
+"new behaviour" of installing a *folder* is forest-specific,
+because the forest is the surface that knows how to pick up the
+newly-installed app via auto-discovery).
+
+---
+
 ## Right-click menu
 
 The right-click menu (v0.2.3 + v0.2.4) is organised into three
