@@ -98,6 +98,16 @@
     "version": {
       "current": "0.8.0a23",
       "_comment_version": "Source: pyproject.toml `project.version`. Major-version cadence is not yet formalized; the runtime ships pre-1.0 alphas as of `_updated_at`."
+    },
+
+    "terminology": {
+      "_comment": "Canonical phrases that all marketing/legal surfaces MUST use. Brand-rename safe — these are the OPERATOR (marketplace) attestations, not the runtime's; a fork of the marketplace would replace these values, but the field names are stable.",
+      "bundle_attestation_verb": "operator-attested",
+      "_comment_attestation_verb": "Replaces 'operator-signed' / 'Platform-signed' / 'we sign your bundle'. The runtime does NOT cryptographically sign; the operator (marketplace) attests via ClamAV scan + identity bind + record stamp. 'Attested' is honest where 'signed' implied cryptographic non-repudiation that doesn't exist.",
+      "bundle_attestation_noun": "operator attestation",
+      "_comment_attestation_noun": "Use as a noun phrase: 'each download includes an operator attestation' (not 'a Platform signature').",
+      "what_the_operator_does": "validate, identity-bind, and stamp",
+      "_comment_what_the_operator_does": "Short verb-phrase summary of what the marketplace does to a bundle before it's distributed. Read by the producer-agreement help-section + the help-center 'Trust & Safety' page."
     }
   }
 }
