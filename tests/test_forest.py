@@ -95,11 +95,22 @@ class TestForestIoRoundTrip:
         assert loaded.items == []
         assert loaded.excluded == []
         assert loaded.auto_discover.enabled is True
-        # v0.3.22: default roots are both "ScripTreeApps" (in-source)
+        # v0.3.22: default roots include "ScripTreeApps" (in-source)
         # and "../ScripTreeApps" (sibling-of-install layout).
-        assert loaded.auto_discover.roots == [
-            "ScripTreeApps", "../ScripTreeApps",
-        ]
+        # v0.8.0a24+: also includes the host's per-user app-data
+        # directory (where the drop-install dialog's "Personal"
+        # target installs to) so freshly-installed apps are picked
+        # up automatically by the next forest scan.
+        roots = loaded.auto_discover.roots
+        assert "ScripTreeApps" in roots
+        assert "../ScripTreeApps" in roots
+        # Third root is the host-specific personal-apps directory.
+        # We don't pin the exact string (it's OS- and user-
+        # specific) but we DO pin that there are three entries.
+        assert len(roots) == 3, (
+            f"Expected 3 default roots (ScripTreeApps, "
+            f"../ScripTreeApps, personal-apps), got {roots!r}"
+        )
         assert loaded.auto_discover.update_mode == "prompt"
 
     def test_items_with_position_round_trip(self, tmp_path: Path) -> None:

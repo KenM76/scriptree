@@ -225,20 +225,31 @@ the next layout pass.  The forest's `auto_discover` configuration
 governs whether new items are auto-added or prompted-for — same
 flow as the manual **Forest ▶ Auto-add** menu entry.
 
-**Personal apps are always scanned by every forest** (v0.8.0a24+).
-Whatever path `default_personal_root()` resolves to on this machine
-is implicitly appended to the forest's discovery roots at scan
-time — even on legacy forest files written before drop-install
-existed, even when the user has hand-edited their `roots` list and
-forgotten to add it.  This means an app you drop-install today is
-guaranteed to show up on the next forest launch with **no manual
-config edit**.  The path is **not** written into the
-`.scriptreeforest` JSON (forests stay portable across machines and
-users); it's resolved fresh on every scan via
-`scriptree.core.app_install.effective_forest_roots`.  Users who do
-not want a particular personal-app surfaced can still add its path
-to the forest's `excluded[]` list (right-click → **Exclude**), the
-same way they would exclude any other discovered item.
+**The personal-apps directory is in the default scan-folders list**
+(v0.8.0a24+).  When a fresh forest is constructed, its
+`AutoDiscoverConfig.roots` defaults to **three** entries instead of
+two:
+
+1. `ScripTreeApps` (in-install)
+2. `../ScripTreeApps` (sibling-to-install)
+3. The host machine's per-user app-data directory — whatever
+   `default_personal_root()` returns on the OS where the forest is
+   first constructed (e.g. `C:\Users\<you>\AppData\Local\ScripTree\Apps`
+   on Windows, `~/Library/Application Support/ScripTree/Apps` on
+   macOS, `~/.local/share/ScripTree/Apps` on Linux).
+
+The third entry is **visible in the forest settings dialog's
+scan-folders list** — you can edit it, remove it, or add a second
+personal path by hand.  If a forest written on Windows is later
+opened on macOS (or vice versa), the Windows path doesn't exist on
+the macOS host so `discover()` silently skips it — no error, no
+warning.  Add the macOS path manually via the settings dialog if you
+want both surfaces scanned from one forest.
+
+This means an app you drop-install on this machine is guaranteed to
+show up on the next forest launch with no further setup, while
+forests stay editable and the user can always see exactly which
+folders are being scanned.
 
 ### Zip extraction details
 

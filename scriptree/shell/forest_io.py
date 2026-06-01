@@ -175,6 +175,43 @@ class ForestItem:
     is consistent with how single-cell standalones are tracked."""
 
 
+def _default_roots() -> list[str]:
+    """Compute the factory default for ``AutoDiscoverConfig.roots``.
+
+    Three entries, in order:
+
+      1. ``"ScripTreeApps"``         — in-install layout
+      2. ``"../ScripTreeApps"``      — sibling-to-install layout
+      3. ``str(default_personal_root())`` — the host OS's per-user
+         app-data directory used by the drop-install dialog's
+         **Personal** target.  Resolved fresh at call time, so a
+         freshly-constructed ``AutoDiscoverConfig`` always points
+         at the actual on-disk path the current user would land
+         apps in.
+
+    Importing ``default_personal_root`` inside the function (rather
+    than at module top) avoids a circular import: ``app_install``
+    indirectly references ``forest_io`` via the launcher prelude on
+    some platforms.  At call time the import has long since
+    resolved.
+
+    The list is materialised eagerly, not lazily — once a forest
+    is constructed (or a new one created), its ``roots`` list is a
+    plain Python list of strings the user can see and edit in the
+    settings dialog.  Re-running ``_default_roots()`` is not
+    expensive (path joins + a settings lookup), so we don't cache.
+    """
+    from scriptree.core.app_install import default_personal_root
+    try:
+        personal = str(default_personal_root())
+    except Exception:  # noqa: BLE001
+        # Should never happen in normal use, but a malformed env
+        # var should not break forest construction.  Fall through
+        # to just the two static roots.
+        return ["ScripTreeApps", "../ScripTreeApps"]
+    return ["ScripTreeApps", "../ScripTreeApps", personal]
+
+
 @dataclass
 class AutoDiscoverConfig:
     """User-tunable settings for the discovery / update-checking flow."""
@@ -185,16 +222,17 @@ class AutoDiscoverConfig:
     untouched."""
 
     roots: list[str] = field(
-        default_factory=lambda: ["ScripTreeApps", "../ScripTreeApps"]
+        default_factory=lambda: _default_roots()
     )
     """Folders to scan, relative to the project root (or absolute).
 
-    Default: two paths, both resolved at discovery time against the
-    project root (the directory containing
-    ``branding/branding.config.json``):
+    Default: three paths, all resolved at discovery time:
 
       1. ``ScripTreeApps``      — apps living inside the ScripTree
                                   install (the in-source layout).
+                                  Resolves against the project root
+                                  (the directory containing
+                                  ``branding/branding.config.json``).
       2. ``../ScripTreeApps``   — apps sibling to the ScripTree
                                   folder (lets a deployment keep
                                   ScripTreeApps outside the
@@ -202,11 +240,28 @@ class AutoDiscoverConfig:
                                   separate repo, mounted via a
                                   symlink, or kept on a shared
                                   team drive).
+      3. The OS-canonical per-user app-data directory used by the
+         drop-install dialog's **Personal** target (the path
+         returned by
+         ``scriptree.core.app_install.default_personal_root``):
+
+           * Windows: ``%LOCALAPPDATA%\\ScripTree\\Apps``
+           * macOS:   ``~/Library/Application Support/ScripTree/Apps``
+           * Linux:   ``$XDG_DATA_HOME/ScripTree/Apps`` (or
+                       ``~/.local/share/ScripTree/Apps``)
+
+         Resolved on the **host machine** at default construction
+         time so a forest written on one OS lists THAT OS's path
+         in its JSON.  If the forest is later opened on a different
+         OS, the missing path is silently skipped (see below) —
+         the user can add the new-host path via the forest settings
+         dialog if they want both surfaces scanned.
 
     Folders that don't exist are skipped silently by ``discover``
-    — both defaults can be present without producing errors if
-    only one (or neither) of the two layouts is realised on a
-    given machine.
+    — all three defaults can be present without producing errors
+    if only some of them are realised on a given machine.  The
+    user sees no message about a missing path; the walker just
+    moves on.
 
     The forest settings dialog lets the user add / remove entries.
     Relative paths re-resolve against the project root every time

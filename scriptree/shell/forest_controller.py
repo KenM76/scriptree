@@ -751,17 +751,7 @@ class ForestController(QObject):
 
     def discover_now(self) -> DiscoveryDiff:
         cfg = self.forest.auto_discover
-        # Augment the user's configured roots with the per-machine
-        # personal-apps directory so apps the user drop-installs via
-        # the forest cell are picked up by every subsequent discovery
-        # pass automatically -- without mutating the serialised
-        # ``.scriptreeforest`` config (which would make the forest
-        # non-portable across machines).  See
-        # ``scriptree.core.app_install.effective_forest_roots`` for
-        # the dedup contract.
-        from scriptree.core.app_install import effective_forest_roots
-        roots = effective_forest_roots(cfg.roots)
-        discovered = discover(roots, cfg.include, self.forest.excluded)
+        discovered = discover(cfg.roots, cfg.include, self.forest.excluded)
         return diff_against(
             self.forest.items, discovered, self.forest.excluded,
         )
