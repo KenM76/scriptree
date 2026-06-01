@@ -212,6 +212,77 @@ def default_personal_root() -> Path:
     return Path.home() / ".local" / "share" / "ScripTree" / "Apps"
 
 
+def effective_forest_roots(user_roots: list[str]) -> list[str]:
+    """Return the discovery roots the forest should actually scan,
+    combining the user's configured roots with the per-machine
+    personal-apps directory.
+
+    Why a runtime helper rather than baking the personal path into
+    ``AutoDiscoverConfig.roots``'s default factory:
+
+    * ``AutoDiscoverConfig.roots`` is serialised into every
+      ``.scriptreeforest`` file.  Baking a machine-specific path into
+      the default (``%LOCALAPPDATA%/ScripTree/Apps`` on Windows etc.)
+      would write that path into the JSON the first time a forest is
+      saved, then re-opening that same forest on a different machine
+      (or under a different user) would scan a stale, wrong-machine
+      path.  Forests are meant to travel with the user.
+    * The personal-apps root is "where this user just dropped an app
+      via the drop-install dialog" — it must always be scanned, even
+      on legacy forests written before this feature, even when the
+      user has hand-edited ``roots`` and forgotten to add it.  Adding
+      it at resolution time (not at config-load time) gives us that
+      guarantee without mutating the user's config.
+    * The user can still REMOVE the personal apps directory from
+      discovery by adding its path to ``ForestDef.excluded`` (per-app
+      paths).  This helper does not check ``excluded`` — that's
+      ``discover()``'s job downstream, and the contract there
+      already handles "user excluded this path".
+
+    The returned list:
+
+    * keeps the user-configured entries first (preserving their
+      ordering, so the priority-rule walker still sees them in the
+      order the user wrote them);
+    * appends the personal-apps directory unless it is already
+      present (case-insensitive compare on resolved absolute paths,
+      so ``"~/.local/share/ScripTree/Apps"`` and the same path
+      already absolutified don't duplicate).
+
+    Non-existent personal-apps directories are returned anyway —
+    ``discover()`` already silently skips roots that don't exist
+    on disk, and returning the path means "if the user creates it
+    later, the next scan picks it up automatically without a
+    config edit".
+    """
+    out = list(user_roots)
+    try:
+        personal = default_personal_root().resolve()
+    except Exception:  # noqa: BLE001
+        # Should never happen, but a malformed env var ought not to
+        # break forest discovery.  Falling through with just the
+        # user roots is the safe behaviour.
+        return out
+
+    personal_norm = str(personal).casefold()
+    for existing in user_roots:
+        try:
+            ep = Path(existing).expanduser()
+            if not ep.is_absolute():
+                from scriptree.shell.forest_io import _project_root
+                ep = (_project_root() / ep).resolve()
+            else:
+                ep = ep.resolve()
+            if str(ep).casefold() == personal_norm:
+                return out
+        except Exception:  # noqa: BLE001
+            # If we can't resolve an entry (e.g. invalid syntax),
+            # treat it as "not the personal root" and continue.
+            continue
+    out.append(str(personal))
+    return out
+
+
 def _settings_string(key: str) -> str:
     """Read a string from ``scriptree.ini``.  Returns ``""`` when
     the key is absent / QSettings unavailable / any other read
@@ -532,6 +603,7 @@ __all__ = [
     "InstallResult",
     "default_personal_root",
     "default_shared_root",
+    "effective_forest_roots",
     "infer_app_name",
     "install_app",
     "pick_rename_target",

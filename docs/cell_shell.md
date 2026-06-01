@@ -225,6 +225,21 @@ the next layout pass.  The forest's `auto_discover` configuration
 governs whether new items are auto-added or prompted-for — same
 flow as the manual **Forest ▶ Auto-add** menu entry.
 
+**Personal apps are always scanned by every forest** (v0.8.0a24+).
+Whatever path `default_personal_root()` resolves to on this machine
+is implicitly appended to the forest's discovery roots at scan
+time — even on legacy forest files written before drop-install
+existed, even when the user has hand-edited their `roots` list and
+forgotten to add it.  This means an app you drop-install today is
+guaranteed to show up on the next forest launch with **no manual
+config edit**.  The path is **not** written into the
+`.scriptreeforest` JSON (forests stay portable across machines and
+users); it's resolved fresh on every scan via
+`scriptree.core.app_install.effective_forest_roots`.  Users who do
+not want a particular personal-app surfaced can still add its path
+to the forest's `excluded[]` list (right-click → **Exclude**), the
+same way they would exclude any other discovered item.
+
 ### Zip extraction details
 
 * **Single-folder wrapper auto-detect.**  If the zip's top level
