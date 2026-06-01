@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/KenM76/scriptree/blob/main/product-truth.schema.json",
+  "title": "product-truth schema v1",
+  "description": "Schema for product-truth.json — the canonical, cross-product source of truth for the ScripTree runtime's product identity, shipped feature list, host-plugin matrix, and install model. Consumed (read-only, via sync) by the ScripTreeApps marketplace and the scriptree.org sister site. See marketplace ADR-0027 for the architecture rationale.",
+  "type": "object",
+  "required": ["_schema_version", "product"],
+  "properties": {
+    "_schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bumps require coordinated PRs in every downstream consumer."
+    },
+    "_updated_at": {
+      "type": "string",
+      "description": "ISO-8601 date the file was last hand-edited."
+    },
+    "_canonical_source": { "type": "string" },
+    "_canonical_source_remote": { "type": "string" },
+    "_consumer_note": { "type": "string" },
+    "_governance": { "type": "string" },
+
+    "product": {
+      "type": "object",
+      "required": ["canonical_name", "tagline_short", "tagline_long", "features"],
+      "properties": {
+        "canonical_name":       { "type": "string", "minLength": 1 },
+        "tagline_short":        { "type": "string", "minLength": 1 },
+        "tagline_long":         { "type": "string", "minLength": 1 },
+        "description_paragraph":{ "type": "string", "minLength": 1 },
+        "what_it_is":           { "type": "array", "items": { "type": "string" } },
+        "what_it_is_not":       { "type": "array", "items": { "type": "string" } },
+
+        "host_plugins": {
+          "type": "object",
+          "properties": {
+            "shipped":             { "type": "array", "items": { "type": "string" } },
+            "planned":             { "type": "array", "items": { "type": "string" } },
+            "not_planned_today":   { "type": "array", "items": { "type": "string" } }
+          }
+        },
+
+        "features": {
+          "type": "object",
+          "description": "Map of feature-slug to { status: shipped | planned | not_planned }. Status enum is binding on downstream marketing copy.",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "type": "object",
+              "required": ["status"],
+              "properties": {
+                "status": { "enum": ["shipped", "planned", "not_planned"] }
+              }
+            }
+          }
+        },
+
+        "install_model": {
+          "type": "object",
+          "properties": {
+            "distribution":            { "type": "string" },
+            "verification_at_install": { "type": "string" },
+            "update_mechanism":        { "type": "string" }
+          }
+        },
+
+        "marketplace": {
+          "type": "object",
+          "properties": {
+            "exists":        { "type": "boolean" },
+            "canonical_url": { "type": "string", "format": "uri" },
+            "handles":       { "type": "array", "items": { "type": "string" } }
+          }
+        },
+
+        "open_source": {
+          "type": "object",
+          "properties": {
+            "license":         { "type": "string" },
+            "repo_runtime":    { "type": "string", "format": "uri" },
+            "repo_demos":      { "type": "string", "format": "uri" }
+          }
+        },
+
+        "version": {
+          "type": "object",
+          "properties": {
+            "current": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

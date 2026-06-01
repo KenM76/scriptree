@@ -1,0 +1,103 @@
+{
+  "_schema_version": 1,
+  "_updated_at": "2026-05-31",
+  "_canonical_source": "D:/Dev/ScripTree/product-truth.json (this file)",
+  "_canonical_source_remote": "github.com/KenM76/scriptree:product-truth.json",
+  "_consumer_note": "DO NOT edit a consumer's copy by hand. Downstream sites (the ScripTreeApps marketplace, the scriptree.org Astro sister site) hold a synced read-only copy at product-truth.synced.json and run `pnpm sync:product-truth` to refresh it. Their CI fails on drift between the synced copy and this source.",
+  "_governance": "Maintained by the runtime author. Schema changes (anything that adds, removes, or changes the meaning of a top-level key) require a `_schema_version` bump and a downstream PR cycle. See marketplace ADR-0027 for the full architecture rationale.",
+
+  "product": {
+    "canonical_name": "ScripTree",
+    "tagline_short": "Universal GUI generator for command-line tools",
+    "tagline_long": "ScripTree is an open-source desktop runtime that turns command-line tools into clean GUIs. Point it at an executable and you get a labeled form with dropdowns, file pickers, and checkboxes — no GUI code required. The same runtime powers the ScripTreeApps marketplace.",
+    "description_paragraph": "ScripTree is an open-source desktop runtime (PySide6, Python 3.11+) for turning command-line tools into GUI-driven launchers. A tool is described in a `.scriptree` file (parameters, defaults, environment, capability scopes); ScripTree reads the description, builds a form for it, and runs the tool with `shell=False` and input sanitization on every invocation. Tools can be grouped into `.scriptreetree` trees or arranged as `.scriptreering` desktop cells. The forest workspace pulls everything in a folder together into one persistent layout. The runtime is portable (zip-and-run, no registry, no admin rights) and configuration is INI-based.",
+
+    "what_it_is": [
+      "GUI launcher for CLI tools, organized as a tree of hexagonal cells (the V3 \"forest workspace\")",
+      "Auto-parser for `--help` output from argparse, click, PowerShell, Windows-style /flag tools, and GNU long-flag tools",
+      "Named, reusable per-tool configurations (presets with environment overrides, UI visibility, hidden parameters)",
+      "Standalone (single-tool) launcher mode for end-user-facing distribution of one tool at a time",
+      "Custom menus per-tool and per-tree (`.scriptreetree`)",
+      "File-based capability permissions — 32 capability files in `permissions/`, NTFS-ACL compatible, secure defaults",
+      "Encrypted credentials store for run-as-different-user (XOR pad, immediate zeroization)",
+      "Portable: vendored Python + PySide6 in `lib/`, INI settings, zero registry, copy and run",
+      "Headless screenshot CLI (`screenshooter.py`) for rendering tools, trees, cells, popup menus, and forest composites as PNG without ever showing a window"
+    ],
+
+    "what_it_is_not": [
+      "NOT a sandbox or OS-level isolation layer — the file-based permissions are a discipline, not an enforcement boundary (see `scriptree/core/sanitize.py:45,133`: \"warning, not a sandbox\")",
+      "NOT a bundle-signing platform — there is no cryptographic signature on the runtime's `.scriptree` / `.scriptreetree` files and no signature-verification step at install time",
+      "NOT an automatic update delivery service — installs are extract-folder-from-zip; updates are a re-extract by the user (or by the operator of a downstream marketplace)",
+      "NOT a rollback service — previous versions must be retained manually by the user; the runtime has no rollback UI or per-app version directory",
+      "NOT a process supervisor — ScripTree launches a tool and waits for it; it does not restart, monitor, or daemonize child processes",
+      "NOT a network-aware update checker — the runtime does not phone home"
+    ],
+
+    "host_plugins": {
+      "_comment": "Host-application integrations are provided by the `combridge` runtime (bundled at `lib/combridge/`). Each plugin is one named plugin in `combridge/plugins/<Name>/`. Status enum: shipped | planned | not_planned. Only `shipped` plugins may be advertised as supported today.",
+      "shipped": ["solidworks", "excel", "word", "powerpoint", "outlook"],
+      "planned": [],
+      "not_planned_today": ["autocad", "inventor", "revit"],
+      "_comment_aspirational": "AutoCAD / Inventor / Revit are listed under `not_planned_today` because downstream marketing has sometimes advertised them. No `combridge` plugin exists for any of them; they are not on the runtime roadmap as of this file's `_updated_at`. If/when one is added, move the slug from `not_planned_today` to `planned` (work begun) or `shipped` (in `combridge/plugins/`)."
+    },
+
+    "features": {
+      "_comment": "Status enum: shipped | planned | not_planned. Marketing surfaces (marketplace, sister site, producer agreement) MUST NOT claim a feature whose status is not `shipped`. Promote a status from `not_planned` to `planned` only when there's a concrete roadmap entry; from `planned` to `shipped` only when the code actually exists.",
+      "auto_parse_cli":          { "status": "shipped" },
+      "named_configs":           { "status": "shipped" },
+      "standalone_mode":         { "status": "shipped" },
+      "tree_launchers":          { "status": "shipped" },
+      "custom_menus":            { "status": "shipped" },
+      "file_based_permissions":  { "status": "shipped" },
+      "encrypted_credentials":   { "status": "shipped" },
+      "headless_screenshot_cli": { "status": "shipped" },
+      "portable_zip_install":    { "status": "shipped" },
+      "shell_false_execution":   { "status": "shipped" },
+      "bundle_signing":          { "status": "not_planned" },
+      "buyer_side_verify":       { "status": "not_planned" },
+      "sandboxed_execution":     { "status": "not_planned" },
+      "auto_update_delivery":    { "status": "not_planned" },
+      "one_click_rollback":      { "status": "not_planned" },
+      "process_supervision":     { "status": "not_planned" }
+    },
+
+    "install_model": {
+      "distribution": "GitHub Releases (portable ZIP) + source clone of `KenM76/scriptree`",
+      "_comment_distribution": "There is no managed installer, no MSI, no app-store distribution channel today. End-users download the ZIP and extract it.",
+      "verification_at_install": "none",
+      "_comment_verification": "No cryptographic signature on the ZIP, no checksum verification by the runtime at extract time, no first-run verifier. Add `verification_at_install: hash` or `signature` only when the runtime ships that code path.",
+      "update_mechanism": "manual_redownload",
+      "_comment_update": "User re-downloads the new ZIP and re-extracts. No in-app updater. The marketplace may notify buyers that a new version exists; that notification is a marketplace feature, not a runtime feature."
+    },
+
+    "marketplace": {
+      "_comment": "Where the runtime's commercial surface lives. The runtime itself does not handle catalog, payments, reviews, or refunds — those belong to the marketplace. Marketplace brand identity (palette, fonts, asset paths) stays in the marketplace's own `branding/branding.config.json`; this block only records that a marketplace exists and where it is.",
+      "exists": true,
+      "canonical_url": "https://scriptreeapps.com",
+      "handles": [
+        "catalog",
+        "payments",
+        "reviews",
+        "license_disclosure",
+        "refunds",
+        "moderation",
+        "update_notifications"
+      ]
+    },
+
+    "open_source": {
+      "license": "MIT",
+      "license_source": "D:/Dev/ScripTree/LICENSE",
+      "_comment_license": "Verified against LICENSE line 1: \"MIT License\", line 3: \"Copyright (c) 2026 Ken M\".",
+      "repo_runtime": "https://github.com/KenM76/scriptree",
+      "repo_demos": "https://github.com/KenM76/scriptree-demos",
+      "runtime_language": "Python 3.11+",
+      "runtime_ui_toolkit": "PySide6 (Qt 6)"
+    },
+
+    "version": {
+      "current": "0.8.0a23",
+      "_comment_version": "Source: pyproject.toml `project.version`. Major-version cadence is not yet formalized; the runtime ships pre-1.0 alphas as of `_updated_at`."
+    }
+  }
+}
