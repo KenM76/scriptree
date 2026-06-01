@@ -216,30 +216,54 @@ def _render_form(
     *,
     config: str | None = None,
     standalone: bool = False,
+    show_output: bool = False,
+    show_extras: bool = False,
+    show_command_line: bool = False,
 ) -> None:
     """Render the parameter form view of a single tool.
+
+    **Default behaviour (post v0.8.0a23 doc-screenshot policy):**
+    the extra-args box, command-line preview, and output pane are
+    **hidden** unless the caller opts in with the matching
+    ``show_*`` flag.  This matches the "marketing screenshot" use
+    case — show only what the user fills in to run the tool, not
+    the developer chrome that surrounds it.  Pass any of the
+    ``show_*`` flags to put a section back.
+
+    The form panel auto-grows to its ``sizeHint`` so every parameter
+    is visible without scrolling.  ``height`` is treated as a
+    *minimum* height when the sections are hidden — the captured
+    image grows downward to fit all parameters if the form's natural
+    height exceeds the requested ``height``.
 
     Optional flags:
       * ``config`` — name of a sidecar configuration to activate
         before capture.  ``None`` uses the sidecar's default
         (matching what standalone mode picks at boot).  Unknown
         names fall through to the default with a stderr warning.
-      * ``standalone`` — when True, render with ``_standalone_mode
-        = True`` and apply the active config's ``UIVisibility``
-        (hides command line, extra args, copy-argv, env button,
-        etc. per the config's flags).  When False (default), every
-        control is visible — matching the docked-in-MainWindow
-        view.
+      * ``standalone`` — when True, also apply the active config's
+        ``UIVisibility`` (copy-argv, env button, config-bar mode,
+        etc.) so the captured form matches the in-cell runtime
+        view.  When False (default), the only sections the
+        screenshooter hides are the three it controls explicitly
+        (extras / command-line / output) and the rest stays at the
+        IDE/docked defaults.
+      * ``show_output`` / ``show_extras`` / ``show_command_line`` —
+        opt back in to a hidden section.
     """
     _ensure_app()
+    from scriptree.core.configs import UIVisibility
     from scriptree.core.io import load_tool
     from scriptree.ui.tool_runner import ToolRunnerView
 
     tool = load_tool(catalog_path)
     view = ToolRunnerView(tool, file_path=str(catalog_path))
 
-    if standalone:
-        view._standalone_mode = True
+    # ``_apply_visibility`` only honours the field-level toggles for
+    # ``extras_box`` / ``command_line`` etc. when the runner is in
+    # standalone mode.  We always want those hides to land in
+    # screenshooter output, so flip standalone on unconditionally.
+    view._standalone_mode = True
 
     if config:
         try:
@@ -267,9 +291,108 @@ def _render_form(
         except Exception:  # noqa: BLE001
             pass
 
-    if width > 0 and height > 0:
-        view.resize(width, height)
-    _capture(view, out)
+    # Apply the screenshooter's section-visibility policy.  We build
+    # a UIVisibility from the current config (so per-config hides
+    # for tools_sidebar / copy_argv / etc. still apply when
+    # ``standalone=True``) and override only the three sections this
+    # CLI controls.  When ``standalone=False`` there's no active
+    # config-driven visibility, so we start from a fresh default.
+    if standalone:
+        try:
+            base_vis = view._cfg_set.active_config().ui_visibility
+        except Exception:  # noqa: BLE001
+            base_vis = UIVisibility()
+    else:
+        base_vis = UIVisibility()
+
+    # Shallow copy with the three CLI-controlled fields overridden.
+    vis = UIVisibility(
+        output_pane=show_output,
+        extras_box=show_extras if not standalone else base_vis.extras_box and show_extras,
+        tools_sidebar=base_vis.tools_sidebar,
+        command_line=show_command_line if not standalone else base_vis.command_line and show_command_line,
+        copy_argv=base_vis.copy_argv,
+        clear_output=base_vis.clear_output,
+        config_bar=base_vis.config_bar,
+        env_button=base_vis.env_button,
+        popup_on_error=base_vis.popup_on_error,
+        popup_on_success=base_vis.popup_on_success,
+    )
+    view._apply_visibility(vis)
+
+    # The output pane is parent-coordinated via the ``visibilityChanged``
+    # signal — the runner doesn't hide it directly because in a docked
+    # MainWindow the parent owns the output dock.  Standalone capture
+    # has no such parent, so we hide the inner output container
+    # ourselves to match the flag.
+    try:
+        view._output_container.setVisible(show_output)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Capture either the full ToolRunnerView (when at least one of
+    # the lower sections is visible) or just the form panel (when
+    # the user wanted the minimal "params only" composition).
+    # Capturing the form_panel directly produces a tighter image
+    # with no leftover splitter gutter where the output pane used
+    # to sit, but the form_panel is parented inside the view's
+    # internal QSplitter so its parent layout would otherwise
+    # override any ``.resize()`` call -- detach it first.
+    capture_target: QWidget
+    if not (show_output or show_extras or show_command_line):
+        capture_target = view.form_panel
+        capture_target.setParent(None)
+    else:
+        capture_target = view
+
+    # Sizing: width is the user's requested width (or the default
+    # 520 px).  Height is treated as a minimum — if the form's
+    # natural sizeHint is taller (more parameters than fit in the
+    # default), the capture grows downward to fit every row.
+    if width <= 0:
+        width = 520
+    if height <= 0:
+        height = 1
+
+    # The form panel houses the parameters inside a ``_FormScrollArea``
+    # whose ``sizeHint`` is deliberately tiny (so the docked-in-
+    # MainWindow case can collapse it) -- which means the form's
+    # natural ``sizeHint`` does NOT include the parameters' full
+    # height; the scroll area would just show its own scrollbar.
+    # For screenshots we want every parameter row visible without
+    # scrolling, so we walk to the inner widget and forcibly grow
+    # the scroll area to that widget's natural height.  This is
+    # the screenshot-mode equivalent of "make the dock tall enough
+    # to fit all params with no internal scrollbar."
+    try:
+        from PySide6.QtWidgets import QScrollArea
+        for sa in view.form_panel.findChildren(QScrollArea):
+            inner = sa.widget()
+            if inner is None:
+                continue
+            inner.adjustSize()
+            target_h = inner.sizeHint().height()
+            if target_h > 0:
+                sa.setMinimumHeight(target_h)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"form: param-area grow failed: {exc!r}")
+
+    # Settle layout so sizeHint is meaningful (deferred Qt layout
+    # passes haven't run yet on a freshly-constructed widget).
+    capture_target.adjustSize()
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
+    hint = capture_target.sizeHint()
+    final_h = max(height, hint.height())
+    capture_target.resize(width, final_h)
+    # One more settle pass after the explicit resize: forcing a
+    # specific size triggers another layout cycle that may shift
+    # widgets around (e.g. word-wrapping description labels recomputing
+    # at the new width).
+    for _ in range(3):
+        app.processEvents()
+    _capture(capture_target, out)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +419,10 @@ def _render_tree(catalog_path: Path, out: Path, width: int, height: int) -> None
 
 def _render_editor(
     catalog_path: Path, out: Path, width: int, height: int,
+    *,
+    show_output: bool = False,
+    show_extras: bool = False,
+    show_command_line: bool = False,
 ) -> None:
     """Render the full editor (``MainWindow``) with the catalog loaded.
 
@@ -303,6 +430,17 @@ def _render_editor(
     / ``.scriptreetree`` and ScripTree opens the editor — tree dock on
     the left, form panel in the centre, output pane below the form,
     command-line group at the bottom.
+
+    **Default visibility (post v0.8.0a23 doc-screenshot policy):**
+    the Output dock and the Run-controls dock (extras + command line)
+    are **hidden** so the captured image is the clean "tree + form"
+    composition documentation usually wants.  Pass any of the
+    ``show_*`` flags to bring a section back.
+
+    ``show_extras`` and ``show_command_line`` both control the
+    Run-controls dock (extras and command-line live in the same
+    dock), so passing either one shows it.  ``show_output``
+    controls the Output dock independently.
 
     When ``catalog_path`` is a ``.scriptreetree``, the first leaf tool
     is auto-selected so the form / output / command-line docks all
@@ -360,6 +498,28 @@ def _render_editor(
             win._show_runner(tool, str(catalog_path.resolve()))
         except Exception as exc:  # noqa: BLE001
             _log(f"editor: tool-load auto-show failed: {exc!r}")
+
+    # Apply the screenshooter's section-visibility policy.  By default
+    # we want a clean "tree + form" capture; the Output dock and the
+    # Run-controls dock (extras + cmd-line) hide unless the caller
+    # asked for them.  Use ``toggleView(False)`` which is the same
+    # primitive MainWindow uses internally — matches its menu actions.
+    try:
+        if not show_output:
+            win._output_dock.toggleView(False)
+        else:
+            win._output_dock.toggleView(True)
+        if not (show_extras or show_command_line):
+            win._run_controls_dock.toggleView(False)
+        else:
+            win._run_controls_dock.toggleView(True)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"editor visibility toggle failed: {exc!r}")
+
+    # Settle ads docking layout after the toggles before sizing.
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
 
     if width > 0 and height > 0:
         win.resize(width, height)
@@ -688,6 +848,9 @@ def _batch(
     height: int,
     config: str | None = None,
     standalone: bool = False,
+    show_output: bool = False,
+    show_extras: bool = False,
+    show_command_line: bool = False,
 ) -> int:
     """Walk ``root`` and render one PNG per catalog file found."""
     written = 0
@@ -713,6 +876,9 @@ def _batch(
                 _render_form(
                     p, out, width, height,
                     config=config, standalone=standalone,
+                    show_output=show_output,
+                    show_extras=show_extras,
+                    show_command_line=show_command_line,
                 )
             elif effective_kind == "tree":
                 if suffix != ".scriptreetree":
@@ -720,7 +886,12 @@ def _batch(
                     continue
                 _render_tree(p, out, width, height)
             elif effective_kind == "editor":
-                _render_editor(p, out, width, height)
+                _render_editor(
+                    p, out, width, height,
+                    show_output=show_output,
+                    show_extras=show_extras,
+                    show_command_line=show_command_line,
+                )
             elif effective_kind == "tabs":
                 if suffix != ".scriptreetree":
                     _log(f"  skipping {p} — 'tabs' needs .scriptreetree")
@@ -819,7 +990,48 @@ def main(argv: list[str] | None = None) -> int:
             "Copy argv button, etc., per the config's settings)."
         ),
     )
+    # ---- Section-visibility opt-ins (form + editor kinds) -----------------
+    # Default policy (v0.8.0a23+): the screenshot is the clean
+    # "what the user fills in to run this" image — extras, command
+    # line, and output area are hidden unless explicitly requested.
+    # These flags put each section back individually; ``--full``
+    # puts ALL three back at once for a kitchen-sink capture.
+    parser.add_argument(
+        "--show-output", action="store_true",
+        help=(
+            "Include the Output area in the screenshot (form + editor "
+            "kinds).  Default: hidden."
+        ),
+    )
+    parser.add_argument(
+        "--show-extras", action="store_true",
+        help=(
+            "Include the Extra arguments box in the screenshot "
+            "(form + editor kinds).  Default: hidden."
+        ),
+    )
+    parser.add_argument(
+        "--show-command-line", action="store_true",
+        help=(
+            "Include the command-line preview box in the screenshot "
+            "(form + editor kinds).  Default: hidden."
+        ),
+    )
+    parser.add_argument(
+        "--full", action="store_true",
+        help=(
+            "Shorthand for --show-output --show-extras "
+            "--show-command-line.  Captures every section the editor "
+            "/ standalone runner can display."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    # ``--full`` expands into the three individual flags.
+    if args.full:
+        args.show_output = True
+        args.show_extras = True
+        args.show_command_line = True
 
     inp: Path = args.input.resolve()
     if not inp.exists():
@@ -842,6 +1054,9 @@ def main(argv: list[str] | None = None) -> int:
             height=args.height,
             config=args.config,
             standalone=args.standalone,
+            show_output=args.show_output,
+            show_extras=args.show_extras,
+            show_command_line=args.show_command_line,
         )
         print(f"screenshooter: wrote {written} PNG(s) to {out_dir}")
         return 0 if written > 0 else 1
@@ -870,6 +1085,9 @@ def main(argv: list[str] | None = None) -> int:
             _render_form(
                 inp, out, args.width, args.height,
                 config=args.config, standalone=args.standalone,
+                show_output=args.show_output,
+                show_extras=args.show_extras,
+                show_command_line=args.show_command_line,
             )
         elif args.kind == "tree":
             if inp.suffix.lower() != ".scriptreetree":
@@ -881,7 +1099,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             _render_tree(inp, out, args.width, args.height)
         elif args.kind == "editor":
-            _render_editor(inp, out, args.width, args.height)
+            _render_editor(
+                inp, out, args.width, args.height,
+                show_output=args.show_output,
+                show_extras=args.show_extras,
+                show_command_line=args.show_command_line,
+            )
         elif args.kind == "tabs":
             if inp.suffix.lower() != ".scriptreetree":
                 print(
