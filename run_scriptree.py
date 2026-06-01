@@ -28,9 +28,18 @@ Usage::
     python run_scriptree.py path/to/tool.scriptree
     python run_scriptree.py path/to/tree.scriptreetree -configuration standalone
 """
+import sys
+
+# Bytecode-write guard — see docs/LLM/no_bytecode_policy.md.
+# MUST be set before any other import so ``__pycache__/*.pyc`` files
+# are NEVER written for ScripTree modules.  Critical when the install
+# lives on Dropbox / OneDrive / Google Drive — uncached ``.pyc`` writes
+# trigger sync storms that paralyse the cloud client for 15-30 seconds
+# per launch.  Do not remove.
+sys.dont_write_bytecode = True
+
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 # ── Pre-flight checks ──────────────────────────────────────────────────

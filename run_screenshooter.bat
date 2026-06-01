@@ -19,6 +19,13 @@ REM Python install.
 
 setlocal EnableDelayedExpansion
 
+REM Bytecode-write guard -- see docs\LLM\no_bytecode_policy.md.
+REM Prevents Python from writing ``__pycache__\*.pyc`` files.  Mandatory
+REM when ScripTree lives in a Dropbox / OneDrive / Google Drive folder
+REM (uncached .pyc writes trigger sync storms).  The launcher .py files
+REM also set ``sys.dont_write_bytecode = True`` as belt-and-suspenders.
+set PYTHONDONTWRITEBYTECODE=1
+
 REM -- GUI-form mode (no args) -- delegate to the V1 editor on the
 REM bundled screenshooter.scriptree front-end so a double-click
 REM produces a labeled form instead of a CLI help dump.

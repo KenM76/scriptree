@@ -13,6 +13,13 @@
 
 setlocal EnableDelayedExpansion
 
+:: Bytecode-write guard -- see docs\LLM\no_bytecode_policy.md.
+:: Prevents Python from writing ``__pycache__\*.pyc`` files.  Mandatory
+:: when ScripTree lives in a Dropbox / OneDrive / Google Drive folder
+:: (uncached .pyc writes trigger sync storms).  The launcher .py files
+:: also set ``sys.dont_write_bytecode = True`` as belt-and-suspenders.
+set PYTHONDONTWRITEBYTECODE=1
+
 :: -- 1. Portable Python under lib\python\ ----------------------------
 if exist "%~dp0lib\python\pythonw.exe" (
     set "PY=%~dp0lib\python\pythonw.exe"

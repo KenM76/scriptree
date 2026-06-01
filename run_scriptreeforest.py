@@ -19,8 +19,15 @@ Everything else — Python search, dependency check, sibling-import
 shim, self-healing — is identical to ``run_scriptreering.py`` and
 runs verbatim because we delegate to its main().
 """
-import os
 import sys
+
+# Bytecode-write guard — see docs/LLM/no_bytecode_policy.md.  MUST be
+# set before any other import.  Prevents ``__pycache__/*.pyc`` writes
+# that would trigger Dropbox/OneDrive sync storms when ScripTree is
+# installed in a cloud-synced folder.  Do not remove.
+sys.dont_write_bytecode = True
+
+import os
 from pathlib import Path
 
 if __name__ == "__main__":

@@ -75,8 +75,15 @@ Implementation notes
 """
 from __future__ import annotations
 
-import argparse
 import sys
+
+# Bytecode-write guard — see docs/LLM/no_bytecode_policy.md.  MUST be
+# set before any other import.  Prevents ``__pycache__/*.pyc`` writes
+# that would trigger Dropbox/OneDrive sync storms when ScripTree is
+# installed in a cloud-synced folder.  Do not remove.
+sys.dont_write_bytecode = True
+
+import argparse
 from pathlib import Path
 from typing import Any
 

@@ -19,9 +19,16 @@ Environment variables (same as ``run_scriptree.py``):
 
     SCRIPTREE_PYTHON, SCRIPTREE_USE_SYSTEM_DEPS — see the editor docs.
 """
+import sys
+
+# Bytecode-write guard — see docs/LLM/no_bytecode_policy.md.  MUST be
+# set before any other import.  Prevents ``__pycache__/*.pyc`` writes
+# that would trigger Dropbox/OneDrive sync storms when ScripTree is
+# installed in a cloud-synced folder.  Do not remove.
+sys.dont_write_bytecode = True
+
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 # ── Pre-flight checks ──────────────────────────────────────────────────

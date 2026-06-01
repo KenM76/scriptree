@@ -27,6 +27,30 @@ pulled?" at a glance).
   ``validate`` / ``migrate`` CLI path, so it must not pull in Qt.
 """
 
+# ===========================================================================
+# BYTECODE-WRITE GUARD — must run before any sub-module import.
+# ===========================================================================
+# Setting ``sys.dont_write_bytecode = True`` here means Python skips
+# emitting ``__pycache__/*.pyc`` files for every module imported AFTER
+# this line.  ScripTree installs commonly live in Dropbox / OneDrive /
+# Google Drive folders, where a fresh launch otherwise spawns hundreds
+# of ``.pyc`` writes that the cloud client hashes and uploads,
+# paralysing the sync engine for 15-30 seconds per launch.  The launcher
+# ``.bat`` files set ``PYTHONDONTWRITEBYTECODE=1`` as a first line of
+# defence; this is the in-Python belt-and-suspenders so the guarantee
+# holds regardless of how ScripTree is started (direct ``python -m``
+# invocation, frozen PyInstaller exe, tests, ad-hoc REPL import, ...).
+#
+# DO NOT remove or weaken this guard.  See
+# ``docs/LLM/no_bytecode_policy.md`` for the rationale and the full
+# list of things you must not do (flip this back to False, pre-compile
+# ``.pyc`` files during packaging, set ``PYTHONPYCACHEPREFIX`` pointing
+# into the install tree, etc.).
+import sys as _sys
+_sys.dont_write_bytecode = True
+del _sys
+
+
 # Source of truth for the runtime version string.  Bump in lockstep
 # with ``pyproject.toml::project.version`` — one is read by tools that
 # import the package (the About dialogs read ``scriptree.__version__``
