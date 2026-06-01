@@ -35,10 +35,10 @@
 
     "host_plugins": {
       "_comment": "Host-application integrations are provided by the `combridge` runtime (bundled at `lib/combridge/`). Each plugin is one named plugin in `combridge/plugins/<Name>/`. Status enum: shipped | planned | not_planned. Only `shipped` plugins may be advertised as supported today.",
-      "shipped": ["solidworks", "excel", "word", "powerpoint", "outlook"],
+      "shipped": ["solidworks", "excel", "word", "powerpoint", "outlook", "autocad", "inventor", "revit"],
       "planned": [],
-      "not_planned_today": ["autocad", "inventor", "revit"],
-      "_comment_aspirational": "AutoCAD / Inventor / Revit are listed under `not_planned_today` because downstream marketing has sometimes advertised them. No `combridge` plugin exists for any of them; they are not on the runtime roadmap as of this file's `_updated_at`. If/when one is added, move the slug from `not_planned_today` to `planned` (work begun) or `shipped` (in `combridge/plugins/`)."
+      "not_planned_today": [],
+      "_comment_status": "AutoCAD / Inventor / Revit moved to shipped 2026-06-01 per operator decision (T262) — treated as supported alongside the SolidWorks/Office plugin set. Marketing surfaces may advertise them as supported today."
     },
 
     "features": {
