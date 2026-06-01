@@ -5720,21 +5720,51 @@ class CellWindow(QMainWindow):
         # caller invokes the method directly.
         if not getattr(self, "_is_forest_master", False):
             _log(f"installable drop ignored on non-forest cell: {path!r}")
+            # Surface to the user — stderr is invisible under
+            # ``pythonw.exe`` and a silent ignore here was reported as
+            # "drop accepted, nothing happened".  v0.8.0a25.
+            try:
+                QMessageBox.information(
+                    self, "Install",
+                    "Only the forest hub cell accepts folder / zip "
+                    "drops for installation.  Drop your folder onto "
+                    "the central forest cell instead.",
+                )
+            except Exception:  # noqa: BLE001
+                pass
             return
 
         # Lazy imports keep these out of the cell module's
-        # import-time graph for non-forest cells.
-        from pathlib import Path as _Path
-        from ..core.app_install import (
-            ConflictMode, InstallError, install_app,
-        )
-        from ..ui.install_dialogs import (
-            InstallConflictDialog, InstallLocationDialog,
-        )
+        # import-time graph for non-forest cells.  Wrapped in a
+        # try/except because an ImportError would otherwise propagate
+        # out of the drop-event handler and into Qt's silent
+        # exception swallowing — the user sees "nothing happened"
+        # again.  v0.8.0a25.
+        try:
+            from pathlib import Path as _Path
+            from ..core.app_install import (
+                ConflictMode, InstallError, install_app,
+            )
+            from ..ui.install_dialogs import (
+                InstallConflictDialog, InstallLocationDialog,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"installable drop: import failed: {exc!r}")
+            QMessageBox.warning(
+                self, "Install failed",
+                f"Could not load the install helpers:\n\n{exc!r}\n\n"
+                f"This usually means the ScripTree install tree is "
+                f"out of sync — try restarting ScripTree.",
+            )
+            return
 
         source = _Path(path)
         if not source.exists():
             _log(f"installable drop ignored — source not found: {path!r}")
+            QMessageBox.warning(
+                self, "Install failed",
+                f"The dropped source does not exist:\n\n{path}",
+            )
             return
 
         _log(
@@ -5742,9 +5772,24 @@ class CellWindow(QMainWindow):
             f"(kind={'folder' if source.is_dir() else 'zip'})"
         )
 
-        # Step 1: where?
-        loc = InstallLocationDialog(self, source)
-        if loc.exec() != loc.DialogCode.Accepted:
+        # Step 1: where?  Wrap dialog construction + exec so any
+        # exception inside the dialog (e.g. branding-config read
+        # failure) surfaces as a popup rather than vanishing into
+        # Qt's silent handler.
+        try:
+            loc = InstallLocationDialog(self, source)
+            accepted = (loc.exec() == loc.DialogCode.Accepted)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"installable drop: location dialog crashed: {exc!r}")
+            import traceback as _tb
+            tb_str = _tb.format_exc()
+            QMessageBox.warning(
+                self, "Install failed",
+                f"The location-picker dialog crashed:\n\n{exc!r}\n\n"
+                f"Details:\n{tb_str}",
+            )
+            return
+        if not accepted:
             return
         target_root = loc.chosen_root()
 
