@@ -1,6 +1,6 @@
 {
   "_schema_version": 1,
-  "_updated_at": "2026-05-31",
+  "_updated_at": "2026-06-02",
   "_canonical_source": "D:/Dev/ScripTree/product-truth.json (this file)",
   "_canonical_source_remote": "github.com/KenM76/scriptree:product-truth.json",
   "_consumer_note": "DO NOT edit a consumer's copy by hand. Downstream sites (the ScripTreeApps marketplace, the scriptree.org Astro sister site) hold a synced read-only copy at product-truth.synced.json and run `pnpm sync:product-truth` to refresh it. Their CI fails on drift between the synced copy and this source.",
@@ -96,8 +96,8 @@
     },
 
     "version": {
-      "current": "0.8.0a23",
-      "_comment_version": "Source: pyproject.toml `project.version`. Major-version cadence is not yet formalized; the runtime ships pre-1.0 alphas as of `_updated_at`."
+      "current": "0.8.0a25",
+      "_comment_version": "Source: pyproject.toml `project.version`. Major-version cadence is not yet formalized; the runtime ships pre-1.0 alphas as of `_updated_at`. T277: bumped 0.8.0a23 -> 0.8.0a25 after building portable ZIP from HEAD (commit 133642d 'v0.8.0a25 release'); skipped 0.8.0a24 because no product-truth bump shipped for it."
     },
 
     "terminology": {
