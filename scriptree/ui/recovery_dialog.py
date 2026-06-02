@@ -247,7 +247,14 @@ class MissingFileRecoveryDialog(QDialog):
             self._btn_ok.clicked.connect(self._on_ok)
             self._btn_row.addWidget(self._btn_ok)
 
-        self._btn_close = QPushButton("Close")
+        # v0.8.0a25 -- "Close" used to call ``reject`` and discard any
+        # interaction.  Renamed to "Cancel" for the standard pattern
+        # so the dismiss-without-changes action reads correctly.
+        self._btn_close = QPushButton("Cancel")
+        self._btn_close.setToolTip(
+            "Dismiss this recovery dialog without applying any "
+            "of the suggested fixes."
+        )
         self._btn_close.clicked.connect(self.reject)
         self._btn_row.addWidget(self._btn_close)
 

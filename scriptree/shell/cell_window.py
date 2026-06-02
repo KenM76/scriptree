@@ -2793,13 +2793,24 @@ class PreferencesDialog(QDialog):
         reset_btn.clicked.connect(self._on_reset)
         footer.addWidget(reset_btn)
         footer.addStretch()
-        save_btn = QPushButton("Save")
+        # v0.8.0a25 -- swap "Close" for "Cancel" so the
+        # dismiss-without-saving action reads correctly.  "Close"
+        # was misleading here because clicking it threw away every
+        # change the user had made; "Cancel" makes that explicit.
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setToolTip(
+            "Discard every change you've made since opening this "
+            "dialog and close."
+        )
+        cancel_btn.clicked.connect(self.reject)
+        footer.addWidget(cancel_btn)
+        save_btn = QPushButton("OK")
         save_btn.setDefault(True)
+        save_btn.setToolTip(
+            "Save these preferences and close."
+        )
         save_btn.clicked.connect(self._on_save)
         footer.addWidget(save_btn)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.reject)
-        footer.addWidget(close_btn)
         outer.addLayout(footer)
 
         # ---- Live label updates -------------------------------------------------
