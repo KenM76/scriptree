@@ -928,6 +928,68 @@ def inject_tool_dir_env(
                 os.path.normcase(os.path.abspath(tool_dir)):
             env["PYTHONPATH"] = os.pathsep.join([tool_dir, existing_pp])
 
+    # v0.8.0a25 -- SCRIPTREE_HOME + SCRIPTREE_LIB + combridge on PATH.
+    #
+    # Tools that bundle a helper to find ``lib/combridge/combridge.exe``
+    # have historically WALKED UPWARD from their own location.  That
+    # walk is anchored at the .scriptree's folder, which used to live
+    # inside the ScripTree install tree (so the walk found
+    # ``<install>/lib/combridge/combridge.exe``).  Once the drop-install
+    # feature shipped (v0.8.0a23), apps can land under
+    # ``%LOCALAPPDATA%/ScripTree/Apps/...`` -- an unrelated tree, and
+    # the upward walk runs off the C:\ root without finding combridge.
+    #
+    # Fix: publish three runtime knobs the tool can use instead:
+    #
+    #   * ``SCRIPTREE_HOME`` -- absolute path to the install root
+    #     (where the ``scriptree`` package lives).  Tools' combridge
+    #     finder can prefer this over the upward walk.
+    #   * ``SCRIPTREE_LIB`` -- ``<SCRIPTREE_HOME>/lib`` for tools that
+    #     want a different bundled helper (combridge plugins, the
+    #     Python vendor dir, etc.).
+    #   * ``PATH`` -- prepend ``<install>/lib/combridge`` so a plain
+    #     ``shutil.which("combridge.exe")`` resolves correctly.
+    #
+    # Idempotent: existing values on the caller's env aren't clobbered
+    # so a user override (e.g. for a multi-install dev setup) wins.
+    try:
+        from pathlib import Path as _P
+        # ``runner.py`` is at ``<install>/scriptree/core/runner.py``;
+        # the install root is two parents up.
+        install_root = _P(__file__).resolve().parent.parent.parent
+    except Exception:  # noqa: BLE001
+        install_root = None
+
+    if install_root is not None and install_root.is_dir():
+        if not env.get("SCRIPTREE_HOME"):
+            env["SCRIPTREE_HOME"] = str(install_root)
+        lib_dir = install_root / "lib"
+        if lib_dir.is_dir() and not env.get("SCRIPTREE_LIB"):
+            env["SCRIPTREE_LIB"] = str(lib_dir)
+        combridge_dir = install_root / "lib" / "combridge"
+        if combridge_dir.is_dir():
+            # Prepend to PATH so ``combridge.exe`` resolves by bare
+            # name.  Skip when it's already in there to avoid the
+            # path growing on repeated launches in the same
+            # interpreter (rare but possible in tests).
+            existing_path = env.get("PATH", "")
+            cb_norm = os.path.normcase(os.path.abspath(str(combridge_dir)))
+            already = False
+            for chunk in existing_path.split(os.pathsep):
+                if not chunk:
+                    continue
+                try:
+                    if os.path.normcase(os.path.abspath(chunk)) == cb_norm:
+                        already = True
+                        break
+                except (OSError, ValueError):
+                    continue
+            if not already:
+                env["PATH"] = os.pathsep.join(
+                    [str(combridge_dir), existing_path] if existing_path
+                    else [str(combridge_dir)],
+                )
+
     return env
 
 

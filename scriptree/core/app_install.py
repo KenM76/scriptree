@@ -212,6 +212,134 @@ def default_personal_root() -> Path:
     return Path.home() / ".local" / "share" / "ScripTree" / "Apps"
 
 
+def ensure_lib_link(apps_root: Path) -> bool:
+    """Make ``<apps_root>/lib`` resolve to the ScripTree install's
+    ``lib`` directory, so apps installed under ``apps_root`` find
+    bundled binaries (combridge.exe, etc.) via their existing
+    upward-walk discovery.
+
+    Why this exists
+    ---------------
+    Office tools and similar that ship with ScripTree call
+    ``combridge.exe`` from ``<install>/lib/combridge/combridge.exe``.
+    The standard discovery pattern is to walk upward from the tool's
+    own ``__file__`` looking for ``lib/combridge/combridge.exe``.
+    That works when the tool lives inside the ScripTree install tree
+    (e.g. ``<install>/ScripTreeApps/MyApp/``) but not when it's
+    installed to the per-user personal apps root
+    (``%LOCALAPPDATA%/ScripTree/Apps`` etc.) because the upward
+    walk anchors at ``<apps_root>/MyApp/`` and never reaches the
+    ScripTree install.
+
+    Fix: at install time we plant a directory junction (Windows) or
+    symlink (POSIX) at ``<apps_root>/lib`` pointing at the live
+    install's ``<install>/lib``.  The next upward step from any
+    installed app hits ``<apps_root>/`` and finds
+    ``<apps_root>/lib/combridge/combridge.exe`` immediately.  No
+    tool code changes needed; the existing find-by-walking-up
+    pattern just works.
+
+    Behaviour
+    ---------
+
+    * No-op when ``<apps_root>/lib`` already exists (whether as a
+      junction, symlink, or real directory).  We don't try to
+      "fix" an existing entry -- the user may have deliberately
+      put something there.
+    * No-op when the ScripTree install's ``lib`` directory can't
+      be located (defensive, shouldn't happen in normal use).
+    * Windows: uses ``mklink /J`` (directory junction) via
+      ``cmd /c`` so no admin rights are needed.  Junctions on
+      NTFS work without elevation since Windows 7.
+    * POSIX: uses ``os.symlink``.  Symlinks have always worked
+      without elevation.
+    * Errors are swallowed and logged to stderr.  Failure here
+      degrades to "the user might see the old combridge-not-found
+      error", not "ScripTree won't launch."
+
+    Returns
+    -------
+    ``True`` when a junction/symlink was created (or already exists
+    and points at our install's lib), ``False`` on any failure path
+    or when there's nothing to do.
+    """
+    try:
+        apps_root = Path(apps_root)
+        if not apps_root.is_dir():
+            apps_root.mkdir(parents=True, exist_ok=True)
+
+        link_path = apps_root / "lib"
+        if link_path.exists() or link_path.is_symlink():
+            # Something is there.  Don't second-guess it.
+            return True
+
+        # Locate the install's lib/.  ``app_install.py`` lives at
+        # ``<install>/scriptree/core/app_install.py``; the install
+        # root is two parents up.
+        install_root = Path(__file__).resolve().parent.parent.parent
+        install_lib = install_root / "lib"
+        if not install_lib.is_dir():
+            return False
+
+        if os.name == "nt":
+            # ``mklink /J`` is the no-elevation way to create a
+            # directory junction.  Must run inside cmd.exe (it's a
+            # builtin, not an exe).  ``shell=False`` + explicit
+            # ``cmd /c`` keeps the argv clean.
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J",
+                     str(link_path), str(install_lib)],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                import sys
+                print(
+                    f"[app_install] ensure_lib_link: mklink raised "
+                    f"{exc!r}; tools that walk upward for lib/ will "
+                    f"fail on apps under {apps_root}",
+                    file=sys.stderr,
+                )
+                return False
+            if result.returncode != 0:
+                import sys
+                print(
+                    f"[app_install] ensure_lib_link: mklink failed "
+                    f"(rc={result.returncode}): "
+                    f"{result.stderr.strip()!r}",
+                    file=sys.stderr,
+                )
+                return False
+            return True
+
+        # POSIX: standard symlink.
+        try:
+            os.symlink(str(install_lib), str(link_path),
+                       target_is_directory=True)
+            return True
+        except OSError as exc:
+            import sys
+            print(
+                f"[app_install] ensure_lib_link: symlink raised "
+                f"{exc!r}; tools that walk upward for lib/ will "
+                f"fail on apps under {apps_root}",
+                file=sys.stderr,
+            )
+            return False
+    except Exception as exc:  # noqa: BLE001
+        # Top-level guard: this function must NEVER block an
+        # install.  Worst case the user sees the original
+        # combridge-not-found error.
+        import sys
+        print(
+            f"[app_install] ensure_lib_link: unexpected error "
+            f"{exc!r}; skipping",
+            file=sys.stderr,
+        )
+        return False
+
+
 def _settings_string(key: str) -> str:
     """Read a string from ``scriptree.ini``.  Returns ``""`` when
     the key is absent / QSettings unavailable / any other read
@@ -519,6 +647,16 @@ def install_app(
 
     files_written = _copy_or_extract(src, target, app_name=app_name)
 
+    # v0.8.0a25 -- make sure ``<target_root>/lib`` resolves to the
+    # ScripTree install's ``lib``, so the newly-installed app's
+    # upward-walk discovery of ``lib/combridge/combridge.exe``
+    # succeeds.  See ensure_lib_link docstring for the full
+    # rationale.  Best-effort: failures don't block the install.
+    try:
+        ensure_lib_link(root)
+    except Exception:  # noqa: BLE001
+        pass
+
     return InstallResult(
         target=target,
         files_written=files_written,
@@ -532,6 +670,7 @@ __all__ = [
     "InstallResult",
     "default_personal_root",
     "default_shared_root",
+    "ensure_lib_link",
     "infer_app_name",
     "install_app",
     "pick_rename_target",
