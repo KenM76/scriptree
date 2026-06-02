@@ -61,6 +61,78 @@ import sys
 from pathlib import Path
 
 
+# --- Lint thresholds (v0.8.0a25+) -----------------------------------------
+#
+# These constants encode the "form should be sectioned" guidance from
+# ``docs/LLM/scriptree_format.md``.  Keep them in lockstep with that
+# doc -- if you bump them here, update the doc, and vice versa.
+#
+#   * ``LINT_SECTION_THRESHOLD`` -- a form with strictly MORE params
+#     than this and NO ``sections`` declared triggers a warning
+#     ("group these into 2-4 named sections").
+#   * ``LINT_TAB_THRESHOLD`` -- a form with AT LEAST this many params
+#     and no tab-mode section triggers a stronger hint
+#     ("prefer tab-mode for 10+ params").
+#
+# Warnings DO NOT change the exit code by default; the caller has to
+# pass ``--strict`` to promote them.  Sectioning is a recommendation,
+# not a correctness requirement, and breaking legacy catalogs over
+# style is never the right call.
+LINT_SECTION_THRESHOLD = 4
+LINT_TAB_THRESHOLD = 10
+
+
+def _lint_tool(tool) -> list[str]:  # noqa: ANN001 -- ToolDef, avoid circular import
+    """Return non-blocking advisory warnings about the tool's form
+    organisation.  Empty list when the form follows the recommended
+    structure.
+
+    Two checks today:
+
+      1. Too many params with no sections -> recommend grouping.
+      2. Many params (>=10) without a tab-mode section -> recommend
+         tab mode specifically.
+
+    Both are pure "form ergonomics" advice -- the tool still runs
+    fine without sections; the user just has a worse experience.
+    """
+    warnings: list[str] = []
+    n_params = len(tool.params)
+
+    if n_params > LINT_SECTION_THRESHOLD and not tool.sections:
+        if n_params >= LINT_TAB_THRESHOLD:
+            warnings.append(
+                f"{n_params} params but no sections.  The format "
+                f"guide recommends grouping >{LINT_SECTION_THRESHOLD} "
+                f"params into 2-4 named sections; for "
+                f">={LINT_TAB_THRESHOLD} params, prefer tab-mode "
+                f"sections (layout: \"tab\").  "
+                f"See docs/LLM/scriptree_format.md."
+            )
+        else:
+            warnings.append(
+                f"{n_params} params but no sections.  The format "
+                f"guide recommends grouping >{LINT_SECTION_THRESHOLD} "
+                f"params into 2-4 named sections.  "
+                f"See docs/LLM/scriptree_format.md."
+            )
+    elif tool.sections and n_params >= LINT_TAB_THRESHOLD:
+        # Sectioned but not tab-mode for a 10+ param form -- softer
+        # nudge: tab-mode is the preferred layout at this scale.
+        has_tab = any(
+            getattr(s, "layout", "collapse") == "tab"
+            for s in tool.sections
+        )
+        if not has_tab:
+            warnings.append(
+                f"{n_params} params with collapse-mode sections only.  "
+                f"For >={LINT_TAB_THRESHOLD} params, the format guide "
+                f"recommends tab-mode sections (layout: \"tab\")."
+            )
+
+    return warnings
+
+
 def validate_one(path: Path) -> tuple[bool, str]:
     """Validate a single ``.scriptree`` or ``.scriptreetree`` file.
 
@@ -115,11 +187,13 @@ def validate_one(path: Path) -> tuple[bool, str]:
 _VALIDATABLE_SUFFIXES = (".scriptree", ".scriptreetree")
 
 
-def validate_tree(root: Path) -> tuple[int, int]:
+def validate_tree(root: Path) -> tuple[int, int, int]:
     """Walk ``root`` and validate every ``.scriptree`` and
     ``.scriptreetree`` underneath.
 
-    Returns ``(scanned_count, failed_count)``.
+    Returns ``(scanned_count, failed_count, warned_count)``.
+    ``warned_count`` is the number of files that produced at least
+    one ``[WARN]`` line.  ``main()`` uses it to gate ``--strict``.
     """
     if root.is_file():
         targets = [root]
@@ -130,9 +204,10 @@ def validate_tree(root: Path) -> tuple[int, int]:
         )
     scanned = 0
     failed = 0
+    warned = 0
     # ASCII markers — Windows consoles often run cp1252 which
-    # can't encode ✓/✗.  Stick to OK / FAIL so output renders
-    # cleanly everywhere.
+    # can't encode ✓/✗.  Stick to OK / FAIL / WARN so output
+    # renders cleanly everywhere.
     for p in targets:
         if not p.is_file():
             continue
@@ -144,7 +219,25 @@ def validate_tree(root: Path) -> tuple[int, int]:
         print(f"[{marker}] {msg}")
         if not ok:
             failed += 1
-    return scanned, failed
+            continue
+
+        # Lint pass (v0.8.0a25+) -- non-blocking advisory warnings.
+        # Only run on .scriptree files; trees have a different shape
+        # and the section-count guidance doesn't apply.  Loading the
+        # tool a second time is cheap (JSON parse for a few KB) and
+        # keeps ``validate_one``'s public 2-tuple contract intact.
+        if p.suffix.lower() == ".scriptree":
+            try:
+                from scriptree.core.io import load_tool
+                tool = load_tool(p)
+                lints = _lint_tool(tool)
+            except Exception:  # noqa: BLE001
+                lints = []
+            for w in lints:
+                print(f"[WARN] {p}: {w}")
+            if lints:
+                warned += 1
+    return scanned, failed, warned
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,13 +257,22 @@ def main(argv: list[str] | None = None) -> int:
             "through (every .scriptree found is validated)."
         ),
     )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help=(
+            "Promote lint warnings to a non-zero exit.  Useful "
+            "for CI checks that want to enforce form-organisation "
+            "guidance (sectioning of large forms, tab mode for "
+            "10+ params)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.path.exists():
         print(f"scriptree validate: not found: {args.path}", file=sys.stderr)
         return 2
 
-    scanned, failed = validate_tree(args.path)
+    scanned, failed, warned = validate_tree(args.path)
     if scanned == 0:
         print(
             f"scriptree validate: no .scriptree files found under "
@@ -179,9 +281,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if failed:
         print(
-            f"\nscriptree validate: {failed}/{scanned} failed."
+            f"\nscriptree validate: {failed}/{scanned} failed, "
+            f"{warned} warned."
         )
         return 1
+    if warned:
+        if args.strict:
+            print(
+                f"\nscriptree validate: {scanned}/{scanned} valid "
+                f"but {warned} produced lint warnings (--strict)."
+            )
+            return 1
+        print(
+            f"\nscriptree validate: {scanned}/{scanned} valid "
+            f"({warned} with lint warnings; use --strict to fail "
+            f"on them)."
+        )
+        return 0
     print(f"\nscriptree validate: {scanned}/{scanned} valid.")
     return 0
 

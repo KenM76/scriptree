@@ -287,11 +287,22 @@ value as its own label.
 Sections with duplicate names are rejected by the loader.
 
 > **Default to using sections.** When generating a `.scriptree` for a
-> tool with more than ~4 parameters, group them into 2–4 named
+> tool with more than 4 parameters, group them into 2–4 named
 > sections. For 10+ params, prefer tab-mode sections. See the
 > [LLM README's "Form design defaults"](README.md) for the heuristic
 > table and rationale — flat ungrouped forms are the most common
 > failure mode of AI-generated tools.
+>
+> **Validator-enforced (v0.8.0a25+).** `python -m scriptree validate`
+> emits a `[WARN]` line on any form with `> 4` params and no
+> `sections`, and a stronger nudge at `>= 10` params recommending
+> tab-mode specifically.  Exit code stays `0` so legacy catalogs
+> keep passing; add `--strict` to promote warnings to a non-zero
+> exit for CI guardrails.  The thresholds in this guidance and the
+> validator are kept in lockstep via the constants
+> `LINT_SECTION_THRESHOLD` and `LINT_TAB_THRESHOLD` in
+> `scriptree/cli/validate.py` — if those move, this doc moves with
+> them.
 
 ### Per-section `layout` field
 
