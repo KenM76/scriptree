@@ -1292,23 +1292,86 @@ class SettingsDialog(QDialog):
 
         label_layout.addWidget(self._label_mode_icon_rb)
 
-        # Icon path row — Browse + Clear; only enabled when "Icon" radio.
-        icon_path_row = QHBoxLayout()
-        icon_path_row.addSpacing(20)
-        # Display label: shows the resolved path, or "(embedded)"
-        # when the catalog carries the icon as base64 instead of a
-        # path reference.
-        if getattr(hexagon, "_icon_data_b64", ""):
-            initial_label = "(icon embedded in catalog file)"
-        elif hexagon._icon_path:
-            initial_label = hexagon._icon_path
-        else:
-            initial_label = "(no icon set)"
-        self._icon_path_label = QLabel(initial_label)
-        self._icon_path_label.setStyleSheet("QLabel { color: #888; }")
-        self._icon_path_label.setMinimumWidth(160)
-        self._icon_path_label.setWordWrap(True)
-        self._icon_browse_btn = QPushButton("Browse…")
+        # === OBSOLETE-ICON-UI-START (v0.8.0a25 -- delete after sign-off) ===
+        # The old icon section exposed an external file path + a manual
+        # Embed/Unembed dance, dating from before v0.6.33 made
+        # embedded-base64 the canonical storage and v0.6.33 added the
+        # auto-classified-glyph paint priority.  Today nothing the user
+        # picks should produce a bare file link: ``Library...`` already
+        # embeds the bundled PNG, ``Choose file...`` (below) reads-and-
+        # embeds in one step, and any legacy ``_icon_path`` value on a
+        # loaded catalog is honoured on read but never produced by the
+        # editor.  The path label + Browse + Embed/Unembed widgets
+        # remained here only to display the now-defunct state.  Block
+        # commented out for a release cycle so we can revert quickly
+        # if something downstream still references these attributes;
+        # search for OBSOLETE-ICON-UI to delete after sign-off.
+        #
+        # icon_path_row = QHBoxLayout()
+        # icon_path_row.addSpacing(20)
+        # if getattr(hexagon, "_icon_data_b64", ""):
+        #     initial_label = "(icon embedded in catalog file)"
+        # elif hexagon._icon_path:
+        #     initial_label = hexagon._icon_path
+        # else:
+        #     initial_label = "(no icon set)"
+        # self._icon_path_label = QLabel(initial_label)
+        # self._icon_path_label.setStyleSheet("QLabel { color: #888; }")
+        # self._icon_path_label.setMinimumWidth(160)
+        # self._icon_path_label.setWordWrap(True)
+        # self._icon_browse_btn = QPushButton("Browse…")
+        # icon_path_row.addWidget(self._icon_path_label, stretch=1)
+        # icon_path_row.addWidget(self._icon_browse_btn)
+        # icon_path_row.addWidget(self._icon_library_btn)
+        # icon_path_row.addWidget(self._icon_clear_btn)
+        # label_layout.addLayout(icon_path_row)
+        #
+        # embed_row = QHBoxLayout()
+        # embed_row.addSpacing(20)
+        # self._icon_embed_btn = QPushButton("Embed in catalog")
+        # self._icon_unembed_btn = QPushButton("Unembed (Save as…)")
+        # embed_row.addWidget(self._icon_embed_btn)
+        # embed_row.addWidget(self._icon_unembed_btn)
+        # embed_row.addStretch(1)
+        # label_layout.addLayout(embed_row)
+        # === OBSOLETE-ICON-UI-END ===
+
+        # --- New icon section (v0.8.0a25+) -------------------------------
+        # Live preview of the actually-rendered glyph (whatever resolves
+        # through the paint precedence: embedded -> file -> auto-classified
+        # -> letters), three action buttons that all keep the icon storage
+        # canonical (embedded base64), and a status line telling the user
+        # which source is winning.
+        icon_preview_row = QHBoxLayout()
+        icon_preview_row.addSpacing(20)
+        self._icon_preview_label = QLabel()
+        self._icon_preview_label.setFixedSize(96, 96)
+        self._icon_preview_label.setStyleSheet(
+            "QLabel { border: 1px solid #ccc; background: #fafafa; }"
+        )
+        self._icon_preview_label.setAlignment(Qt.AlignCenter)
+        self._icon_preview_label.setToolTip(
+            "Preview of the icon currently rendered on the cell.  "
+            "Updates live when you pick a new icon."
+        )
+        icon_preview_row.addWidget(self._icon_preview_label)
+        icon_preview_row.addSpacing(8)
+
+        # Right-hand column: status text on top of the action buttons.
+        icon_actions_col = QVBoxLayout()
+        self._icon_source_label = QLabel("")  # filled by _refresh_icon_preview
+        self._icon_source_label.setStyleSheet("QLabel { color: #666; }")
+        self._icon_source_label.setWordWrap(True)
+        icon_actions_col.addWidget(self._icon_source_label)
+
+        icon_btn_row = QHBoxLayout()
+        self._icon_choose_btn = QPushButton("Choose image file…")
+        self._icon_choose_btn.setToolTip(
+            "Pick an image file from disk and embed it into this "
+            "cell's catalog as base64.  Always embedded -- the "
+            "file you pick is not linked, so moving or deleting it "
+            "won't break the cell."
+        )
         self._icon_library_btn = QPushButton("Library…")
         self._icon_library_btn.setToolTip(
             "Pick a shipped, trademark-safe line icon.  When the cell "
@@ -1316,36 +1379,21 @@ class SettingsDialog(QDialog):
             "it (portable); otherwise it's linked from the icons/ set."
         )
         self._icon_clear_btn = QPushButton("Clear")
-        icon_path_row.addWidget(self._icon_path_label, stretch=1)
-        icon_path_row.addWidget(self._icon_browse_btn)
-        icon_path_row.addWidget(self._icon_library_btn)
-        icon_path_row.addWidget(self._icon_clear_btn)
-        label_layout.addLayout(icon_path_row)
+        self._icon_clear_btn.setToolTip(
+            "Remove any explicit icon set on this cell.  The cell "
+            "will fall back to the auto-classified bundled glyph "
+            "(based on the catalog's name and content) or to the "
+            "auto-letters if no classification matches."
+        )
+        icon_btn_row.addWidget(self._icon_choose_btn)
+        icon_btn_row.addWidget(self._icon_library_btn)
+        icon_btn_row.addWidget(self._icon_clear_btn)
+        icon_btn_row.addStretch(1)
+        icon_actions_col.addLayout(icon_btn_row)
+        icon_actions_col.addStretch(1)
 
-        # Embed / Unembed row — bake an external icon into the
-        # catalog JSON, or extract an embedded one back out to a
-        # file.  Per V3 v0.2.7 user direction: "there should be an
-        # embed / unembed -> save as feature to embed the icon in
-        # the json tree file or pull the one that is in there and
-        # make it back into an external link."
-        embed_row = QHBoxLayout()
-        embed_row.addSpacing(20)
-        self._icon_embed_btn = QPushButton("Embed in catalog")
-        self._icon_embed_btn.setToolTip(
-            "Read the linked icon file from disk, base64-encode it, "
-            "and store it inside the .scriptree / .scriptreetree JSON "
-            "so the icon ships with the catalog."
-        )
-        self._icon_unembed_btn = QPushButton("Unembed (Save as…)")
-        self._icon_unembed_btn.setToolTip(
-            "Extract the icon currently embedded in the catalog "
-            "JSON to a file you choose, and rewrite the catalog so "
-            "it points at that file instead."
-        )
-        embed_row.addWidget(self._icon_embed_btn)
-        embed_row.addWidget(self._icon_unembed_btn)
-        embed_row.addStretch(1)
-        label_layout.addLayout(embed_row)
+        icon_preview_row.addLayout(icon_actions_col, stretch=1)
+        label_layout.addLayout(icon_preview_row)
 
         # Icon scale slider — live preview as you drag.  Default 100
         # = the cell's natural inscribed-circle size (~70 % diameter).
@@ -1460,7 +1508,9 @@ class SettingsDialog(QDialog):
         # so the cell repaints immediately as the user drags.
         self._label_mode_grp.idToggled.connect(self._on_label_mode_changed)
         self._text_input.textChanged.connect(self._on_label_text_changed)
-        self._icon_browse_btn.clicked.connect(self._on_icon_browse)
+        # New v0.8.0a25+ icon section -- browse-and-embed is one button
+        # ``Choose image file…``; Library + Clear unchanged.
+        self._icon_choose_btn.clicked.connect(self._on_icon_choose_file)
         self._icon_library_btn.clicked.connect(self._on_icon_library)
         self._icon_clear_btn.clicked.connect(self._on_icon_clear)
         self._icon_scale_slider.valueChanged.connect(
@@ -1469,11 +1519,17 @@ class SettingsDialog(QDialog):
         self._label_opacity_slider.valueChanged.connect(
             self._on_label_opacity_changed
         )
-        self._icon_embed_btn.clicked.connect(self._on_icon_embed)
-        self._icon_unembed_btn.clicked.connect(self._on_icon_unembed)
+        # === OBSOLETE-ICON-UI-START (v0.8.0a25 -- delete after sign-off) ===
+        # self._icon_browse_btn.clicked.connect(self._on_icon_browse)
+        # self._icon_embed_btn.clicked.connect(self._on_icon_embed)
+        # self._icon_unembed_btn.clicked.connect(self._on_icon_unembed)
+        # === OBSOLETE-ICON-UI-END ===
         self._text_over_icon_cb.toggled.connect(
             self._on_text_over_icon_toggled
         )
+
+        # Initial paint of the preview thumbnail.
+        self._refresh_icon_preview()
 
     # ------------------------------------------------------------------
     # Show-time geometry — clamp into the visible work area
@@ -1847,7 +1903,7 @@ class SettingsDialog(QDialog):
         catalog_bound = bool(self._hex._catalog_path)
 
         self._text_input.setEnabled(is_text)
-        self._icon_browse_btn.setEnabled(is_icon)
+        self._icon_choose_btn.setEnabled(is_icon)
         if hasattr(self, "_icon_library_btn"):
             self._icon_library_btn.setEnabled(is_icon)
         self._icon_clear_btn.setEnabled(
@@ -1858,14 +1914,18 @@ class SettingsDialog(QDialog):
         # Superimpose-text checkbox only matters when an icon is shown.
         if hasattr(self, "_text_over_icon_cb"):
             self._text_over_icon_cb.setEnabled(is_icon)
-        # Embed: needs an external path AND a catalog to embed into.
-        self._icon_embed_btn.setEnabled(
-            is_icon and has_icon_path and catalog_bound
-        )
-        # Unembed: only meaningful when the catalog has embedded data.
-        self._icon_unembed_btn.setEnabled(
-            is_icon and has_embedded and catalog_bound
-        )
+        # === OBSOLETE-ICON-UI-START ===
+        # Embed / Unembed buttons no longer exist in the new icon
+        # section -- "Choose image file…" reads-and-embeds in one
+        # step, so the manual Embed step is gone, and Unembed
+        # (re-extract to disk) is YAGNI for now.
+        # self._icon_embed_btn.setEnabled(
+        #     is_icon and has_icon_path and catalog_bound
+        # )
+        # self._icon_unembed_btn.setEnabled(
+        #     is_icon and has_embedded and catalog_bound
+        # )
+        # === OBSOLETE-ICON-UI-END ===
 
     def _on_label_mode_changed(self, btn_id: int, checked: bool) -> None:
         """Radio toggle in the Cell label group.
@@ -1910,20 +1970,126 @@ class SettingsDialog(QDialog):
             return
         self._hex.apply_label_change(text_label=text or None)
 
-    def _on_icon_browse(self) -> None:
-        """Open a file picker for the icon image."""
+    # === OBSOLETE-ICON-UI-START (v0.8.0a25 -- delete after sign-off) ===
+    # def _on_icon_browse(self) -> None:
+    #     """Old browse-and-link handler.  Replaced by
+    #     ``_on_icon_choose_file`` which reads-and-embeds in one step,
+    #     so no new ``_icon_path`` links get written by the editor."""
+    #     from PySide6.QtWidgets import QFileDialog
+    #     chosen, _ = QFileDialog.getOpenFileName(
+    #         self,
+    #         "Select cell icon",
+    #         self._hex._icon_path or "",
+    #         "Images (*.png *.jpg *.jpeg *.svg *.ico *.bmp);;All files (*)",
+    #     )
+    #     if not chosen:
+    #         return
+    #     self._hex.apply_label_change(icon_path=chosen)
+    #     self._icon_path_label.setText(chosen)
+    #     self._icon_clear_btn.setEnabled(True)
+    # === OBSOLETE-ICON-UI-END ===
+
+    def _on_icon_choose_file(self) -> None:
+        """Open a file picker; read the chosen image; embed it into the
+        cell's catalog as base64.
+
+        Replaces the old browse-and-link flow (which left the cell
+        depending on an external file path that could go stale).
+        When the cell isn't bound to a catalog (a bare standalone),
+        the picked file is linked as ``_icon_path`` -- that's the
+        only remaining write site for the legacy field and it's
+        kept because there's nowhere else for the icon data to
+        live in that case.
+        """
         from PySide6.QtWidgets import QFileDialog
         chosen, _ = QFileDialog.getOpenFileName(
             self,
             "Select cell icon",
-            self._hex._icon_path or "",
+            "",
             "Images (*.png *.jpg *.jpeg *.svg *.ico *.bmp);;All files (*)",
         )
         if not chosen:
             return
-        self._hex.apply_label_change(icon_path=chosen)
-        self._icon_path_label.setText(chosen)
-        self._icon_clear_btn.setEnabled(True)
+
+        # Make sure the cell is in Icon mode so the dialog state and
+        # the painted result agree.
+        self._label_mode_icon_rb.setChecked(True)
+
+        if self._hex._catalog_path:
+            # Embed into the bound catalog (portable).
+            try:
+                from scriptree.core.cell_metadata import embed_icon
+                md = embed_icon(self._hex._catalog_path, chosen)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self, "Embed failed",
+                    f"Could not embed the icon:\n\n{exc}",
+                )
+                return
+            self._hex._icon_data_b64 = md.icon_data
+            self._hex._icon_data_format = md.icon_format
+            self._hex._icon_path = None
+            self._hex._label_cache = None
+            self._hex.update()
+        else:
+            # Unbound cell -- no catalog to embed into; keep the
+            # external link as a fallback so the icon still paints.
+            self._hex.apply_label_change(icon_path=chosen)
+        self._refresh_icon_preview()
+        self._update_label_controls_enabled()
+
+    def _refresh_icon_preview(self) -> None:
+        """Repaint the preview thumbnail in the Icon section + update
+        the source-status label.
+
+        Mirrors ``CellWindow.resolve_displayed_icon``: whatever the
+        cell would actually paint is what shows in the 96x96 preview.
+        When the resolved source is text/none, the preview area shows
+        a friendly placeholder so the user knows it's not broken --
+        just that no glyph is currently in play.
+        """
+        from PySide6.QtCore import QSize, Qt
+        from PySide6.QtGui import QPixmap
+
+        try:
+            pix, source = self._hex.resolve_displayed_icon()
+        except Exception as exc:  # noqa: BLE001
+            pix, source = None, "none"
+            _log(f"_refresh_icon_preview: resolve raised {exc!r}")
+
+        if pix is not None and not pix.isNull():
+            scaled = pix.scaled(
+                QSize(80, 80),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._icon_preview_label.setPixmap(scaled)
+        else:
+            self._icon_preview_label.setPixmap(QPixmap())
+            self._icon_preview_label.setText(
+                "(text)" if source == "text" else "(none)"
+            )
+
+        # Status text describing the current source.
+        status_text = {
+            "embedded":
+                "Source: <b>embedded</b> in this cell's catalog file.",
+            "file":
+                "Source: <i>external file link (legacy)</i>.  "
+                "Pick a new icon to switch to embedded storage.",
+            "auto":
+                "Source: <b>auto-classified</b> bundled glyph "
+                "(picked from the catalog's name + content).  "
+                "Pick an icon below to override.",
+            "text":
+                "No glyph -- the cell renders text (custom label "
+                "or auto-letters).  Switch to <b>Icon</b> mode "
+                "above to use a glyph.",
+            "none":
+                "Nothing renders on this cell yet.  "
+                "Switch to <b>Icon</b> mode above and pick one.",
+        }.get(source, "")
+        self._icon_source_label.setText(status_text)
 
     def _on_icon_library(self) -> None:
         """Pick a glyph from the shipped, trademark-safe ``icons/``
@@ -2022,20 +2188,26 @@ class SettingsDialog(QDialog):
             self._hex._icon_path = None
             self._hex._label_cache = None
             self._hex.update()
-            self._icon_path_label.setText(
-                f"(embedded: icon-{chosen['name']})"
-            )
         else:
             # Unbound cell — link the bundled PNG directly.
             self._hex.apply_label_change(icon_path=str(png_path))
-            self._icon_path_label.setText(str(png_path))
+        self._refresh_icon_preview()
         self._update_label_controls_enabled()
 
     def _on_icon_clear(self) -> None:
-        """Clear the cell's icon_path (icon mode falls back to default
-        text if no path; auto-letters otherwise)."""
+        """Clear every explicit icon storage slot on the cell.
+
+        After clear, the cell falls through to the auto-classified
+        glyph (when bound) or auto-letters.  We zero out BOTH the
+        legacy ``_icon_path`` and the canonical ``_icon_data_b64``
+        so a single Clear truly resets the icon state.
+        """
         self._hex.apply_label_change(icon_path=None)
-        self._icon_path_label.setText("(no icon set)")
+        self._hex._icon_data_b64 = ""
+        self._hex._icon_data_format = ""
+        self._hex._label_cache = None
+        self._hex.update()
+        self._refresh_icon_preview()
         self._icon_clear_btn.setEnabled(False)
 
     def _on_icon_scale_changed(self, value: int) -> None:
@@ -2052,94 +2224,40 @@ class SettingsDialog(QDialog):
         """Live-toggle the superimpose-text-over-icon mode."""
         self._hex.apply_text_over_icon_change(bool(on))
 
-    def _on_icon_embed(self) -> None:
-        """Embed the currently-linked external icon into the bound
-        catalog JSON.  Per user spec: "embed the icon in the json
-        tree file"."""
-        if not self._hex._catalog_path:
-            QMessageBox.information(
-                self, "No catalog loaded",
-                "This cell isn't bound to a .scriptree or "
-                ".scriptreetree file, so there's no catalog to embed "
-                "the icon into.  Right-click → ScripTree → Load… to "
-                "bind a catalog first.",
-            )
-            return
-        if not self._hex._icon_path:
-            QMessageBox.information(
-                self, "No icon to embed",
-                "Use Browse… to pick an icon image file, then Embed "
-                "it into the catalog.",
-            )
-            return
-        try:
-            from scriptree.core.cell_metadata import embed_icon
-            md = embed_icon(self._hex._catalog_path, self._hex._icon_path)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(
-                self, "Embed failed",
-                f"Could not embed the icon:\n\n{exc}",
-            )
-            return
-        # Sync cell state from the post-write metadata.
-        self._hex._icon_data_b64 = md.icon_data
-        self._hex._icon_data_format = md.icon_format
-        self._hex._icon_path = None
-        self._hex._label_cache = None
-        self._hex.update()
-        self._icon_path_label.setText("(icon embedded in catalog file)")
-        self._update_label_controls_enabled()
-
-    def _on_icon_unembed(self) -> None:
-        """Extract the catalog's embedded icon to a file, then rewrite
-        the catalog to reference the file instead.  Per user spec:
-        "pull the one that is in there and make it back into an
-        external link."""
-        if not self._hex._catalog_path:
-            QMessageBox.information(
-                self, "No catalog loaded",
-                "There's no catalog associated with this cell to "
-                "extract an embedded icon from.",
-            )
-            return
-        if not getattr(self._hex, "_icon_data_b64", ""):
-            QMessageBox.information(
-                self, "Nothing to unembed",
-                "The catalog has no embedded icon — there's nothing "
-                "to extract.",
-            )
-            return
-        # Default save path: catalog's directory + suggested name.
-        from pathlib import Path as _Path
-        from PySide6.QtWidgets import QFileDialog
-        catalog_p = _Path(self._hex._catalog_path)
-        ext = (self._hex._icon_data_format or "png").lstrip(".")
-        suggested = catalog_p.parent / f"{catalog_p.stem}_icon.{ext}"
-        chosen, _ = QFileDialog.getSaveFileName(
-            self,
-            "Unembed icon — save as",
-            str(suggested),
-            f"Image (*.{ext});;All files (*)",
-        )
-        if not chosen:
-            return
-        try:
-            from scriptree.core.cell_metadata import unembed_icon_to_file
-            md = unembed_icon_to_file(self._hex._catalog_path, chosen)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(
-                self, "Unembed failed",
-                f"Could not extract the icon:\n\n{exc}",
-            )
-            return
-        # Sync cell state.
-        self._hex._icon_path = md.icon_resolved_path or chosen
-        self._hex._icon_data_b64 = ""
-        self._hex._icon_data_format = ""
-        self._hex._label_cache = None
-        self._hex.update()
-        self._icon_path_label.setText(self._hex._icon_path)
-        self._update_label_controls_enabled()
+    # === OBSOLETE-ICON-UI-START (v0.8.0a25 -- delete after sign-off) ===
+    # The manual Embed and Unembed flows are gone -- the new
+    # "Choose image file…" button reads-and-embeds in one step, and
+    # the inverse "extract embedded icon back to a file" was YAGNI
+    # in the field (no user ever asked for it, and it complicates
+    # the storage story).  Kept commented for one release in case
+    # we discover a downstream caller; delete after sign-off.
+    #
+    # def _on_icon_embed(self) -> None:
+    #     if not self._hex._catalog_path: ...
+    #     if not self._hex._icon_path: ...
+    #     from scriptree.core.cell_metadata import embed_icon
+    #     md = embed_icon(self._hex._catalog_path, self._hex._icon_path)
+    #     self._hex._icon_data_b64 = md.icon_data
+    #     self._hex._icon_data_format = md.icon_format
+    #     self._hex._icon_path = None
+    #     self._hex._label_cache = None
+    #     self._hex.update()
+    #     self._icon_path_label.setText("(icon embedded in catalog file)")
+    #     self._update_label_controls_enabled()
+    #
+    # def _on_icon_unembed(self) -> None:
+    #     if not self._hex._catalog_path: ...
+    #     if not getattr(self._hex, "_icon_data_b64", ""): ...
+    #     from scriptree.core.cell_metadata import unembed_icon_to_file
+    #     md = unembed_icon_to_file(self._hex._catalog_path, chosen)
+    #     self._hex._icon_path = md.icon_resolved_path or chosen
+    #     self._hex._icon_data_b64 = ""
+    #     self._hex._icon_data_format = ""
+    #     self._hex._label_cache = None
+    #     self._hex.update()
+    #     self._icon_path_label.setText(self._hex._icon_path)
+    #     self._update_label_controls_enabled()
+    # === OBSOLETE-ICON-UI-END ===
 
     def _on_rotate(self) -> None:
         shape_key = self._SHAPE_DISPLAY.get(self._shape_combo.currentText(), "hexagon")
@@ -5115,6 +5233,78 @@ class CellWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Label / icon rendering
     # ------------------------------------------------------------------
+
+    def resolve_displayed_icon(self):  # noqa: ANN201
+        """Return ``(pixmap, source)`` for the icon currently rendered
+        on this cell.
+
+        ``pixmap`` is a ``QPixmap`` (possibly ``Null``) or ``None``.
+        ``source`` is one of:
+
+          * ``"embedded"``      -- ``_icon_data_b64`` (the canonical
+                                  new way; survives moves of the
+                                  source file).
+          * ``"file"``          -- ``_icon_path`` (deprecated legacy
+                                  path; still supported on read but
+                                  the editor no longer emits new
+                                  links).
+          * ``"auto"``          -- ``_auto_classified_pixmap`` (the
+                                  bundled icon picked from the
+                                  catalog's name + content).
+          * ``"text"``          -- a custom or auto-derived text
+                                  label is what gets rendered today
+                                  (no glyph).
+          * ``"none"``          -- nothing renders (unbound bare
+                                  cell with no auto-icon).
+
+        This mirrors ``_paint_cell_label``'s precedence verbatim
+        so the SettingsDialog's Icon-section preview shows exactly
+        what the cell shows.  Whenever this method is changed,
+        ``_paint_cell_label`` must change to match (or vice versa).
+        v0.8.0a25+ -- introduced when the SettingsDialog Icon
+        section was rebuilt to show a live preview.
+        """
+        # Priority 1a: embedded base64 (the new canonical source).
+        if self._icon_data_b64:
+            from PySide6.QtGui import QPixmap
+            try:
+                import base64
+                raw = base64.b64decode(self._icon_data_b64.encode("ascii"))
+                pix = QPixmap()
+                if pix.loadFromData(
+                    raw, (self._icon_data_format or "png").upper() or None,
+                ):
+                    return (pix, "embedded")
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Priority 1b: legacy external file link.  Still honoured on
+        # read so old user files keep working; the editor no longer
+        # writes new ones.
+        if self._icon_path:
+            from PySide6.QtGui import QPixmap
+            pix = QPixmap(self._icon_path)
+            if not pix.isNull():
+                return (pix, "file")
+
+        # Priority 2: explicit text label takes precedence over the
+        # auto-classified icon (this is what the cell would render).
+        if self._text_label:
+            return (None, "text")
+
+        # Priority 3: auto-classified bundled icon.
+        try:
+            classified = self._auto_classified_pixmap()
+        except Exception:  # noqa: BLE001
+            classified = None
+        if classified is not None:
+            return (classified, "auto")
+
+        # Priority 4: auto-derived letters (no glyph).
+        if self._auto_label_text():
+            return (None, "text")
+
+        return (None, "none")
 
     def _paint_cell_label(
         self, painter: QPainter, size: int, cx: float, cy: float,
