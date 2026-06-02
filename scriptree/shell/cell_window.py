@@ -584,7 +584,7 @@ class SettingsDialog(QDialog):
         # getting long enough that it routinely opened taller than
         # the desktop work area when launched from a cell sitting
         # near a screen edge.  Four tabs ("Shape & Size", "Click
-        # action", "Colours", "Label") keep any single page short
+        # action", "Colours", "Label/Icon") keep any single page short
         # enough to fit on a typical 1080 p display without
         # scrolling.
         outer_layout = QVBoxLayout(self)
@@ -619,7 +619,11 @@ class SettingsDialog(QDialog):
         label_tab = QWidget()
         label_tab_layout = QVBoxLayout(label_tab)
         label_tab_layout.setSpacing(10)
-        self._tabs.addTab(label_tab, "Label")
+        # v0.8.0a25 -- tab renamed from "Label" to "Label/Icon" so
+        # users can find the icon controls (which have always lived
+        # here, alongside the custom-text + auto-letters fields)
+        # without hunting through the other tabs.
+        self._tabs.addTab(label_tab, "Label/Icon")
 
         # v0.6.21 — menu-appearance controls live INSIDE the Shape &
         # Size tab (per user direction: "Put it in the same section
