@@ -194,6 +194,28 @@ class ForestController(QObject):
         self.forestChanged.connect(self._mark_dirty)
         self.forestChanged.connect(self._schedule_autosave)
 
+        # v0.8.0a25 fix -- when a cell closes WHILE THE APP IS RUNNING,
+        # treat that as "user wants this item removed from the forest"
+        # and prune the corresponding ForestItem so the next ``save``
+        # writes the forest without that cell.  Before this hook, the
+        # forest persisted closed cells indefinitely: closing a cell
+        # removed the window but left the item in ``forest.items``,
+        # so reload + spawn brought the cell back from the dead.
+        #
+        # ``_app_quitting`` distinguishes user-initiated cell close
+        # (False -> prune the item) from app shutdown cascade (True
+        # -> leave forest.items alone so flush_if_dirty's final save
+        # reflects the user's actual layout).  Set to True by
+        # ``flush_if_dirty`` and ``close_all_cells``.
+        self._app_quitting: bool = False
+        try:
+            from scriptree.shell.cell_registry import CellRegistry
+            CellRegistry.instance().hexagonClosed.connect(
+                self._on_cell_closed
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"__init__: hexagonClosed hook failed: {exc!r}")
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -700,6 +722,71 @@ class ForestController(QObject):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _on_cell_closed(self, hex_id: str) -> None:
+        """A CellWindow somewhere just unregistered itself.
+
+        If the closing cell is one of our spawned forest items AND
+        we're NOT in the middle of shutting down, treat it as
+        "user wants this item removed from the forest": prune the
+        ForestItem from ``self.forest.items``, drop it from
+        ``self._spawned``, add the path to ``self.forest.excluded``
+        so a subsequent auto-discovery pass doesn't immediately
+        re-add it, and mark the forest dirty so the next save
+        persists the removal.
+
+        ``self._app_quitting`` short-circuits the prune so the
+        shutdown cascade (which closes every cell as the app
+        tears down) doesn't wipe the user's whole forest into
+        the excluded list -- in that case we want the on-disk
+        layout to survive the quit verbatim.
+
+        v0.8.0a25 -- fixes the bug where closing cells, saving,
+        quitting, and reloading brought every closed cell back
+        because ``save`` never noticed they were gone.
+        """
+        if self._app_quitting:
+            return
+        # Find which spawned path corresponds to this hex_id.
+        # ``_spawned`` is path -> CellWindow; we want the inverse
+        # lookup.  Cells are sparse (a few per forest) so the
+        # linear scan is fine.
+        target_path: str | None = None
+        for path_key, win in list(self._spawned.items()):
+            try:
+                if getattr(win, "_id", None) == hex_id:
+                    target_path = path_key
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if target_path is None:
+            # Not a forest cell (could be a ring member, a standalone
+            # not under us, etc.) -- ignore.
+            return
+        _log(
+            f"_on_cell_closed: pruning forest item for hex_id={hex_id} "
+            f"path={target_path!r}"
+        )
+        # Drop the live mapping.
+        self._spawned.pop(target_path, None)
+        # Remove the ForestItem whose normalised path matches.
+        removed: list[str] = []
+        new_items: list[ForestItem] = []
+        for it in self.forest.items:
+            if _norm(it.path) == target_path:
+                removed.append(it.path)
+                continue
+            new_items.append(it)
+        self.forest.items = new_items
+        # Exclude the path so the next discover_now doesn't suggest
+        # re-adding the item -- the user just told us they don't
+        # want it.  ``Re-include`` from the Excluded-items dialog
+        # is the documented way to bring it back.
+        for raw in removed:
+            if raw not in self.forest.excluded:
+                self.forest.excluded.append(raw)
+        if removed:
+            self.forestChanged.emit()
+
     # ------------------------------------------------------------------
     # User actions
     # ------------------------------------------------------------------
@@ -1054,12 +1141,25 @@ class ForestController(QObject):
         no pending change is lost when the debounce timer never
         gets to fire.
 
+        v0.8.0a25 -- also flips ``_app_quitting`` to True so the
+        ``hexagonClosed`` handler stops pruning forest items as
+        the cells cascade-close during shutdown.  Without this
+        flag flip, every cell that closes during the quit would
+        be added to ``forest.excluded`` AFTER the save here, but
+        that mutation never reaches disk so it's harmless --
+        defense-in-depth in case any future save path runs
+        after this point.
+
         L7 fix: when the session is transient (no ``loaded_from`` and
         ``fallback_to_default`` off) ``save()`` is a deliberate
         no-op — but at process exit that silently discarded the
         user's whole forest with only a stderr line.  Here, at the
         last possible moment, surface it: offer Save As… / Discard
         instead of vanishing the work."""
+        # Tell the hexagonClosed handler we're shutting down so the
+        # cascade of cell closes during quit doesn't add every cell
+        # to forest.excluded.
+        self._app_quitting = True
         if not self._dirty:
             return
         try:
