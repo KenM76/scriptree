@@ -1269,7 +1269,12 @@ class SettingsDialog(QDialog):
         self._label_mode_grp.addButton(self._label_mode_icon_rb, 2)
 
         # Pick the radio that reflects the cell's current state.
-        if hexagon._icon_path:
+        # v0.8.0a25 fix: check ``_icon_data_b64`` too -- the embedded
+        # base64 storage is the canonical "icon set" signal today,
+        # but the legacy check only looked at ``_icon_path`` so any
+        # cell whose icon was embedded (the common case after
+        # v0.6.33) showed "Default" by mistake.
+        if hexagon._icon_path or hexagon._icon_data_b64:
             self._label_mode_icon_rb.setChecked(True)
         elif hexagon._text_label:
             self._label_mode_text_rb.setChecked(True)
@@ -1470,16 +1475,57 @@ class SettingsDialog(QDialog):
         self._build_menu_appearance_tab(shape_tab_layout)
 
         # ---- Footer (lives outside the tab widget) -------------------------
-        # The Reset / Close buttons apply to the whole dialog regardless of
-        # which tab is active, so they go in the outer layout below the
-        # QTabWidget.
+        # The footer applies to the whole dialog regardless of which
+        # tab is active.  Three buttons:
+        #   * Reset to defaults -- reload the cell's authored state
+        #     from the bound catalog (or branding defaults when
+        #     unbound).  STAYS in the dialog so the user can keep
+        #     tweaking from the reset baseline.
+        #   * Cancel -- revert every change made since the dialog
+        #     opened and close.  Implements the "I was experimenting,
+        #     forget what I did" exit.
+        #   * OK -- keep changes and close.  Since the dialog uses
+        #     live-preview, OK just closes; the cell state is
+        #     already updated.
+        #
+        # v0.8.0a25 -- introduced the OK / Cancel pattern.  The
+        # window-frame [X] maps to Cancel so the modern "X means
+        # discard unsaved changes" expectation is honoured -- see
+        # ``closeEvent`` for the wiring.
         footer = QHBoxLayout()
         self._reset_btn = QPushButton("Reset to defaults")
+        self._reset_btn.setToolTip(
+            "Reload this cell's settings from the bound catalog file "
+            "(or restore the app defaults when unbound).  Stays in "
+            "this dialog so you can keep tweaking from there."
+        )
         footer.addWidget(self._reset_btn)
         footer.addStretch()
-        self._close_btn = QPushButton("Close")
-        footer.addWidget(self._close_btn)
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setToolTip(
+            "Discard every change you've made since opening this "
+            "dialog and close."
+        )
+        footer.addWidget(self._cancel_btn)
+        self._ok_btn = QPushButton("OK")
+        self._ok_btn.setDefault(True)
+        self._ok_btn.setToolTip(
+            "Keep these settings and close."
+        )
+        footer.addWidget(self._ok_btn)
         outer_layout.addLayout(footer)
+
+        # Capture the cell's state as it was when the dialog opened.
+        # ``Cancel`` and the [X] button restore this snapshot so the
+        # user can experiment without committing.  Computed AFTER
+        # all the widgets have read ``hexagon._*`` but BEFORE any
+        # signal handler fires (which is guaranteed because nothing
+        # is connected yet -- connections happen in the block below).
+        self._open_snapshot = self._capture_hex_state()
+        # Track whether the user committed via OK so the closeEvent
+        # knows whether to revert.  Defaults False -- if the user
+        # clicks the [X], we treat it as Cancel.
+        self._committed = False
 
         # ---- Initial orientation enabled state ------------------------------
         self._update_orient_enabled()
@@ -1492,7 +1538,8 @@ class SettingsDialog(QDialog):
         self._always_on_top_cb.toggled.connect(self._on_always_on_top_changed)
         self._rotate_btn.clicked.connect(self._on_rotate)
         self._reset_btn.clicked.connect(self._on_reset)
-        self._close_btn.clicked.connect(self.close)
+        self._ok_btn.clicked.connect(self._on_ok)
+        self._cancel_btn.clicked.connect(self._on_cancel)
         # Click-action dropdowns (V3 v0.3.5+) — write through to the
         # catalog on every change so the choice survives a restart.
         self._click_action_combo.currentIndexChanged.connect(
@@ -2273,46 +2320,281 @@ class SettingsDialog(QDialog):
         self._hex.apply_shape_change(shape_key, new_orient)
         self._hex._save_settings()
 
-    def _on_reset(self) -> None:
-        """Re-read branding defaults and push them to the hexagon + UI."""
-        hex_cfg = self._hex._branding.get("hexagon", {})
-        default_shape = hex_cfg.get("shape", "hexagon")
-        default_orient = hex_cfg.get("orientation", "flat-top")
-        default_size = hex_cfg.get("defaultSizePx", 56)
-        default_transp = hex_cfg.get("defaultTransparency", 0.85)
-        default_aot = hex_cfg.get("defaultAlwaysOnTop", True)
+    # ------------------------------------------------------------------
+    # State capture / restore -- backbone of the OK / Cancel /
+    # Reset semantics (v0.8.0a25+).
+    # ------------------------------------------------------------------
 
-        # Block signals while we batch-update UI to avoid cascading applies.
-        self._shape_combo.blockSignals(True)
-        self._orient_combo.blockSignals(True)
-        self._size_slider.blockSignals(True)
-        self._transp_slider.blockSignals(True)
-        self._always_on_top_cb.blockSignals(True)
+    def _capture_hex_state(self) -> dict:
+        """Snapshot every cell attribute the dialog can mutate.
 
-        self._shape_combo.setCurrentText(self._SHAPE_INTERNAL.get(default_shape, "Hexagon"))
-        self._orient_combo.setCurrentText(self._ORIENT_INTERNAL.get(default_orient, "Flat-top"))
-        self._size_slider.setValue(default_size)
-        transp_int = round(default_transp * 100)
-        self._transp_slider.setValue(transp_int)
-        self._always_on_top_cb.setChecked(default_aot)
+        Used by ``Cancel`` (revert to open-time state) and as the
+        common shape produced by ``_authored_state`` /
+        ``_branding_default_state`` for ``Reset to defaults``.
+        Keep this in lockstep with ``_apply_hex_state`` so a round-
+        trip (capture -> apply) is the identity transform.
+        """
+        h = self._hex
+        return {
+            "shape": h._shape,
+            "orientation": h._orientation,
+            "size_px": h._size_px,
+            "transparency": h._transparency,
+            "always_on_top": h._always_on_top,
+            "icon_path": h._icon_path,
+            "icon_data_b64": h._icon_data_b64,
+            "icon_data_format": h._icon_data_format,
+            "text_label": h._text_label,
+            "icon_scale": h._icon_scale,
+            "label_opacity": h._label_opacity,
+            "label_text_over_icon": getattr(
+                h, "_label_text_over_icon", False,
+            ),
+            "fill_color": getattr(h, "_fill_color", ""),
+            "text_color": getattr(h, "_text_color", ""),
+            "click_action": getattr(h, "_click_action", "menu"),
+            "click_run_mode": getattr(
+                h, "_click_run_mode", "sequential",
+            ),
+        }
 
-        self._shape_combo.blockSignals(False)
-        self._orient_combo.blockSignals(False)
-        self._size_slider.blockSignals(False)
-        self._transp_slider.blockSignals(False)
-        self._always_on_top_cb.blockSignals(False)
+    def _apply_hex_state(self, snap: dict) -> None:
+        """Push a state snapshot back into the cell + the dialog's
+        widgets.  Uses the cell's ``apply_*`` methods so the cell
+        repaints + persists in the same way an interactive change
+        would.
 
-        # Update labels.
-        self._size_label.setText(f"Size: {default_size} px")
-        self._transp_label.setText(f"Transparency: {transp_int}%")
+        Widget signals are blocked during the bulk update so we
+        don't cascade through the textChanged / valueChanged
+        handlers; one final pass refreshes the icon preview and
+        re-enables the per-mode controls.
+        """
+        h = self._hex
 
-        # Apply all at once.
+        # Block every signal that could re-trigger an apply while
+        # we're already applying.
+        widgets = [
+            self._shape_combo, self._orient_combo,
+            self._size_slider, self._transp_slider,
+            self._always_on_top_cb,
+            self._text_input,
+            self._icon_scale_slider, self._label_opacity_slider,
+        ]
+        if hasattr(self, "_text_over_icon_cb"):
+            widgets.append(self._text_over_icon_cb)
+        if hasattr(self, "_click_action_combo"):
+            widgets.append(self._click_action_combo)
+        if hasattr(self, "_click_run_mode_combo"):
+            widgets.append(self._click_run_mode_combo)
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            # Shape + orientation + size.
+            h.apply_shape_change(snap["shape"], snap["orientation"])
+            h.apply_size_change(snap["size_px"])
+            h.apply_transparency_change(snap["transparency"])
+            h.apply_always_on_top_change(snap["always_on_top"])
+
+            # Icon storage -- push the raw fields and force a repaint.
+            h._icon_path = snap["icon_path"]
+            h._icon_data_b64 = snap["icon_data_b64"]
+            h._icon_data_format = snap["icon_data_format"]
+            h._text_label = snap["text_label"]
+            h._icon_scale = snap["icon_scale"]
+            h._label_opacity = snap["label_opacity"]
+            h._label_text_over_icon = snap["label_text_over_icon"]
+            h._fill_color = snap.get("fill_color", "")
+            h._text_color = snap.get("text_color", "")
+            h._click_action = snap.get("click_action", "menu")
+            h._click_run_mode = snap.get(
+                "click_run_mode", "sequential",
+            )
+            h._label_cache = None
+            h._save_settings()
+            h.update()
+
+            # Sync widgets.
+            self._shape_combo.setCurrentText(
+                self._SHAPE_INTERNAL.get(snap["shape"], "Hexagon"),
+            )
+            self._orient_combo.setCurrentText(
+                self._ORIENT_INTERNAL.get(
+                    snap["orientation"], "Flat-top",
+                ),
+            )
+            self._size_slider.setValue(snap["size_px"])
+            self._size_label.setText(f"Size: {snap['size_px']} px")
+            transp_int = round(snap["transparency"] * 100)
+            self._transp_slider.setValue(transp_int)
+            self._transp_label.setText(
+                f"Transparency: {transp_int}%",
+            )
+            self._always_on_top_cb.setChecked(snap["always_on_top"])
+            self._text_input.setText(snap["text_label"] or "")
+            self._icon_scale_slider.setValue(
+                round(snap["icon_scale"] * 100),
+            )
+            self._icon_scale_label.setText(
+                f"Icon scale: {round(snap['icon_scale'] * 100)}%",
+            )
+            self._label_opacity_slider.setValue(
+                round(snap["label_opacity"] * 100),
+            )
+            self._label_opacity_label.setText(
+                f"Label opacity: {round(snap['label_opacity'] * 100)}%",
+            )
+            if hasattr(self, "_text_over_icon_cb"):
+                self._text_over_icon_cb.setChecked(
+                    bool(snap["label_text_over_icon"]),
+                )
+            # Sync the mode radio (icon if any icon storage is set,
+            # text if text_label, else default).
+            if snap["icon_path"] or snap["icon_data_b64"]:
+                self._label_mode_icon_rb.setChecked(True)
+            elif snap["text_label"]:
+                self._label_mode_text_rb.setChecked(True)
+            else:
+                self._label_mode_default_rb.setChecked(True)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+
+        # Repaint the preview thumbnail + status line.
+        if hasattr(self, "_icon_preview_label"):
+            self._refresh_icon_preview()
         self._update_orient_enabled()
-        self._hex.apply_shape_change(default_shape, default_orient)
-        self._hex.apply_size_change(default_size)
-        self._hex.apply_transparency_change(default_transp)
-        self._hex.apply_always_on_top_change(default_aot)
-        self._hex._save_settings()
+        self._update_label_controls_enabled()
+
+    def _authored_state(self) -> dict | None:
+        """Snapshot built from the bound catalog file as it sits on
+        disk -- the "as authored" state Reset returns to.
+
+        Returns ``None`` when the cell has no bound catalog, in
+        which case Reset falls back to ``_branding_default_state``.
+        Read failures (corrupt JSON, missing file) also return
+        ``None`` -- safer than half-applying.
+        """
+        from pathlib import Path
+        cp = getattr(self._hex, "_catalog_path", None)
+        if not cp:
+            return None
+        try:
+            p = Path(cp)
+            suffix = p.suffix.lower()
+            if suffix == ".scriptree":
+                from scriptree.core.io import load_tool
+                obj = load_tool(cp)
+            elif suffix == ".scriptreetree":
+                from scriptree.core.io import load_tree
+                obj = load_tree(cp)
+            else:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+
+        # Both ToolDef and TreeDef carry the same cell_* field set.
+        base = self._branding_default_state()
+        base.update({
+            "icon_path": getattr(obj, "cell_icon", "") or None,
+            "icon_data_b64": getattr(obj, "cell_icon_data", "") or "",
+            "icon_data_format": getattr(obj, "cell_icon_format", "") or "",
+            "text_label": getattr(obj, "cell_text_label", "") or None,
+            "icon_scale": getattr(obj, "cell_icon_scale", 1.0),
+            "label_opacity": getattr(obj, "cell_label_opacity", 1.0),
+            "label_text_over_icon": getattr(
+                obj, "cell_text_over_icon", False,
+            ),
+            "fill_color": getattr(obj, "cell_fill_color", "") or "",
+            "text_color": getattr(obj, "cell_text_color", "") or "",
+            "click_action": getattr(
+                obj, "cell_click_action", "menu",
+            ) or "menu",
+            "click_run_mode": getattr(
+                obj, "cell_click_run_mode", "sequential",
+            ) or "sequential",
+        })
+        return base
+
+    def _branding_default_state(self) -> dict:
+        """Snapshot built from branding defaults -- the fallback
+        Reset target when there's no catalog to read from."""
+        hex_cfg = self._hex._branding.get("hexagon", {})
+        return {
+            "shape": hex_cfg.get("shape", "hexagon"),
+            "orientation": hex_cfg.get("orientation", "flat-top"),
+            "size_px": hex_cfg.get("defaultSizePx", 56),
+            "transparency": hex_cfg.get("defaultTransparency", 0.85),
+            "always_on_top": hex_cfg.get("defaultAlwaysOnTop", True),
+            "icon_path": None,
+            "icon_data_b64": "",
+            "icon_data_format": "",
+            "text_label": None,
+            "icon_scale": 1.0,
+            "label_opacity": 1.0,
+            "label_text_over_icon": False,
+            "fill_color": "",
+            "text_color": "",
+            "click_action": "menu",
+            "click_run_mode": "sequential",
+        }
+
+    # ------------------------------------------------------------------
+    # Footer button handlers -- Reset, Cancel, OK.
+    # ------------------------------------------------------------------
+
+    def _on_reset(self) -> None:
+        """Reset every visible setting to the cell's "authored"
+        state.
+
+        Authored state is, in priority order:
+
+          1. The bound catalog file's ``cell.*`` block on disk --
+             so if the user has set up an icon and saved the
+             catalog, Reset returns the cell to *that* icon
+             rather than wiping it.
+          2. Branding defaults (shape, size, transparency,
+             always-on-top, no icon, no text label) for
+             unbound cells.
+
+        Stays in the dialog so the user can keep tweaking from
+        the reset baseline -- per the standard
+        Reset / Cancel / OK pattern in modern dialogs.
+        """
+        snap = self._authored_state() or self._branding_default_state()
+        self._apply_hex_state(snap)
+
+    def _on_cancel(self) -> None:
+        """Revert every change made since the dialog opened, then
+        close.  Implements the "I was experimenting, forget it"
+        exit path."""
+        self._apply_hex_state(self._open_snapshot)
+        self._committed = False
+        self.close()
+
+    def _on_ok(self) -> None:
+        """Keep the current settings (already live in the cell)
+        and close."""
+        self._committed = True
+        self.close()
+
+    def closeEvent(self, event) -> None:  # noqa: ANN001 (Qt event)
+        """Map the window-frame [X] to Cancel.
+
+        The modern UX expectation is "X discards unsaved
+        changes."  ``_committed`` is True only when the user
+        clicked OK; any other path (frame close, Esc, alt-F4)
+        falls through here and we revert before letting the
+        close proceed.
+        """
+        if not self._committed:
+            try:
+                self._apply_hex_state(self._open_snapshot)
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"SettingsDialog closeEvent: revert raised "
+                    f"{exc!r} -- proceeding with close",
+                )
+        super().closeEvent(event)
 
 
 # ---------------------------------------------------------------------------
