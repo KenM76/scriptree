@@ -6417,6 +6417,115 @@ class CellWindow(QMainWindow):
                     f"settle/relocate (drag-end) raised {exc!r}"
                 )
 
+    def _single_leaf_path(self) -> str | None:
+        """Return the absolute path of this cell's lone tool leaf, or
+        ``None`` if the cell doesn't bind exactly one tool.
+
+        Resolution by cell role:
+
+        * **Standalone bound to a ``.scriptree``** -> that path
+          (one tool by definition).
+        * **Standalone bound to a ``.scriptreetree``** -> the lone
+          leaf path IFF the tree contains exactly one leaf
+          (recursively); otherwise ``None``.
+        * **Master cell** (ring or forest) -> the lone leaf across
+          ALL members' catalogs: if every member is bound and the
+          combined leaf count is exactly one, return that path;
+          otherwise ``None``.
+        * **Empty / no catalog** -> ``None``.
+        * **Bound to a ``.scriptreering``** -> ``None`` (the ring
+          contains cells, not tools per se -- we'd need to recurse
+          into each cell's binding, which can be a tree, ring,
+          etc.; keeping the shortcut intentionally narrow here
+          avoids confusing edge cases).
+
+        Used by ``click("double")`` to short-circuit the menu /
+        lock-open tree dance when there's only one possible target.
+        Errors reading a catalog (broken JSON, missing file) return
+        ``None`` so the standard menu path runs and the user can
+        see the issue.
+        """
+        from pathlib import Path
+
+        def _count_leaves_in_tree(tree_path: str) -> tuple[int, str | None]:
+            """Return ``(count, last_leaf_path)`` for a tree.
+
+            ``last_leaf_path`` is meaningful only when ``count == 1``;
+            otherwise we keep counting until we know "≥ 2" and bail
+            out (the caller only cares whether it's exactly one).
+            """
+            try:
+                from scriptree.core.io import load_tree
+                tree = load_tree(tree_path)
+            except Exception:  # noqa: BLE001
+                return (0, None)
+            tree_dir = Path(tree_path).parent
+            found: list[str] = []
+
+            def _walk(nodes):  # noqa: ANN001
+                for n in nodes:
+                    if getattr(n, "type", "") == "leaf":
+                        leaf_path = getattr(n, "path", None)
+                        if leaf_path:
+                            # Tree leaf paths are typically relative
+                            # to the tree file's directory.
+                            resolved = (tree_dir / leaf_path).resolve()
+                            found.append(str(resolved))
+                            if len(found) > 1:
+                                return  # early bail
+                    else:
+                        _walk(getattr(n, "children", []) or [])
+                        if len(found) > 1:
+                            return
+            _walk(tree.nodes)
+            if len(found) == 1:
+                return (1, found[0])
+            return (len(found), None)
+
+        # --- master case: walk every member's binding ---
+        if self.role == "master":
+            members = list(getattr(self, "_members", {}).keys())
+            if not members:
+                return None
+            from scriptree.shell.cell_registry import CellRegistry
+            registry = CellRegistry.instance()
+            total = 0
+            last_leaf: str | None = None
+            for mid in members:
+                cell = registry.get(mid)
+                if cell is None:
+                    continue
+                cp = getattr(cell, "catalog_path", None)
+                if not cp:
+                    continue
+                p = Path(cp)
+                if p.suffix.lower() == ".scriptree":
+                    total += 1
+                    last_leaf = str(p.resolve())
+                elif p.suffix.lower() == ".scriptreetree":
+                    cnt, leaf = _count_leaves_in_tree(str(p))
+                    total += cnt
+                    if cnt == 1 and total == 1:
+                        last_leaf = leaf
+                else:
+                    return None  # rings/unknown -> don't short-circuit
+                if total > 1:
+                    return None
+            return last_leaf if total == 1 else None
+
+        # --- standalone case ---
+        cp = getattr(self, "catalog_path", None)
+        if not cp:
+            return None
+        p = Path(cp)
+        ext = p.suffix.lower()
+        if ext == ".scriptree":
+            return str(p.resolve())
+        if ext == ".scriptreetree":
+            cnt, leaf = _count_leaves_in_tree(str(p))
+            return leaf if cnt == 1 else None
+        return None
+
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             # Qt synthesises a doubleClick only when two presses land within
@@ -9571,7 +9680,30 @@ class CellWindow(QMainWindow):
             # menus each in its own sub-folder on the menu, and
             # double-right click should bring them up in the full
             # editor in the same sub-folder style."
+            #
+            # v0.8.0a25+ shortcut (per user request 2026-06-02): if
+            # the cell binds a tree (or a master whose merged tree)
+            # contains EXACTLY ONE leaf, double-left launches that
+            # tool directly instead of popping a one-item menu --
+            # which is just an extra click before the inevitable
+            # launch.  Falls through to the standard behaviour for
+            # any cell with ≥ 2 leaves or no leaves at all.
             if not self._locked_open:
+                single_tool = self._single_leaf_path()
+                if single_tool is not None:
+                    _log(
+                        f"click(double) id={self._id[:8]} — single-tool "
+                        f"shortcut, launching {single_tool!r}"
+                    )
+                    try:
+                        from scriptree.shell.v1_launcher import launch_tool
+                        launch_tool(single_tool)
+                    except Exception as exc:  # noqa: BLE001
+                        _log(
+                            f"click(double): single-tool launch failed: "
+                            f"{exc!r}"
+                        )
+                    return
                 if self.role == "master":
                     # Popup-style menu — same builder as single-click,
                     # already produces sub-folders per member.

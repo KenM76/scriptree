@@ -533,6 +533,10 @@ class ForestController(QObject):
             _bundled("package"),
             "Auto-add from ScripTreeApps now",
         )
+        a_reorganise = forest_menu.addAction(
+            _bundled("folder"),
+            "Re-organise (re-run category grouping)",
+        )
         forest_menu.addSeparator()
         a_settings = forest_menu.addAction(
             _bundled("settings"), "Forest settings…",
@@ -550,6 +554,7 @@ class ForestController(QObject):
         a_open.triggered.connect(self._on_open)
         a_refresh.triggered.connect(self.refresh_from_sources)
         a_autoadd.triggered.connect(self._on_autoadd_now)
+        a_reorganise.triggered.connect(self.refresh_from_sources)
         a_settings.triggered.connect(self._show_settings_dialog)
         a_excluded.triggered.connect(self._show_excluded_dialog)
         a_about.triggered.connect(self._on_about)
@@ -752,9 +757,157 @@ class ForestController(QObject):
     def discover_now(self) -> DiscoveryDiff:
         cfg = self.forest.auto_discover
         discovered = discover(cfg.roots, cfg.include, self.forest.excluded)
+        # v0.8.0a25+ -- auto-organise pass.  Read each discovered
+        # item's ``category`` field (best effort -- I/O failures
+        # fall back to "uncategorised") and bucket multiple items
+        # sharing a top-level category into one synthesised
+        # ``.scriptreetree`` under the personal-apps ``_groups/``
+        # directory.  The resulting flat list -- mix of original
+        # paths (passthroughs) and synthesised-tree paths -- is
+        # then fed to the standard diff machinery.  Orphan synth
+        # trees from prior passes (categories the user removed)
+        # are pruned at the end.
+        try:
+            discovered = self._apply_categorize_pass(discovered)
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort: if the categorise pass blows up for any
+            # reason, fall back to the raw discovery list.  The
+            # forest still works; the user just sees flat cells
+            # for now.  Logged so we can diagnose later.
+            import sys
+            print(
+                f"[forest_controller] categorize pass failed: {exc!r}",
+                file=sys.stderr,
+            )
         return diff_against(
             self.forest.items, discovered, self.forest.excluded,
         )
+
+    def _apply_categorize_pass(
+        self, discovered: list[Any],
+    ) -> list[Any]:
+        """Run ``group_by_category`` over the discovered list and
+        return a new list with synthesised trees substituted for
+        the items that got rolled up.
+
+        Implementation detail: ``group_by_category`` works on
+        ``GroupCandidate`` records, not ``DiscoveredItem``.  We
+        translate, run the pass, then translate the synthesised
+        outputs back into ``DiscoveredItem`` shapes the diff
+        machinery understands.  Items that pass through unchanged
+        keep their original ``DiscoveredItem`` (no translation
+        round-trip, so any future fields land safely).
+        """
+        from pathlib import Path
+        from scriptree.core.app_install import default_personal_root
+        from scriptree.core.categorize import (
+            GroupCandidate, group_by_category, prune_orphan_synthesised,
+        )
+        from scriptree.core.io import load_tool, load_tree
+        from scriptree.shell.forest_discover import DiscoveredItem
+
+        if not discovered:
+            return []
+
+        # Map item path -> original DiscoveredItem so we can return
+        # passthroughs verbatim without losing kind / catalog_path.
+        original_by_path: dict[str, Any] = {
+            di.path: di for di in discovered
+        }
+
+        # Build GroupCandidate records.  ``category`` and a
+        # ``display_name`` come from the catalog; failure to read
+        # the catalog (broken JSON, missing file) means we treat
+        # it as uncategorised so it still appears in the forest.
+        candidates: list[GroupCandidate] = []
+        for di in discovered:
+            cat = ""
+            display = Path(di.path).stem
+            try:
+                p = Path(di.path)
+                if p.suffix.lower() == ".scriptree":
+                    tool = load_tool(di.path)
+                    cat = getattr(tool, "category", "") or ""
+                    display = tool.name or display
+                elif p.suffix.lower() == ".scriptreetree":
+                    tree = load_tree(di.path)
+                    cat = getattr(tree, "category", "") or ""
+                    display = tree.name or display
+                # .scriptreering: rings carry no category today;
+                # they always pass through.
+            except Exception:  # noqa: BLE001
+                # Unreadable -- best to surface the file in the
+                # forest as-is, so the user can see and fix it,
+                # rather than swallow it.
+                cat = ""
+            candidates.append(GroupCandidate(
+                path=di.path, category=cat, display_name=display,
+            ))
+
+        groups_dir = default_personal_root() / "_groups"
+
+        outcomes = group_by_category(
+            candidates,
+            output_dir=groups_dir,
+            existing_tree_names=self._existing_tree_names(),
+        )
+
+        # Translate outcomes back to DiscoveredItem-shaped records.
+        new_discovered: list[Any] = []
+        kept_synth_paths: set[Path] = set()
+        for outcome in outcomes:
+            if outcome.kind == "passthrough":
+                orig = original_by_path.get(outcome.path)
+                if orig is not None:
+                    new_discovered.append(orig)
+                # If we can't find the original, drop -- shouldn't
+                # happen, but never insert a bare path.
+            else:
+                # synthesised tree -- create a DiscoveredItem record
+                # of kind "tree" pointing at the synthesised file.
+                p = Path(outcome.path)
+                kept_synth_paths.add(p)
+                new_discovered.append(DiscoveredItem(
+                    path=str(p), kind="tree",
+                ))
+
+        # Sweep orphans from prior passes -- a category the user
+        # has since removed (or every tool from a category got
+        # uninstalled) leaves behind a stale ``.scriptreetree``
+        # in _groups/ that no longer appears in
+        # ``kept_synth_paths``.  Prune them so the forest doesn't
+        # keep showing a ghost cell.
+        try:
+            prune_orphan_synthesised(
+                groups_dir, keep_paths=kept_synth_paths,
+            )
+        except Exception as exc:  # noqa: BLE001
+            import sys
+            print(
+                f"[forest_controller] orphan prune failed: {exc!r}",
+                file=sys.stderr,
+            )
+
+        return new_discovered
+
+    def _existing_tree_names(self) -> set[str]:
+        """Stems of every ``.scriptreetree`` currently in the
+        forest's roots, so the synth pass can avoid colliding
+        with a user-authored tree of the same name."""
+        from pathlib import Path
+        names: set[str] = set()
+        for root in self.forest.auto_discover.roots:
+            try:
+                rp = Path(root)
+                if not rp.is_absolute():
+                    from scriptree.shell.forest_io import _project_root
+                    rp = (_project_root() / rp).resolve()
+                if rp.is_dir():
+                    for tree in rp.rglob("*.scriptreetree"):
+                        names.add(tree.stem)
+            except Exception:  # noqa: BLE001
+                continue
+        return names
 
     def apply_diff(
         self,

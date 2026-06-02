@@ -754,6 +754,41 @@ class ToolDef:
     # See ``docs/LLM/scriptree_format.md`` for the schema doc
     # and ``scriptree.core.platform`` for the merge semantics.
     platforms: dict[str, PlatformOverride] = field(default_factory=dict)
+    # --- v0.8.0a25+ category / taxonomy ------------------------------
+    #
+    # Slash-delimited path expressing where this tool belongs in a
+    # category hierarchy, e.g. ``"MSOffice/Word"``,
+    # ``"SolidWorks/Drawings"``, or ``"DevTools"`` for a flat
+    # top-level group.  Empty string (the default) means "no category"
+    # -- the tool surfaces as a flat ForestItem at the forest top
+    # level, the v0.8.0a24-and-earlier behaviour.
+    #
+    # The forest's auto-organise pass (``group_by_category`` in
+    # ``scriptree.core.categorize``) reads this field at discovery
+    # time: any top-level segment that two-or-more tools share
+    # becomes a synthesised ``<TopSegment>.scriptreetree`` under the
+    # personal-apps root, with sub-segments rendered as folder nodes
+    # and the tools as leaves.  See ``docs/LLM/category_authoring.md``
+    # for the worked authoring contract and
+    # ``docs/cell_shell.md`` § Auto-organise for the user-visible
+    # outcome.
+    #
+    # Authoring rules:
+    #
+    #   * Use forward slashes only -- not OS separators.  ``"a/b"``
+    #     reads consistently on every platform.
+    #   * No leading / trailing slash.  ``"MSOffice/Word"`` not
+    #     ``"/MSOffice/Word/"``.
+    #   * Empty segments (``"MSOffice//Word"``) are forbidden -- the
+    #     loader rejects them at validation time.
+    #   * Case-sensitive at the segment level but
+    #     case-insensitive-equivalent at the bucket level (so
+    #     ``"MSOffice"`` and ``"msoffice"`` collide and produce a
+    #     single ``MSOffice.scriptreetree``).
+    #   * Omitted from the JSON when empty -- legacy ``.scriptree``
+    #     files without this field continue to round-trip
+    #     byte-identical.
+    category: str = ""
     # Cell-shell visual settings (V3, optional).  Persisted in the
     # .scriptree JSON so a tool ships with its preferred presentation.
     # All optional; cells fall back to auto-derived letters when none
@@ -1020,6 +1055,15 @@ class TreeDef:
     # tab-bar right-click menu — that's an in-session override and
     # doesn't persist back to disk.
     folder_layout: str = "flat"
+    # --- v0.8.0a25+ category / taxonomy ------------------------------
+    # Same shape and semantics as ``ToolDef.category`` -- a
+    # slash-delimited category path that drives the forest's
+    # auto-organise pass.  A ``.scriptreetree`` that already groups
+    # several tools (e.g. an authored ``MSOfficeTools.scriptreetree``)
+    # can declare ``category = "MSOffice"`` so the forest folds it
+    # alongside the synthesised entries; the tree itself stays the
+    # source of truth for its own contents.
+    category: str = ""
     # Cell-shell visual settings — same shape as the corresponding
     # fields on ToolDef.  See ToolDef.cell_icon docstring for the
     # full contract.  Per V3 v0.2.7 user direction.

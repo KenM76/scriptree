@@ -120,6 +120,10 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
     # "no explicit support claim").
     if tool.platforms:
         d["platforms"] = _platforms_to_dict(tool.platforms)
+    # v0.8.0a25+ category taxonomy.  Omitted from the JSON when
+    # empty so legacy tools round-trip byte-identical.
+    if tool.category:
+        d["category"] = tool.category
     # Cell-shell visual settings (V3, optional).  Each emitted only
     # when set so legacy tools round-trip byte-identical.  A "cell"
     # sub-object groups them so the top-level ToolDef JSON stays
@@ -385,6 +389,39 @@ def _platforms_to_dict(
     return out
 
 
+def _normalise_category(raw: Any) -> str:
+    """Sanitise a ``category`` field on load.
+
+    Rules enforced (see ``ToolDef.category`` docstring):
+
+    * Non-string input -> ``""``.
+    * Strip leading / trailing whitespace AND leading/trailing
+      slashes (``"/MSOffice/Word/"`` -> ``"MSOffice/Word"``).
+    * Empty segments forbidden: a path with ``"//"`` is treated as
+      malformed and reduced to its first non-empty prefix
+      (``"a//b"`` -> ``"a"``) so a broken authoring mistake doesn't
+      explode the group-pass.  The validator emits a warning when
+      this fires.
+    * Whitespace-only segments are also dropped.
+
+    Returns the cleaned category string, possibly empty.
+    """
+    if not isinstance(raw, str):
+        return ""
+    s = raw.strip().strip("/")
+    if not s:
+        return ""
+    parts: list[str] = []
+    for seg in s.split("/"):
+        seg = seg.strip()
+        if not seg:
+            # Empty segment -> stop accumulating; everything past
+            # this point is unreachable taxonomy.  See contract above.
+            break
+        parts.append(seg)
+    return "/".join(parts)
+
+
 def _platforms_from_dict(
     raw: Any,
 ) -> dict[str, "PlatformOverride"]:  # noqa: F821
@@ -464,6 +501,7 @@ def tool_from_dict(data: dict[str, Any]) -> ToolDef:
         menus=_load_menus(data.get("menus")),
         actions=_load_actions(data.get("actions")),
         platforms=_platforms_from_dict(data.get("platforms")),
+        category=_normalise_category(data.get("category", "")),
         cell_icon=str(cell_d.get("icon", "")),
         cell_icon_data=str(cell_d.get("icon_data", "")),
         cell_icon_format=str(cell_d.get("icon_format", "")),
@@ -722,6 +760,10 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
     # JSON for trees that don't use it.
     if tree.path_prepend:
         d["path_prepend"] = list(tree.path_prepend)
+    # v0.8.0a25+ category taxonomy.  Same convention as ToolDef --
+    # omitted when empty so legacy trees round-trip byte-identical.
+    if tree.category:
+        d["category"] = tree.category
     # Cell-shell visual settings — same shape as ToolDef.cell_*
     # (grouped under a "cell" sub-object, omitted when all-default
     # so legacy trees stay byte-identical).
@@ -882,6 +924,7 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
         menus=_load_menus(data.get("menus")),
         folder_layout=data.get("folder_layout", "flat"),
         path_prepend=list(data.get("path_prepend", [])),
+        category=_normalise_category(data.get("category", "")),
         cell_icon=str(cell_d.get("icon", "")),
         cell_icon_data=str(cell_d.get("icon_data", "")),
         cell_icon_format=str(cell_d.get("icon_format", "")),

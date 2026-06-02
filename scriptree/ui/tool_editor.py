@@ -181,6 +181,26 @@ class ToolEditorView(QWidget):
         self._desc_edit.textChanged.connect(self._on_desc_changed)
         top_form.addRow("Description:", self._desc_edit)
 
+        # v0.8.0a25+ Category line.  Slash-delimited taxonomy that
+        # drives the forest's auto-organise pass.  Empty by default
+        # so legacy tools stay byte-identical on round-trip.  See
+        # ``docs/LLM/category_authoring.md`` for the contract.
+        self._category_edit = QLineEdit(self._tool.category)
+        self._category_edit.setPlaceholderText(
+            "e.g. MSOffice/Word -- optional, used by the forest "
+            "auto-organise pass"
+        )
+        self._category_edit.setToolTip(
+            "Slash-delimited category path (e.g. 'MSOffice/Word').\n"
+            "When two or more tools share a top-level category the "
+            "forest auto-creates a single grouped cell for them.\n"
+            "Empty = uncategorised (the tool appears as a flat cell)."
+        )
+        self._category_edit.textChanged.connect(
+            self._on_category_changed
+        )
+        top_form.addRow("Category:", self._category_edit)
+
         # Tool-level environment editor. Opens a popup that edits
         # ``tool.env`` and ``tool.path_prepend`` together. These are
         # the defaults; individual configurations in the runner can
@@ -785,6 +805,17 @@ class ToolEditorView(QWidget):
 
     def _on_desc_changed(self, text: str) -> None:
         self._tool.description = text
+
+    def _on_category_changed(self, text: str) -> None:
+        """Mirror the Category line edit into ``ToolDef.category``.
+
+        Stored verbatim -- the loader normalises on next load
+        (strips slashes, drops empty segments).  We don't
+        re-normalise on every keystroke because users WILL type
+        ``/Word`` partway through typing ``MSOffice/Word`` and we
+        shouldn't snip the caret out from under them.
+        """
+        self._tool.category = text
 
     def _on_interactive_toggled(self, checked: bool) -> None:
         """Mirror the checkbox state into ``ToolDef.interactive``.

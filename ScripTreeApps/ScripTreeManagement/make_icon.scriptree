@@ -225,5 +225,6 @@
   "source": {
     "mode": "manual",
     "help_text_cached": null
-  }
+  },
+  "category": "ScripTree"
 }
