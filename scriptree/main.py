@@ -187,8 +187,28 @@ def main(argv: list[str] | None = None) -> int:
     # on Windows pin our own AppUserModelID so the taskbar doesn't
     # group us under generic "Python". Call this before any windows
     # are created. No-op if the icon resources aren't present.
-    from .core.branding import apply_branding
+    from .core.branding import apply_branding, apply_tool_branding
     apply_branding(app)
+
+    # v0.8.0a25 -- if we're launching with a specific catalog file
+    # (the standalone / -run flow used by the cell shell when the
+    # user clicks a tool), give the subprocess its OWN taskbar
+    # identity + icon based on the catalog's ``cell_icon_data``.
+    # Without this every launched tool appears on the taskbar under
+    # the generic ScripTree forest icon.  Must run BEFORE any
+    # window is created so the per-process AppUserModelID applies
+    # to every HWND this subprocess opens.  No-op when args.file
+    # is None or the catalog has no embedded icon.
+    if args.file:
+        try:
+            apply_tool_branding(app, args.file)
+        except Exception as exc:  # noqa: BLE001
+            # Branding is cosmetic -- never block startup over it.
+            print(
+                f"main: apply_tool_branding raised {exc!r}; "
+                f"continuing with generic ScripTree icon",
+                file=sys.stderr,
+            )
 
     # Use the native Windows style where available. On Linux/macOS this
     # falls through to the platform default.

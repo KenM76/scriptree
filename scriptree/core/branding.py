@@ -111,6 +111,104 @@ def set_windows_app_user_model_id(app_id: str = APP_USER_MODEL_ID) -> None:
         pass
 
 
+def _safe_app_id_segment(s: str) -> str:
+    """Sanitise a free-form string for the AppUserModelID format.
+
+    AUMID rules (Microsoft docs):
+      * Reverse-DNS-style ``CompanyName.ProductName[.SubProduct[.Version]]``.
+      * Each segment must NOT be empty, must NOT contain spaces, slashes,
+        or the dot used as the separator -- everything else is fine in
+        practice.
+
+    We replace anything outside the safe set with an underscore, collapse
+    runs, and trim.  Empty input -> ``"Tool"`` so the AUMID always has
+    a non-empty subproduct segment.
+    """
+    import re as _re
+    s = (s or "").strip()
+    if not s:
+        return "Tool"
+    s = _re.sub(r"[^A-Za-z0-9_]+", "_", s)
+    s = _re.sub(r"_+", "_", s).strip("_")
+    return s or "Tool"
+
+
+def apply_tool_branding(app, catalog_path: str | Path) -> None:
+    """Override the app's icon and taskbar identity with the catalog's
+    own when one is available.
+
+    Designed to be called from a per-tool subprocess immediately
+    after ``apply_branding(app)`` and BEFORE the window is created.
+    Reads ``cell_icon_data`` (embedded base64) or ``cell_icon``
+    (file path) from the catalog and:
+
+      * Picks a per-tool ``AppUserModelID`` so Windows gives this
+        tool its own taskbar slot instead of grouping it with the
+        ScripTree.App parent.  Without this, every running tool
+        stacks under the same taskbar icon (the forest's).
+      * Calls ``app.setWindowIcon(icon)`` so the title bar, taskbar
+        thumbnail, and Alt-Tab thumbnail all show the tool's icon.
+
+    No-op when the catalog has no per-cell icon (or when the file
+    can't be parsed) -- the generic ``apply_branding`` already
+    applied the ScripTree icon, and we leave that in place.
+
+    Why we don't fall back to the auto-classified glyph here: the
+    classifier lives in ``scriptree.shell`` which we deliberately
+    don't import from ``core``.  A tool that wants a taskbar icon
+    has to set ``cell_icon_data`` explicitly (which the Settings ->
+    Label/Icon tab does by default via the Library / Choose file
+    flow).  An auto-classified-only catalog falls back to the
+    generic ScripTree icon on the taskbar, same as today --
+    visually consistent with the cell rendering's fallback path.
+    """
+    try:
+        from pathlib import Path as _P
+        from PySide6.QtGui import QIcon
+    except ImportError:
+        return
+
+    p = _P(catalog_path)
+    if not p.is_file():
+        return
+
+    # Load just the cell metadata -- avoid pulling in the full
+    # ToolDef / TreeDef machinery for a branding helper.
+    try:
+        from .cell_metadata import make_pixmap_from_metadata, read_for
+        md = read_for(p)
+    except Exception:  # noqa: BLE001
+        return
+
+    # Compute a name to drive the AUMID and (later) the
+    # window-title fallback.
+    try:
+        import json
+        with p.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+        tool_name = data.get("name") or p.stem
+    except Exception:  # noqa: BLE001
+        tool_name = p.stem
+    aumid = f"{APP_USER_MODEL_ID}.{_safe_app_id_segment(tool_name)}"
+    set_windows_app_user_model_id(aumid)
+
+    if not md.has_icon():
+        # No custom icon -- keep the ScripTree icon, just with the
+        # per-tool AUMID so the taskbar still gives it its own slot.
+        return
+
+    try:
+        pix = make_pixmap_from_metadata(md)
+    except Exception:  # noqa: BLE001
+        pix = None
+    if pix is None or pix.isNull():
+        return
+
+    icon = QIcon(pix)
+    if not icon.isNull():
+        app.setWindowIcon(icon)
+
+
 def apply_branding(app) -> None:
     """Apply icon + display name + Windows AppUserModelID to ``app``.
 
