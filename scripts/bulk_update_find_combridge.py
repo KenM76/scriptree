@@ -50,6 +50,12 @@ TARGET_ROOTS = [
     Path(r"D:\Dev\ScripTreeAppProjects"),
     # Already-installed personal-apps copies on Ken's machine.
     Path(r"C:\Users\Ken\AppData\Local\ScripTree\Apps"),
+    # Shared install on R: (subst alias for Dropbox).
+    Path(r"R:\ScripTree\ScripTreeApps"),
+    Path(r"R:\ScripTreeApps"),
+    # OneDrive copies.
+    Path(r"C:\Users\Ken\OneDrive\Kens_Projects\Claude\Software\ScripTreeApps"),
+    Path(r"C:\Users\Ken\OneDrive\Kens_Projects\Claude\Software\ScripTree\ScripTreeApps"),
 ]
 
 
