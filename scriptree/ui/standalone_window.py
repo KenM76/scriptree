@@ -258,9 +258,20 @@ class StandaloneWindow(QMainWindow):
             ads.CenterDockWidgetArea, form_dock
         )
         win._form_dock = form_dock  # type: ignore[attr-defined]
+        # Saved so ``_on_visibility_changed`` (live config-switch
+        # handler) can re-add the bottom docks under the same area
+        # they were originally placed under.
+        win._form_area = form_area  # type: ignore[attr-defined]
 
-        # Output dock — sits below the form area.  Toggled by config
-        # visibility on construction and live on visibilityChanged.
+        # Output dock — sits below the form area.  v0.8.0a25: when the
+        # active configuration's ``UIVisibility.output_pane`` is False
+        # we DO NOT add the dock to the manager at all.  The previous
+        # behaviour was to add it then call ``toggleView(False)``, but
+        # QtAds left an empty container in the bottom dock area --
+        # the user reported it as "empty docked windows instead of
+        # being removed from the layout entirely."
+        # The reference is preserved on the window so a future live
+        # config switch (visibilityChanged) can re-add the dock.
         output_panel = runner.output_panel
         output_panel.setParent(None)
         output_dock = ads.CDockWidget(dock_manager, "Output")
@@ -268,16 +279,18 @@ class StandaloneWindow(QMainWindow):
         output_dock.setWidget(output_panel)
         output_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
         output_dock.setWindowTitle(f"Output — {tool.name}")
-        dock_manager.addDockWidget(
-            ads.BottomDockWidgetArea, output_dock, form_area
-        )
-        if not vis.output_pane:
-            output_dock.toggleView(False)
+        if vis.output_pane:
+            dock_manager.addDockWidget(
+                ads.BottomDockWidgetArea, output_dock, form_area
+            )
         win._output_dock = output_dock  # type: ignore[attr-defined]
+        win._output_dock_added = bool(vis.output_pane)  # type: ignore[attr-defined]
 
-        # Run controls dock — extras + command line.  Same bottom
-        # area as the editor uses; the user can float it to a second
-        # monitor or tab it next to Output.
+        # Run controls dock — extras + command line.  Same construction
+        # rule: only add to the layout when at least one of its two
+        # sub-sections (extras or command-line) is visible in the
+        # active configuration.  If BOTH are suppressed, the dock
+        # would just be an empty container -- don't add it.
         bottom_panel = runner.bottom_panel
         bottom_panel.setParent(None)
         run_dock = ads.CDockWidget(dock_manager, "Run controls")
@@ -285,10 +298,16 @@ class StandaloneWindow(QMainWindow):
         run_dock.setWidget(bottom_panel)
         run_dock.setFeatures(_STANDALONE_DOCK_FEATURES)
         run_dock.setWindowTitle(f"Run controls — {tool.name}")
-        dock_manager.addDockWidget(
-            ads.BottomDockWidgetArea, run_dock, form_area
+        run_controls_wanted = bool(
+            getattr(vis, "extras_box", True)
+            or getattr(vis, "command_line", True)
         )
+        if run_controls_wanted:
+            dock_manager.addDockWidget(
+                ads.BottomDockWidgetArea, run_dock, form_area
+            )
         win._run_controls_dock = run_dock  # type: ignore[attr-defined]
+        win._run_controls_dock_added = run_controls_wanted  # type: ignore[attr-defined]
 
         # Keep references so neither runner nor docks get garbage
         # collected when the closure unwinds.
@@ -409,30 +428,98 @@ class StandaloneWindow(QMainWindow):
     # --- visibility handling ------------------------------------------------
 
     def _on_visibility_changed(self, vis: object) -> None:
-        """Toggle the output dock to match the active configuration's
-        :attr:`UIVisibility.output_pane`.
+        """Add or remove the Output / Run-controls docks to match the
+        active configuration's :class:`UIVisibility`.
 
-        v0.6.30 — was a no-op in the splitter era.  Now that the
-        layout is QtAds-based, flipping a config that hides the
-        output pane folds the dock without affecting the rest of
-        the layout.  Toggling it back on restores it to its
-        previously-docked position.
+        v0.6.30 -- was a no-op in the splitter era.  v0.8.0a25 -- uses
+        ``addDockWidget`` / ``removeDockWidget`` instead of
+        ``toggleView`` so a hidden section is fully removed from the
+        layout (no empty container left behind).  ``_*_dock_added``
+        tracks whether each dock is currently in the manager so
+        repeated visibilityChanged firings don't double-add.
+
+        For the Run-controls dock, "hidden" means BOTH
+        ``extras_box`` and ``command_line`` are False -- if either
+        is visible, the dock has content worth showing.
         """
-        dock = getattr(self, "_output_dock", None)
-        if dock is None:
-            return  # tree mode (no docks) — see from_tree.
+        # ``ads`` is already imported at module top as
+        # ``import PySide6QtAds as ads`` -- reuse it.
+        dm = getattr(self, "_dock_manager", None)
+        if dm is None:
+            return  # tree mode (no docks).
+        form_area = getattr(self, "_form_area", None)
+        if form_area is None:
+            # ``_form_area`` is the central dock area we add bottom
+            # docks under; without it we don't know where to attach.
+            form_area = getattr(getattr(self, "_form_dock", None),
+                                "dockAreaWidget", None)
+            if callable(form_area):
+                form_area = form_area()
+
+        # Output dock.
+        out_dock = getattr(self, "_output_dock", None)
+        want_out = False
         try:
-            want_visible = bool(getattr(vis, "output_pane", True))
+            want_out = bool(getattr(vis, "output_pane", True))
         except Exception:  # noqa: BLE001
-            want_visible = True
-        # ``toggleView`` is idempotent — call it unconditionally
-        # rather than reading ``isClosed()`` first, which doesn't
-        # reflect intended state until the window has been shown
-        # (relevant in headless tests).
+            want_out = True
+        if out_dock is not None:
+            currently_in = bool(getattr(self, "_output_dock_added", False))
+            try:
+                if want_out and not currently_in:
+                    if form_area is not None:
+                        dm.addDockWidget(
+                            ads.BottomDockWidgetArea, out_dock, form_area,
+                        )
+                    else:
+                        dm.addDockWidget(
+                            ads.BottomDockWidgetArea, out_dock,
+                        )
+                    self._output_dock_added = True  # type: ignore[attr-defined]
+                elif not want_out and currently_in:
+                    dm.removeDockWidget(out_dock)
+                    self._output_dock_added = False  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                # Last-ditch: fall through to toggleView so the user
+                # at least sees the section hide rather than crash.
+                try:
+                    out_dock.toggleView(want_out)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # Run-controls dock.
+        run_dock = getattr(self, "_run_controls_dock", None)
+        want_run = False
         try:
-            dock.toggleView(want_visible)
+            want_run = bool(
+                getattr(vis, "extras_box", True)
+                or getattr(vis, "command_line", True),
+            )
         except Exception:  # noqa: BLE001
-            pass
+            want_run = True
+        if run_dock is not None:
+            currently_in = bool(
+                getattr(self, "_run_controls_dock_added", False),
+            )
+            try:
+                if want_run and not currently_in:
+                    if form_area is not None:
+                        dm.addDockWidget(
+                            ads.BottomDockWidgetArea, run_dock, form_area,
+                        )
+                    else:
+                        dm.addDockWidget(
+                            ads.BottomDockWidgetArea, run_dock,
+                        )
+                    self._run_controls_dock_added = True  # type: ignore[attr-defined]
+                elif not want_run and currently_in:
+                    dm.removeDockWidget(run_dock)
+                    self._run_controls_dock_added = False  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                try:
+                    run_dock.toggleView(want_run)
+                except Exception:  # noqa: BLE001
+                    pass
 
     # --- layout persistence (single-tool mode) -----------------------------
 
