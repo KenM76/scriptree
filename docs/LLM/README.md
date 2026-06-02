@@ -172,6 +172,14 @@ the declared sections.
   per tool family (`python_scripts.md`, `windows_exe.md`,
   `powershell.md`, `gnu_tools.md`). Read these before writing any new
   CLI tool you intend to wrap.
+- [`scriptree_home_env_var.md`](scriptree_home_env_var.md) — **read
+  before authoring any tool that needs a bundled binary**
+  (`lib/combridge/combridge.exe`, `lib/python/`, plugin DLLs, etc.).
+  The runner injects `SCRIPTREE_HOME`, `SCRIPTREE_LIB`, and
+  `SCRIPTREE_TOOL_DIR` env vars and prepends `lib/combridge` to
+  `PATH` on every spawned tool's environment.  Canonical pattern:
+  read `SCRIPTREE_HOME` first, fall through to a legacy walk for
+  direct-CLI launches that bypass the runner.
 
 ## Security
 

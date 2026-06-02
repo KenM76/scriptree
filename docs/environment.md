@@ -36,6 +36,57 @@ keeps working — no path edits required. (See
 [vendored_dependencies.md](vendored_dependencies.md) for the per-tool
 `lib/` pattern that complements this.)
 
+### Finding a bundled binary from inside a tool (v0.8.0a25+)
+
+When ScripTree's runner spawns ANY tool — Python script, PowerShell,
+`.bat`, native exe — these four guarantees hold for the child's
+environment:
+
+1. **`SCRIPTREE_HOME`** is set to the absolute path of the running
+   ScripTree's install root.
+2. **`SCRIPTREE_LIB`** is set to `<HOME>/lib` (when `lib/` exists).
+3. **`SCRIPTREE_TOOL_DIR`** is set to the directory containing the
+   `.scriptree` file that was launched.
+4. **`PATH`** has `<HOME>/lib/combridge` prepended, so
+   `combridge.exe` resolves by bare name without any discovery
+   code.
+
+This means a tool that needs to find, say, `combridge.exe` should
+**not** walk upward from its own folder hoping to land inside the
+ScripTree install — that fails the moment the tool is installed to
+the per-user Personal apps root (`%LOCALAPPDATA%\ScripTree\Apps\…`).
+Instead:
+
+**Python**
+```python
+import os
+from pathlib import Path
+
+home = os.environ.get("SCRIPTREE_HOME")
+if home:
+    combridge = Path(home) / "lib" / "combridge" / "combridge.exe"
+```
+
+**PowerShell**
+```powershell
+$combridge = Join-Path $env:SCRIPTREE_HOME 'lib\combridge\combridge.exe'
+```
+
+**Batch**
+```bat
+"%SCRIPTREE_HOME%\lib\combridge\combridge.exe" word run-script "%1"
+```
+
+**Anything that respects `PATH`**
+```cmd
+combridge word run-script script.csx
+```
+
+For the full authoring contract — including the legacy-fallback
+pattern for tools that may be invoked directly outside ScripTree's
+runner — see
+[`docs/LLM/scriptree_home_env_var.md`](LLM/scriptree_home_env_var.md).
+
 ### Path expansion
 
 `%VAR%` (Windows-style) and `$VAR` (Unix-style) references are expanded
