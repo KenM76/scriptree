@@ -33,7 +33,6 @@ code or ship a release.  It captures:
 | Agent | When to invoke |
 |---|---|
 | `librarian` | End of substantive session, "capture lessons" / "what do we know about X?".  Dispatched via the general-purpose agent (it isn't surfaced as a top-level subagent type). |
-| `scriptree-engineer` | The earlier single-session worker.  `scriptree-lead-engineer` supersedes it but the engineer file is still the right reference for V3-era patterns. |
 
 ## Standing rules from the global CLAUDE.md that apply here
 
