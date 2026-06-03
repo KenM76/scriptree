@@ -63,12 +63,25 @@ def _seed_tree(tmp_path: Path, *, with_folder: bool = True) -> Path:
 # ---------------------------------------------------------------------------
 
 def test_file_menu_has_new_save_actions() -> None:
+    """v0.8.0a33+ -- the legacy per-kind save items (Save tool,
+    Save tool as, Save tree, Save tree as) were consolidated into
+    three intent-clear menu items.  The QAction objects are still
+    on the instance (for state-tracking by code that references
+    them) but they no longer appear in the visible File menu.
+
+    What the menu surfaces now:
+      * Save current  (Ctrl+S)
+      * Save all      (Ctrl+Shift+S)
+      * Save as...    (Ctrl+Shift+A)
+    """
     w = MainWindow()
     labels = [a.text() for a in w._m_file.actions()]
-    assert "Save &tool" in labels
-    assert "Save tool &as..." in labels
-    assert "&Save tree" in labels
-    assert "Save tree as..." in labels
+    assert "&Save current" in labels
+    assert "Save &all" in labels
+    assert "Save &as..." in labels
+    # Negative: the legacy items must NOT be in the visible menu.
+    assert "Save &tool" not in labels
+    assert "&Save tree" not in labels
 
 
 def test_file_menu_has_open_in_actions() -> None:

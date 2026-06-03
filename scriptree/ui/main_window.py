@@ -311,55 +311,83 @@ class MainWindow(QMainWindow):
         apply_action_perm(act_new_tree, "create_new_scriptreetree")
         m_file.addAction(act_new_tree)
 
-        # Save tool (.scriptree) — enabled while the tool editor is active.
-        # Distinct from "Save tree": the editor edits a single ToolDef,
-        # while the launcher edits the .scriptreetree that references it.
-        self._act_save_tool = QAction("Save &tool", self)
-        self._act_save_tool.setToolTip(
-            "Save the currently-edited .scriptree tool. "
-            "Available while the tool editor is open."
+        # v0.8.0a33+ -- consolidated save menu (Phase B).
+        #
+        # The pre-a33 File menu surfaced SIX save actions: Save tool /
+        # Save tool as / Save tree / Save tree as / Save Cell Layout /
+        # Save Cell Layout As.  Users found that confusing -- six
+        # entries that mostly did the same thing depending on what
+        # was active.
+        #
+        # New menu structure: two intent-clear items + a Save-As that
+        # mirrors the same dispatch rule.
+        #
+        #   Save current   (Ctrl+S)        -> save whatever's active
+        #                                     (tool editor wins, then
+        #                                     the loaded tree)
+        #   Save all       (Ctrl+Shift+S)  -> save every dirty surface
+        #   Save as...     (Ctrl+Shift+A)  -> Save-As on the active
+        #                                     surface
+        #
+        # The per-kind QActions (``_act_save_tool``, ``_act_save_tree``,
+        # ``_act_save_tool_as``, ``_act_save_tree_as``,
+        # ``_act_save_cell_layout``, ``_act_save_cell_layout_as``) are
+        # kept on the instance because they're referenced elsewhere
+        # for enabled-state management (e.g. _on_tree_modified,
+        # capability gates).  They're just no longer added to the
+        # visible menu.
+
+        # Save current.  Owns Ctrl+S directly now -- the older
+        # ``_act_save_dispatch`` is kept as an alias so test code
+        # and shortcut wiring referencing it still work.
+        self._act_save_current = QAction("&Save current", self)
+        self._act_save_current.setShortcut("Ctrl+S")
+        self._act_save_current.setToolTip(
+            "Save whatever's currently open.  Priority: the tool "
+            "editor if one is active, otherwise the loaded tree."
         )
+        self._act_save_current.triggered.connect(self._save_current)
+        m_file.addAction(self._act_save_current)
+        # Alias for backward callers (older code refers to
+        # _act_save_dispatch as the Ctrl+S owner).
+        self._act_save_dispatch = self._act_save_current
+
+        self._act_save_all = QAction("Save &all", self)
+        self._act_save_all.setShortcut("Ctrl+Shift+S")
+        self._act_save_all.setToolTip(
+            "Save every surface that has unsaved changes.  Saves "
+            "the tool editor first, then the tree, so merged-tree "
+            "back-propagation sees fresh leaf state."
+        )
+        self._act_save_all.triggered.connect(self._save_all)
+        m_file.addAction(self._act_save_all)
+
+        self._act_save_as = QAction("Save &as...", self)
+        self._act_save_as.setShortcut("Ctrl+Shift+A")
+        self._act_save_as.setToolTip(
+            "Save-As for the currently-active surface."
+        )
+        self._act_save_as.triggered.connect(self._save_current_as)
+        m_file.addAction(self._act_save_as)
+
+        # Per-kind actions kept on the instance for state tracking
+        # (enabled-state hooks elsewhere expect them to exist), but
+        # NOT added to the visible menu after v0.8.0a33.
+        self._act_save_tool = QAction("Save tool", self)
         self._act_save_tool.triggered.connect(self._save_tool)
         self._act_save_tool.setEnabled(False)
-        m_file.addAction(self._act_save_tool)
 
-        self._act_save_tool_as = QAction("Save tool &as...", self)
-        self._act_save_tool_as.setToolTip(
-            "Save the currently-edited .scriptree tool to a new path."
-        )
+        self._act_save_tool_as = QAction("Save tool as...", self)
         self._act_save_tool_as.triggered.connect(self._save_tool_as)
         self._act_save_tool_as.setEnabled(False)
-        m_file.addAction(self._act_save_tool_as)
 
-        self._act_save_tree = QAction("&Save tree", self)
-        # NOTE: Ctrl+S is owned by ``_act_save_dispatch`` below, NOT
-        # hard-bound to Save-tree.  Previously Ctrl+S always saved the
-        # tree — so editing a .scriptree opened from an open
-        # .scriptreetree and pressing Ctrl+S saved the (unchanged)
-        # tree and silently dropped the tool edits.  The dispatcher
-        # routes Ctrl+S to whatever is actually active.
+        self._act_save_tree = QAction("Save tree", self)
         self._act_save_tree.triggered.connect(self._save_tree)
         self._act_save_tree.setEnabled(False)
-        m_file.addAction(self._act_save_tree)
-
-        # Context-aware Ctrl+S.  Hidden action (not in any menu — the
-        # visible Save tool / Save tree items keep their own
-        # triggers); it just owns the shortcut and dispatches:
-        #   * tool editor active        → save the tool
-        #   * else a tree is loaded     → save the tree
-        #   * else nothing to do        → status hint
-        self._act_save_dispatch = QAction(self)
-        self._act_save_dispatch.setShortcut("Ctrl+S")
-        self._act_save_dispatch.triggered.connect(self._save_active)
-        self.addAction(self._act_save_dispatch)
 
         self._act_save_tree_as = QAction("Save tree as...", self)
-        self._act_save_tree_as.setToolTip(
-            "Save the loaded .scriptreetree to a new path."
-        )
         self._act_save_tree_as.triggered.connect(self._save_tree_as)
         self._act_save_tree_as.setEnabled(False)
-        m_file.addAction(self._act_save_tree_as)
 
         # ── Scan tree for new tools (v0.8.0a21+) ─────────────────────
         # Editor-side equivalent of the cell shell's right-click
@@ -423,25 +451,24 @@ class MainWindow(QMainWindow):
         # never renders cells.
         m_file.addSeparator()
 
+        # v0.8.0a33+ -- the cell-layout save actions are kept on
+        # the instance (referenced from autosave wiring + tests)
+        # but no longer added to the visible File menu.  Users
+        # save cell layouts from ScripTreeRing's right-click menu,
+        # not from V1's editor.
         self._act_save_cell_layout = QAction(
-            "Save Cell &Layout", self
-        )
-        self._act_save_cell_layout.setToolTip(
-            "Save the current tree as a single-hex .scriptreering layout "
-            "that ScripTreeRing can re-open as a cell."
+            "Save Cell Layout", self
         )
         self._act_save_cell_layout.triggered.connect(
             self._save_cell_layout
         )
-        m_file.addAction(self._act_save_cell_layout)
 
         self._act_save_cell_layout_as = QAction(
-            "Save Cell Layout &As...", self
+            "Save Cell Layout As...", self
         )
         self._act_save_cell_layout_as.triggered.connect(
             self._save_cell_layout_as
         )
-        m_file.addAction(self._act_save_cell_layout_as)
 
         act_open_cell_layout = QAction(
             "Open Cell Layout...", self
@@ -1083,6 +1110,10 @@ class MainWindow(QMainWindow):
         saving the loaded tree.  This fixes the long-standing trap
         where Ctrl+S while editing a tool from an open tree saved
         the tree instead and silently discarded the tool edits.
+
+        v0.8.0a33+ -- ``_save_current`` is the user-facing alias
+        for this same behaviour; the File menu's "Save current"
+        item routes here.
         """
         if self._active_editor is not None:
             self._save_tool()
@@ -1092,6 +1123,90 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(
             "Nothing to save — open a tool or tree first.", 4000
+        )
+
+    # ------------------------------------------------------------------
+    # v0.8.0a33+ — Save current / Save all / Save as (Phase B)
+    # ------------------------------------------------------------------
+
+    def _save_current(self) -> None:
+        """Save whatever surface the user is currently editing.
+
+        v0.8.0a33+ user-facing rename of ``_save_active``.  Routed
+        from the File menu's "Save current" item and from the
+        Ctrl+S shortcut.  Eventually (when the tree-view root-node
+        work lands) this will become selection-aware: a folder
+        selected in the tree will save itself + descendants, a leaf
+        will save just that leaf, the root will save the catalog
+        file.  For now it dispatches the same way ``_save_active``
+        always has -- editor-then-tree -- which IS "save the thing
+        the user is most likely looking at" since V1's UI puts the
+        active tool editor in the centre and the tree in the
+        sidebar.
+        """
+        self._save_active()
+
+    def _save_all(self) -> None:
+        """Save every dirty surface in one shot.
+
+        v0.8.0a33+.  Walks the same list ``_collect_unsaved_items``
+        builds for the close dialog -- if it's dirty, it gets saved.
+        Reports counts in the status bar.
+
+        Order matters when the merged-tree push-back path is in
+        play: saving the tree LAST so any per-leaf editor saves
+        have already written the leaf files first.  That way the
+        tree's push-back sees fresh leaf state and doesn't fight
+        it.
+        """
+        items = self._collect_unsaved_items()
+        if not items:
+            self.statusBar().showMessage(
+                "Nothing to save — every surface is clean.", 4000,
+            )
+            return
+
+        # Save editors first, then trees -- see method docstring.
+        editors = [i for i in items if i["kind"] == "editor"]
+        trees = [i for i in items if i["kind"] == "tree"]
+
+        saved = 0
+        failed = 0
+        for item in editors + trees:
+            try:
+                if item["save"]():
+                    saved += 1
+                else:
+                    failed += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        if failed:
+            self.statusBar().showMessage(
+                f"Saved {saved}, {failed} failed (see log).",
+                6000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Saved {saved} file(s).", 4000,
+            )
+
+    def _save_current_as(self) -> None:
+        """Save-As dispatcher for the currently-active surface.
+
+        v0.8.0a33+ menu entry: "Save as...".  Picks the active
+        editor's Save As when one is open, otherwise routes to
+        the tree's Save As when a tree is loaded.  Mirrors the
+        ``_save_current`` priority order.
+        """
+        if self._active_editor is not None:
+            self._save_tool_as()
+            return
+        if self._launcher.tree_file() is not None:
+            self._save_tree_as()
+            return
+        self.statusBar().showMessage(
+            "Nothing to save-as — open a tool or tree first.",
+            4000,
         )
 
     def _save_tool(self) -> None:
@@ -1462,6 +1577,188 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    # ------------------------------------------------------------------
+    # v0.8.0a33+ — Unified unsaved-changes-on-close dialog (Phase D)
+    # ------------------------------------------------------------------
+
+    def _collect_unsaved_items(self) -> list[dict]:
+        """Walk every editing surface in the window and return a list
+        of dicts describing each one that has unsaved changes.
+
+        Each dict carries:
+            kind:    "editor" | "tree"
+            label:   human-facing description ("Tool: mytool.scriptree")
+            path:    str | None — file path if known
+            save:    callable that performs the save; returns True on
+                     success, False when the save was blocked
+                     (validation error, read-only target, user
+                     cancelled the Save-As dialog).
+
+        The order of the returned list is the order items appear in
+        the unsaved-changes dialog -- editors first (most likely to
+        be the user's intent), then the loaded tree.
+        """
+        items: list[dict] = []
+
+        editor = self._active_editor
+        if editor is not None:
+            try:
+                if editor.is_dirty():
+                    file_path = getattr(editor, "file_path", None)
+                    name = (
+                        Path(file_path).name
+                        if file_path else "(unsaved tool)"
+                    )
+                    def _save_editor(_e=editor) -> bool:
+                        try:
+                            _e.save()
+                            return not _e.is_dirty()
+                        except Exception:  # noqa: BLE001
+                            return True  # don't block exit on bug
+                    items.append({
+                        "kind": "editor",
+                        "label": f"Tool: {name}",
+                        "path": file_path,
+                        "save": _save_editor,
+                    })
+            except Exception:  # noqa: BLE001 — never block exit on a guard bug
+                pass
+
+        try:
+            if self._launcher.is_dirty():
+                tree_path = self._launcher.tree_file()
+                name = (
+                    tree_path.name if tree_path else "(unsaved tree)"
+                )
+                def _save_tree() -> bool:
+                    try:
+                        return self._launcher.save()
+                    except Exception:  # noqa: BLE001
+                        return False
+                items.append({
+                    "kind": "tree",
+                    "label": f"Tree: {name}",
+                    "path": (
+                        str(tree_path) if tree_path else None
+                    ),
+                    "save": _save_tree,
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+        return items
+
+    def _confirm_unsaved_on_close(self) -> bool:
+        """v0.8.0a33+ replacement for the sequential editor- and
+        tree-prompts.
+
+        Pops a single checklist dialog when any surface has unsaved
+        changes.  User can:
+
+            * **Save Selected & Exit** — save only the items they
+              ticked, then proceed if all those saves succeeded.
+              Items they unticked are discarded.
+            * **Discard All & Exit** — drop every change and proceed.
+            * **Cancel** — keep the window open.
+
+        Items are checked by default so the user's reflex (press
+        Enter) does the safe thing.
+
+        Returns True when the close should proceed, False to abort.
+        """
+        items = self._collect_unsaved_items()
+        if not items:
+            return True
+
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import (
+            QCheckBox, QDialog, QDialogButtonBox, QLabel,
+            QPushButton, QVBoxLayout,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Unsaved changes")
+        dlg.setMinimumWidth(440)
+
+        layout = QVBoxLayout(dlg)
+        header = QLabel(
+            "<b>The following changes are unsaved.</b><br>"
+            "Choose which ones to save before exiting."
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        # One checkbox per item, default-checked.  Stashed on the
+        # dialog so the button handlers can iterate them.
+        checks: list[QCheckBox] = []
+        for item in items:
+            cb = QCheckBox(item["label"])
+            cb.setChecked(True)
+            cb.setToolTip(
+                item.get("path") or "(no on-disk path yet)"
+            )
+            layout.addWidget(cb)
+            checks.append(cb)
+
+        # Custom button bar so we can label the destructive
+        # path explicitly and put Cancel on the right.
+        buttons = QDialogButtonBox(dlg)
+        btn_save = buttons.addButton(
+            "Save selected && Exit",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        btn_discard = buttons.addButton(
+            "Discard all && Exit",
+            QDialogButtonBox.ButtonRole.DestructiveRole,
+        )
+        btn_cancel = buttons.addButton(
+            QDialogButtonBox.StandardButton.Cancel,
+        )
+        btn_cancel.setDefault(True)
+        layout.addWidget(buttons)
+
+        # ``result_kind`` is set by each button's handler before
+        # ``accept()`` so the post-exec branch knows what to do.
+        result_kind = {"value": "cancel"}
+
+        def _on_save():
+            result_kind["value"] = "save"
+            dlg.accept()
+        def _on_discard():
+            result_kind["value"] = "discard"
+            dlg.accept()
+        def _on_cancel():
+            result_kind["value"] = "cancel"
+            dlg.reject()
+
+        btn_save.clicked.connect(_on_save)
+        btn_discard.clicked.connect(_on_discard)
+        btn_cancel.clicked.connect(_on_cancel)
+
+        dlg.exec()
+
+        if result_kind["value"] == "cancel":
+            return False
+        if result_kind["value"] == "discard":
+            return True
+
+        # Save Selected: invoke each checked item's save callable.
+        # If any save returns False (validation error / read-only /
+        # cancelled Save-As), keep the window open so the user can
+        # address it.
+        all_ok = True
+        for item, cb in zip(items, checks):
+            if not cb.isChecked():
+                continue
+            try:
+                if not item["save"]():
+                    all_ok = False
+            except Exception:  # noqa: BLE001
+                # Don't let one save's bug block close decisively;
+                # treat as "save blocked -- keep window open".
+                all_ok = False
+        return all_ok
+
     def _confirm_discard_editor(self) -> bool:
         """H2 fix: closing the app must honour the open tool
         editor's unsaved-changes guard, not just the tree's.
@@ -1504,10 +1801,15 @@ class MainWindow(QMainWindow):
         return False
 
     def closeEvent(self, event) -> None:
-        if not self._confirm_discard_editor():
-            event.ignore()
-            return
-        if not self._confirm_discard_tree():
+        # v0.8.0a33+ -- unified unsaved-changes-on-close dialog
+        # replaces the older sequential ``_confirm_discard_editor``
+        # then ``_confirm_discard_tree`` pair.  The user sees ONE
+        # dialog listing every surface that has unsaved changes,
+        # with checkboxes so they can save selectively, discard
+        # all, or cancel.  The legacy single-prompt methods are
+        # kept for backward callers (navigation guards) but the
+        # close path now goes through ``_confirm_unsaved_on_close``.
+        if not self._confirm_unsaved_on_close():
             event.ignore()
             return
         running = [v for v in self._runners.values() if v.is_running()]
