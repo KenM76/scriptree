@@ -844,9 +844,23 @@ class ForestController(QObject):
         if removed:
             self.forestChanged.emit()
 
-    def _on_uninstall_app(self, cell: Any) -> None:
-        """Confirmation + dispatch for the per-cell "Uninstall app..."
-        menu action.
+    def _on_uninstall_app(self, target: Any) -> None:
+        """Confirmation + dispatch for the "Uninstall app..." action.
+
+        ``target`` is either a ``CellWindow`` (the legacy call from
+        the Forest right-click submenu, which knows the cell that
+        was clicked) OR a string path to a catalog file (the new
+        call from the per-item right-click context menu inside the
+        cell's popup tree -- there's no specific cell there, just
+        the catalog the menu item came from).
+
+        Both paths converge on the same catalog-file path → dialog
+        → ``uninstall_app`` pipeline below.  When the call comes
+        from a cell, that cell is closed by ``uninstall_app``'s
+        ``_spawned`` cleanup; when it comes from a menu item,
+        every cell bound to the same catalog (there usually
+        isn't one beyond the source cell) is closed via the
+        same ``_spawned`` registry lookup.
 
         Pops a custom dialog with two checkboxes:
 
@@ -867,7 +881,13 @@ class ForestController(QObject):
             QVBoxLayout,
         )
 
-        cat_path = getattr(cell, "catalog_path", None)
+        # Accept either a cell OR a raw path string.  When the call
+        # comes from the popup-tree right-click filter, ``target``
+        # is a string already resolved to the leaf's root catalog.
+        if isinstance(target, (str, Path)):
+            cat_path = str(target)
+        else:
+            cat_path = getattr(target, "catalog_path", None)
         if not cat_path:
             return
         app_dir = Path(cat_path).parent

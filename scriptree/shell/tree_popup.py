@@ -59,7 +59,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication, QLineEdit, QMenu, QStyle, QWidgetAction,
@@ -209,6 +209,7 @@ def _add_node_to_menu(  # noqa: ANN001
     *,
     collector: list | None = None,
     path_prefix: str = "",
+    root_catalog: Path | None = None,
 ) -> None:
     """Recursively walk a V1 ``TreeNode`` into a QMenu hierarchy.
 
@@ -246,6 +247,7 @@ def _add_node_to_menu(  # noqa: ANN001
             _add_node_to_menu(
                 sub, child, source_dir,
                 collector=collector, path_prefix=child_prefix,
+                root_catalog=root_catalog,
             )
         return
 
@@ -271,6 +273,25 @@ def _add_node_to_menu(  # noqa: ANN001
         except Exception as exc:  # noqa: BLE001
             _log(f"launch_tool({leaf!r}) failed: {exc!r}")
     act.triggered.connect(_on_trigger)
+    # v0.8.0a28 -- stash per-item context so the popup's
+    # right-click event filter can offer "Uninstall app...",
+    # "Open containing folder", etc. without having to walk
+    # back through the source dir to find the catalog.  See
+    # ``_install_per_item_context`` below.
+    try:
+        act._st_context = {  # type: ignore[attr-defined]
+            "leaf_path": str(p),
+            "root_catalog_path": (
+                str(root_catalog) if root_catalog is not None
+                else str(p)
+            ),
+            "node_name": getattr(node, "name", "") or "",
+            "node_display_name": (
+                getattr(node, "display_name", "") or ""
+            ),
+        }
+    except Exception:  # noqa: BLE001
+        pass
     if collector is not None:
         # 5-tuple: (display = breadcrumbed label for the result row,
         # name = the bare leaf label that ranking prefixes against,
@@ -325,6 +346,7 @@ def _build_menu_for_catalog(  # noqa: ANN001
             _add_node_to_menu(
                 menu, node, p.parent,
                 collector=collector, path_prefix=path_prefix,
+                root_catalog=p,
             )
         return True
 
@@ -345,6 +367,18 @@ def _build_menu_for_catalog(  # noqa: ANN001
         def _on_trigger(_c=False, leaf=str(p)):  # noqa: ANN001
             launch_tool(leaf)
         act.triggered.connect(_on_trigger)
+        # v0.8.0a28 -- per-item context for the right-click handler.
+        # Single-tool catalogs are their own root; the leaf IS the
+        # catalog file.
+        try:
+            act._st_context = {  # type: ignore[attr-defined]
+                "leaf_path": str(p),
+                "root_catalog_path": str(p),
+                "node_name": label,
+                "node_display_name": label,
+            }
+        except Exception:  # noqa: BLE001
+            pass
         if collector is not None:
             collector.append((
                 f"{path_prefix}{label}" if path_prefix else label,
@@ -1041,6 +1075,275 @@ def build_tree_popup_menu(hex_win) -> QMenu:  # noqa: ANN001 — CellWindow
     return menu
 
 
+# ---------------------------------------------------------------------------
+# Per-item right-click context menu
+# ---------------------------------------------------------------------------
+#
+# v0.8.0a28+ -- each leaf QAction added to the popup tree menu gets
+# a dict stashed on it under ``_st_context`` (see ``_add_node_to_menu``
+# and the single-tool branch of ``_build_menu_for_catalog``).  When
+# the user RIGHT-clicks an action, the event filter below opens a
+# small per-item context menu so the user can do per-item things --
+# starting with "Uninstall app..." but designed as the extension
+# point for any future per-tool setting (open containing folder,
+# hide from menu, edit in V1, etc.).
+#
+# The filter is installed on every QMenu in the popup tree (the top
+# menu plus every submenu) -- Qt routes mouse events to the menu
+# under the cursor, NOT the top-level menu, so we need filters on
+# all of them.  The recursive install happens in
+# ``_install_per_item_context``; for submenus opened lazily by Qt
+# we ALSO install via ``aboutToShow`` so freshly-opened submenus
+# pick up the filter too.
+
+class _PerItemContextFilter(QObject):
+    """QObject event filter that intercepts right-clicks on actions
+    inside a QMenu and dispatches to a per-item context menu.
+
+    Parameters (constructor)
+    ------------------------
+    hex_win:
+        The cell window that owns the popup.  Used to reach the
+        forest controller via the standard
+        ``hex_win._forest_menu_extension.__self__`` walk -- same
+        pattern as ``_post_install_refresh_forest``.
+
+    Why an event filter and not ``customContextMenuRequested``?
+    Qt's QMenu doesn't fire ``customContextMenuRequested`` on
+    actions; the signal is only emitted on the menu's empty area.
+    The mouse-button-press event filter is the documented way to
+    catch right-clicks on actions.
+    """
+
+    def __init__(self, hex_win) -> None:  # noqa: ANN001 -- CellWindow
+        super().__init__()
+        self._hex_win = hex_win
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if not isinstance(obj, QMenu):
+            return False
+        et = event.type()
+        # ContextMenu is what Qt synthesises for right-click presses
+        # on menus on Windows; MouseButtonPress with RightButton is
+        # the cross-platform fallback we also accept.
+        is_context = (
+            et == QEvent.Type.ContextMenu
+            or (
+                et == QEvent.Type.MouseButtonPress
+                and getattr(event, "button", lambda: None)()
+                == Qt.MouseButton.RightButton
+            )
+        )
+        if not is_context:
+            return False
+        try:
+            act = obj.actionAt(event.pos())
+        except Exception:  # noqa: BLE001
+            act = None
+        if act is None:
+            return False
+        ctx = getattr(act, "_st_context", None)
+        if not ctx:
+            return False
+        # Compose the globally-positioned point for the context
+        # menu.  ``globalPos`` is available on both events.
+        try:
+            global_pt = event.globalPos()
+        except Exception:  # noqa: BLE001
+            try:
+                global_pt = event.globalPosition().toPoint()
+            except Exception:  # noqa: BLE001
+                global_pt = QPoint(0, 0)
+        # Close the host menu before showing the context one so the
+        # context menu is visually on top and doesn't fight with
+        # the host's keyboard / focus state.  We collect the root
+        # menu (the highest ancestor) and close it.
+        try:
+            root = obj
+            while True:
+                parent_menu = root.parent()
+                if isinstance(parent_menu, QMenu):
+                    root = parent_menu
+                else:
+                    break
+            root.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._show_for_action(ctx, global_pt)
+        return True
+
+    # ---- per-item context menu construction ------------------
+
+    def _show_for_action(self, ctx: dict, global_pt: QPoint) -> None:
+        """Build + exec the per-item context menu.
+
+        Designed so adding a new entry is a single ``menu.addAction``
+        + slot binding.  Each entry runs against the leaf's
+        ``ctx`` dict so they're independent of menu position or
+        which cell originated the popup.
+        """
+        menu = QMenu()
+        # Header showing which tool / catalog the context is for.
+        # Disabled action so it acts as a label.
+        label = (
+            ctx.get("node_display_name")
+            or ctx.get("node_name")
+            or Path(ctx.get("leaf_path", "")).stem
+            or "(item)"
+        )
+        hdr = menu.addAction(label)
+        hdr.setEnabled(False)
+        menu.addSeparator()
+
+        # --- Open containing folder ---
+        a_open = menu.addAction("Open containing folder")
+        a_open.setIcon(
+            QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_DirOpenIcon
+            )
+        )
+        a_open.triggered.connect(
+            lambda _c=False, p=ctx.get("leaf_path", ""):
+            self._on_open_folder(p)
+        )
+
+        # --- Uninstall app (when the root catalog lives under
+        # an install root). ---
+        root_cat = ctx.get("root_catalog_path") or ""
+        if root_cat and self._catalog_is_uninstallable(root_cat):
+            menu.addSeparator()
+            a_uninstall = menu.addAction("Uninstall app from disk...")
+            a_uninstall.setIcon(
+                QApplication.style().standardIcon(
+                    QStyle.StandardPixmap.SP_TrashIcon
+                )
+            )
+            a_uninstall.triggered.connect(
+                lambda _c=False, p=root_cat:
+                self._on_uninstall_by_path(p)
+            )
+        menu.exec(global_pt)
+
+    # ---- handlers --------------------------------------------
+
+    def _on_open_folder(self, leaf_path: str) -> None:
+        """Open the leaf's containing folder in the OS file manager.
+
+        Uses ``QDesktopServices.openUrl`` so the same code path
+        works on Windows / macOS / Linux without per-platform
+        ``subprocess.Popen`` branches.
+        """
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            folder = Path(leaf_path).parent
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_open_folder({leaf_path!r}) failed: {exc!r}")
+
+    def _catalog_is_uninstallable(self, catalog_path: str) -> bool:
+        """True iff ``catalog_path`` lives under one of the install
+        roots AND its parent is not the root itself.
+
+        Mirrors the containment check in
+        ``ForestController.uninstall_app`` -- we don't want to
+        offer the action when the controller would refuse it.
+        """
+        try:
+            from scriptree.core.app_install import (
+                default_personal_root, default_shared_root,
+            )
+            parent = Path(catalog_path).resolve().parent
+            roots = []
+            for fn in (default_personal_root, default_shared_root):
+                try:
+                    roots.append(Path(fn()).resolve())
+                except Exception:  # noqa: BLE001
+                    continue
+            for root in roots:
+                try:
+                    rel = parent.relative_to(root)
+                except ValueError:
+                    continue
+                # Refuse to show when parent == root (the catalog
+                # was dropped directly in the install root, which
+                # is unusual and would mean uninstalling the root).
+                if len(rel.parts) >= 1:
+                    return True
+            return False
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _on_uninstall_by_path(self, catalog_path: str) -> None:
+        """Dispatch to the forest controller's existing uninstall
+        flow, passing the catalog path directly.
+
+        Reaches the controller via the standard
+        ``_forest_menu_extension.__self__`` walk; bails silently
+        when no controller is wired up (e.g. standalone-cell mode).
+        """
+        try:
+            hook = getattr(
+                self._hex_win, "_forest_menu_extension", None,
+            )
+            controller = getattr(hook, "__self__", None) if hook else None
+            if controller is None:
+                _log(
+                    "uninstall requested but no forest controller "
+                    "is attached to this cell -- skipping"
+                )
+                return
+            handler = getattr(controller, "_on_uninstall_app", None)
+            if not callable(handler):
+                return
+            handler(catalog_path)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_uninstall_by_path failed: {exc!r}")
+
+
+def _install_per_item_context(menu: QMenu, hex_win) -> None:  # noqa: ANN001
+    """Recursively install ``_PerItemContextFilter`` on ``menu`` and
+    every submenu it currently contains.
+
+    Newly-shown submenus get the filter via ``aboutToShow`` so the
+    handler is in place by the time the user's first right-click
+    fires inside the submenu.
+
+    Idempotent: re-installing on a menu that already has a filter
+    is harmless (Qt deduplicates installed filter targets per
+    ``installEventFilter`` call -- the user is responsible for not
+    calling this twice, but we guard with a sentinel attribute).
+    """
+    sentinel = "_st_per_item_filter_installed"
+    if getattr(menu, sentinel, False):
+        return
+    flt = _PerItemContextFilter(hex_win)
+    # Parent the filter to the menu so it dies with the popup --
+    # no lingering QObjects to leak between popup invocations.
+    flt.setParent(menu)
+    menu.installEventFilter(flt)
+    setattr(menu, sentinel, True)
+    # Stash the filter on the menu so the parent walk can find it
+    # if needed; not strictly required for the filter to fire.
+    menu._st_per_item_filter = flt  # type: ignore[attr-defined]
+
+    # Recurse into current submenus.
+    for act in menu.actions():
+        sub = act.menu()
+        if sub is not None:
+            _install_per_item_context(sub, hex_win)
+
+    # Catch submenus opened lazily later (Qt builds them eagerly
+    # in our case, but the aboutToShow hook is cheap insurance
+    # against future lazy-population changes).
+    try:
+        menu.aboutToShow.connect(
+            lambda m=menu, h=hex_win: _install_per_item_context(m, h)
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     """Pop up a tree menu of the cell's catalog (or the master's
     merged catalog list).  Closes when the user picks an action or
@@ -1050,6 +1353,15 @@ def show_tree_popup_for(hex_win) -> None:  # noqa: ANN001 — CellWindow
     Falls back to the cursor position if mapToGlobal fails.
     """
     menu = build_tree_popup_menu(hex_win)
+    # v0.8.0a28+ -- right-click on any item brings up a per-item
+    # context menu (Uninstall app..., Open containing folder, and
+    # whatever per-tool settings we add later).  See
+    # ``_install_per_item_context`` for the recursive install
+    # rules + filter logic.
+    try:
+        _install_per_item_context(menu, hex_win)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"per-item context install failed: {exc!r}")
 
     # Position: below-centre of the hex.
     try:
