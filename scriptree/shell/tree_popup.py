@@ -1154,75 +1154,232 @@ class _PerItemContextFilter(QObject):
                 global_pt = event.globalPosition().toPoint()
             except Exception:  # noqa: BLE001
                 global_pt = QPoint(0, 0)
-        # Close the host menu before showing the context one so the
-        # context menu is visually on top and doesn't fight with
-        # the host's keyboard / focus state.  We collect the root
-        # menu (the highest ancestor) and close it.
-        try:
-            root = obj
-            while True:
-                parent_menu = root.parent()
-                if isinstance(parent_menu, QMenu):
-                    root = parent_menu
-                else:
-                    break
-            root.close()
-        except Exception:  # noqa: BLE001
-            pass
+        # v0.8.0a30+ -- do NOT explicitly close the parent menu
+        # here.  Qt closes it automatically when our context dialog
+        # gets focus; we then reopen it via the dialog's
+        # ``finished`` signal so the user can keep using the
+        # tree popup after the right-click action.  See
+        # ``_show_for_action``'s ``_reopen_parent`` closure below.
         self._show_for_action(ctx, global_pt)
         return True
 
     # ---- per-item context menu construction ------------------
 
     def _show_for_action(self, ctx: dict, global_pt: QPoint) -> None:
-        """Build + exec the per-item context menu.
+        """Build + show the per-item context dialog.
 
-        Designed so adding a new entry is a single ``menu.addAction``
-        + slot binding.  Each entry runs against the leaf's
-        ``ctx`` dict so they're independent of menu position or
-        which cell originated the popup.
+        v0.8.0a30+ -- this used to be a QMenu, which had two
+        UX problems:
+
+          1. The underlying tree popup (the QMenu the user was
+             navigating when they right-clicked) disappeared as
+             soon as the context QMenu took focus, leaving the
+             user with nothing to come back to.
+          2. No explicit close affordance — Qt menus close on
+             outside click, but there was no "X" the user could
+             aim for to dismiss the context deliberately.
+
+        New implementation: a small frameless ``QDialog`` with an
+        explicit X close button.  When the dialog closes (X, action
+        picked, or outside-click), we schedule a fresh
+        ``show_tree_popup_for`` of the originating cell via a
+        50 ms ``QTimer`` so the user lands back on a fresh tree
+        popup ready for the next right-click.  The 50 ms delay lets
+        Qt's event-loop fully process the dialog's destruction
+        before we re-show, avoiding a race where Qt receives the
+        re-show before it finished closing.
+
+        Entries shown:
+
+          * **Header (disabled label)** — the tool's display name.
+          * **Open containing folder** — always enabled.
+          * **Uninstall app from disk...** — always present;
+            enabled only when the catalog lives under one of the
+            install roots.  Disabled with a tooltip explaining
+            why when the catalog is in a manually-placed folder
+            (the dialog's safety check would refuse it anyway, so
+            this gives the user feedback BEFORE they click instead
+            of an error toast AFTER).
+
+        Designed so adding a new per-item action is a single
+        ``QPushButton`` + ``.clicked.connect`` block.  Each
+        binding closes the dialog after firing so the parent
+        popup reopens automatically.
         """
-        menu = QMenu()
-        # Header showing which tool / catalog the context is for.
-        # Disabled action so it acts as a label.
+        from PySide6.QtCore import Qt as _Qt, QTimer
+        from PySide6.QtWidgets import (
+            QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
+            QToolButton, QVBoxLayout, QWidget,
+        )
+
         label = (
             ctx.get("node_display_name")
             or ctx.get("node_name")
             or Path(ctx.get("leaf_path", "")).stem
             or "(item)"
         )
-        hdr = menu.addAction(label)
-        hdr.setEnabled(False)
-        menu.addSeparator()
 
-        # --- Open containing folder ---
-        a_open = menu.addAction("Open containing folder")
-        a_open.setIcon(
+        dlg = QDialog(self._hex_win)
+        dlg.setWindowFlags(
+            _Qt.WindowType.Tool
+            | _Qt.WindowType.FramelessWindowHint
+            | _Qt.WindowType.WindowStaysOnTopHint
+        )
+        dlg.setAttribute(_Qt.WidgetAttribute.WA_DeleteOnClose)
+        # Light visual border so the floating panel doesn't look
+        # like it merged with the desktop wallpaper.  Uses palette
+        # colours so it respects the user's dark/light theme.
+        dlg.setStyleSheet(
+            "QDialog { "
+            "  background: palette(window); "
+            "  border: 1px solid palette(mid); "
+            "} "
+            "QPushButton[stContext='1'] { "
+            "  text-align: left; "
+            "  padding: 6px 12px; "
+            "  border: none; "
+            "  background: transparent; "
+            "} "
+            "QPushButton[stContext='1']:hover:enabled { "
+            "  background: palette(highlight); "
+            "  color: palette(highlighted-text); "
+            "} "
+            "QPushButton[stContext='1']:disabled { "
+            "  color: palette(mid); "
+            "} "
+            "QToolButton[stContextClose='1'] { "
+            "  border: none; "
+            "  padding: 2px 6px; "
+            "  font-weight: bold; "
+            "} "
+            "QToolButton[stContextClose='1']:hover { "
+            "  background: palette(highlight); "
+            "  color: palette(highlighted-text); "
+            "} "
+        )
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(2, 2, 2, 4)
+        outer.setSpacing(0)
+
+        # --- Header row: title + X close button -------------------
+        header = QHBoxLayout()
+        header.setContentsMargins(8, 4, 4, 4)
+        title_lbl = QLabel(f"<b>{label}</b>")
+        header.addWidget(title_lbl, 1)
+        x_btn = QToolButton()
+        x_btn.setText("✕")  # ✕ — Unicode multiplication X
+        x_btn.setProperty("stContextClose", "1")
+        x_btn.setToolTip("Close (the tool menu will reopen)")
+        x_btn.setCursor(_Qt.CursorShape.PointingHandCursor)
+        x_btn.clicked.connect(dlg.close)
+        header.addWidget(x_btn)
+        outer.addLayout(header)
+
+        # Visual separator between header and actions.
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        outer.addWidget(sep)
+
+        # --- Open containing folder -------------------------------
+        btn_open = QPushButton("Open containing folder")
+        btn_open.setProperty("stContext", "1")
+        btn_open.setIcon(
             QApplication.style().standardIcon(
                 QStyle.StandardPixmap.SP_DirOpenIcon
             )
         )
-        a_open.triggered.connect(
-            lambda _c=False, p=ctx.get("leaf_path", ""):
-            self._on_open_folder(p)
+        btn_open.setCursor(_Qt.CursorShape.PointingHandCursor)
+        leaf_path = ctx.get("leaf_path", "")
+        btn_open.clicked.connect(
+            lambda _c=False, p=leaf_path, d=dlg:
+            (self._on_open_folder(p), d.close())
         )
+        outer.addWidget(btn_open)
 
-        # --- Uninstall app (when the root catalog lives under
-        # an install root). ---
+        # --- Uninstall app from disk... (always present) ---------
+        # v0.8.0a30+ -- previously this button was conditionally
+        # added.  Now always present so users can see the action
+        # exists; disabled with a tooltip when not safe.  The
+        # underlying ``uninstall_app`` controller method already
+        # refuses paths outside install roots, so this is
+        # belt-and-braces UX feedback.
+        btn_uninstall = QPushButton("Uninstall app from disk...")
+        btn_uninstall.setProperty("stContext", "1")
+        btn_uninstall.setIcon(
+            QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_TrashIcon
+            )
+        )
+        btn_uninstall.setCursor(_Qt.CursorShape.PointingHandCursor)
         root_cat = ctx.get("root_catalog_path") or ""
         if root_cat and self._catalog_is_uninstallable(root_cat):
-            menu.addSeparator()
-            a_uninstall = menu.addAction("Uninstall app from disk...")
-            a_uninstall.setIcon(
-                QApplication.style().standardIcon(
-                    QStyle.StandardPixmap.SP_TrashIcon
-                )
+            btn_uninstall.clicked.connect(
+                lambda _c=False, p=root_cat, d=dlg:
+                (self._on_uninstall_by_path(p), d.close())
             )
-            a_uninstall.triggered.connect(
-                lambda _c=False, p=root_cat:
-                self._on_uninstall_by_path(p)
+        else:
+            btn_uninstall.setEnabled(False)
+            btn_uninstall.setToolTip(
+                "This tool's catalog is not under a managed "
+                "install location (the personal app-data root or "
+                "the shared <ScripTree>/ScripTreeApps tree).\n\n"
+                "Drop-installed apps can be uninstalled from "
+                "here.  Manually-placed tools must be removed "
+                "by hand from their folder."
             )
-        menu.exec(global_pt)
+        outer.addWidget(btn_uninstall)
+
+        # --- Reopen parent tree popup on close -------------------
+        # When the user dismisses this dialog -- via X, an action,
+        # or click-outside -- bring the tree popup back so they can
+        # right-click another tool without re-clicking the cell.
+        # 50 ms delay lets Qt finish the dialog's teardown before
+        # we re-show; without it the new popup can land under the
+        # closing dialog's z-order.
+        def _reopen_parent() -> None:
+            try:
+                # Guard against re-showing when the cell already
+                # has a fresh popup (race protection).
+                if getattr(
+                    self._hex_win, "_tree_popup_menu", None,
+                ) is not None:
+                    return
+                # Local import avoids the module-level circular
+                # since ``show_tree_popup_for`` is defined below
+                # in this same file.
+                show_tree_popup_for(self._hex_win)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"reopen-parent-on-context-close: {exc!r}")
+
+        dlg.finished.connect(
+            lambda _r=0: QTimer.singleShot(50, _reopen_parent)
+        )
+
+        # Position the dialog at the right-click point.  Clamp to
+        # the screen's available geometry so the dialog isn't born
+        # off-screen if the user right-clicks near the edge.
+        dlg.adjustSize()
+        screen = QApplication.screenAt(global_pt)
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = min(
+                global_pt.x(),
+                avail.right() - dlg.width(),
+            )
+            y = min(
+                global_pt.y(),
+                avail.bottom() - dlg.height(),
+            )
+            x = max(x, avail.left())
+            y = max(y, avail.top())
+            dlg.move(x, y)
+        else:
+            dlg.move(global_pt)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     # ---- handlers --------------------------------------------
 
