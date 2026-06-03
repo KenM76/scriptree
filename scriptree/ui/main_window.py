@@ -933,8 +933,73 @@ class MainWindow(QMainWindow):
                 5000,
             )
             return
-        if self._launcher.save():
-            self.statusBar().showMessage("Tree saved.")
+        if not self._launcher.save():
+            return
+
+        # v0.8.0a31+ -- if the file we just saved is a merged tree
+        # (built by ``scriptree.shell.merged_tree`` from a master
+        # cell's members), push the edits back to each originating
+        # source file.  Otherwise the user's edits land only in the
+        # temp file and the forest can't see them.
+        tree_path = self._launcher.tree_file()
+        if tree_path is not None:
+            try:
+                from scriptree.shell.merged_tree import (
+                    is_merged_tree, push_back_to_origins,
+                )
+                if is_merged_tree(tree_path):
+                    result = push_back_to_origins(tree_path)
+                    if result.errors:
+                        self.statusBar().showMessage(
+                            f"Tree saved to temp, but {len(result.errors)} "
+                            f"source file(s) FAILED back-write.  See log.",
+                            8000,
+                        )
+                        # Show the error detail in a non-blocking
+                        # dialog so the user knows exactly which
+                        # source(s) couldn't be updated.
+                        from PySide6.QtWidgets import QMessageBox
+                        QMessageBox.warning(
+                            self, "Back-propagate failed",
+                            "Tree saved to the temporary merged "
+                            "file, but the following source files "
+                            "couldn't be updated:\n\n"
+                            + "\n".join(
+                                f"  - {p}\n    {reason}"
+                                for p, reason in result.errors
+                            )
+                            + (
+                                "\n\nSkipped:\n"
+                                + "\n".join(
+                                    f"  - {p}\n    {reason}"
+                                    for p, reason in result.skipped
+                                )
+                                if result.skipped else ""
+                            ),
+                        )
+                    elif result.skipped:
+                        self.statusBar().showMessage(
+                            f"Wrote {len(result.written)} source "
+                            f"file(s); skipped {len(result.skipped)}.",
+                            6000,
+                        )
+                    else:
+                        self.statusBar().showMessage(
+                            f"Wrote {len(result.written)} source "
+                            f"file(s) back from merged tree.",
+                            5000,
+                        )
+                    return
+            except Exception as exc:  # noqa: BLE001
+                # Don't let a back-propagate failure swallow the
+                # save-succeeded news.
+                import sys as _sys
+                print(
+                    f"[main_window] merged-tree push-back failed: "
+                    f"{exc!r}",
+                    file=_sys.stderr,
+                )
+        self.statusBar().showMessage("Tree saved.")
 
     def _save_tree_as(self) -> None:
         """Prompt for a new ``.scriptreetree`` path and save the

@@ -13,6 +13,26 @@ path** before serialisation so the merged file can live in ``%TEMP%``
 without breaking V1's relative-path resolver (which would otherwise
 look for leaves relative to the temp file's parent directory).
 
+## Back-propagation (v0.8.0a31+)
+
+The merged tree is **editable**.  When the user saves it in V1, the
+editor's save path detects the merged-tree filename pattern and calls
+``push_back_to_origins(merged_path)``, which:
+
+  1. Reads the sidecar JSON written alongside the merged tree (see
+     ``_origins_sidecar_path``) — this lists ``folder_name ->
+     source_path`` per top-level folder.
+  2. Walks the just-saved merged tree.
+  3. For each top-level folder, writes its ``children`` back to the
+     matching source ``.scriptreetree`` file -- or, for single-tool
+     sources that came from a ``.scriptree``, writes the leaf's
+     resolved tool definition back.
+  4. Converts absolute leaf paths back to paths relative-to-origin
+     before saving (canonical .scriptreetree convention).
+
+This is what makes "edit the forest in the editor" actually save
+changes back to the per-member files the forest reads from.
+
 Public API
 ----------
 
@@ -20,7 +40,8 @@ Public API
         Build a merged ``.scriptreetree`` from a list of source
         catalog paths (each a ``.scriptree`` or ``.scriptreetree``).
         Writes to ``<TEMP>/scriptreering_merged_<hash>.scriptreetree``
-        and returns the absolute path.
+        AND a sidecar ``...origins.json`` next to it.  Returns the
+        absolute path of the .scriptreetree.
 
     build_merged_tree_for_master(master) -> Path
         Convenience: extract ``catalog_path`` from each member of the
@@ -29,6 +50,17 @@ Public API
         ``_merged_tree_cache_path`` so repeated double-clicks reuse
         the same temp file (which V1 keeps open) until the membership
         changes.
+
+    is_merged_tree(path) -> bool
+        Heuristic check: does ``path`` look like a merged-tree temp
+        file? Used by V1's save path to decide whether to invoke
+        ``push_back_to_origins``.
+
+    push_back_to_origins(merged_path) -> PushBackResult
+        Walk a freshly-saved merged tree + its origins sidecar, and
+        write each top-level folder's contents back to the file the
+        folder originated from.  Returns a structured result so the
+        caller can show the user a "wrote N source files" toast.
 
 The temp file is intentionally **not** auto-deleted; V1 may keep it
 open via ``QFileSystemWatcher`` for live-reload semantics.  ScripTree
@@ -76,9 +108,12 @@ sweep ``%TEMP%`` periodically.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import sys
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -241,7 +276,328 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
     _sweep_stale_merged_files()
     save_tree(merged, str(out))
     _log(f"wrote {out}  ({len(merged_nodes)} members)")
+
+    # v0.8.0a31+ -- write the origins sidecar alongside the merged
+    # tree so V1's save path can find it and push back-edits.  See
+    # ``_origins_sidecar_path`` and ``push_back_to_origins``.
+    _write_origins_sidecar(out, list(zip(member_names, sources)))
+
     return out
+
+
+# ---------------------------------------------------------------------------
+# Origins sidecar + back-propagation (v0.8.0a31+)
+# ---------------------------------------------------------------------------
+
+# Filename suffix appended to the merged tree's path to locate the
+# sidecar JSON that maps top-level folder names to their source
+# files.  Co-located so a moved or copied merged tree carries its
+# origin map along.
+_ORIGINS_SUFFIX = ".origins.json"
+
+# Filename heuristic: a merged tree's stem starts with this prefix.
+# Used by ``is_merged_tree`` so the V1 save path can decide whether
+# to invoke back-propagation.
+_MERGED_PREFIX = "scriptreering_merged_"
+
+
+@dataclass
+class PushBackResult:
+    """Outcome of pushing merged-tree edits back to their source
+    catalog files.
+
+    Returned by :func:`push_back_to_origins` so the caller (V1's
+    save handler) can show the user a precise summary: "wrote 3
+    source files, skipped 1, errors on 0."
+    """
+    written: list[str] = field(default_factory=list)
+    """Absolute paths of source files that were successfully written."""
+
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+    """Tuples of (source_path, reason) for files we couldn't or
+    wouldn't write -- e.g. a top-level folder in the merged tree
+    no longer matches any sidecar entry."""
+
+    errors: list[tuple[str, str]] = field(default_factory=list)
+    """Tuples of (source_path, exception_repr) for files where the
+    write attempt raised."""
+
+    @property
+    def total(self) -> int:
+        return len(self.written) + len(self.skipped) + len(self.errors)
+
+
+def _origins_sidecar_path(merged_path: Path | str) -> Path:
+    """Path of the origins sidecar for a given merged tree."""
+    p = Path(merged_path)
+    return p.with_name(p.name + _ORIGINS_SUFFIX)
+
+
+def is_merged_tree(path: str | Path) -> bool:
+    """True if ``path`` looks like a merged-tree temp file.
+
+    Used by V1's save path to decide whether to invoke
+    :func:`push_back_to_origins` after saving.  Two checks:
+
+    1. The filename stem starts with the merged-tree prefix
+       (e.g. ``scriptreering_merged_abc123def456``).
+    2. An origins sidecar exists co-located with the file.
+
+    Both must hold -- a file the user happens to name with the
+    same prefix isn't a real merged tree without its sidecar.
+    """
+    try:
+        p = Path(path)
+    except (TypeError, ValueError):
+        return False
+    if not p.name.startswith(_MERGED_PREFIX):
+        return False
+    return _origins_sidecar_path(p).is_file()
+
+
+def _write_origins_sidecar(
+    merged_path: Path,
+    entries: Iterable[tuple[str, Path]],
+) -> Path:
+    """Write the origins sidecar for ``merged_path``.
+
+    ``entries`` is an iterable of ``(folder_name, source_path)``
+    pairs in the same order the merged tree's top-level folders
+    appear.  The order matters for back-propagation: when two
+    members happen to share a folder name (e.g. both renamed to
+    "Tools"), the order disambiguates which source each merged
+    folder writes back to.
+    """
+    sidecar = _origins_sidecar_path(merged_path)
+    payload = {
+        "version": 1,
+        "merged_tree": str(merged_path),
+        "origins": [
+            {
+                "folder_name": name,
+                "source_path": str(Path(src).resolve()),
+            }
+            for name, src in entries
+        ],
+    }
+    sidecar.write_text(
+        json.dumps(payload, indent=2), encoding="utf-8",
+    )
+    _log(f"wrote origins sidecar {sidecar}  ({len(payload['origins'])} entries)")
+    return sidecar
+
+
+def _read_origins_sidecar(merged_path: Path | str) -> list[dict] | None:
+    """Load the origins sidecar list, or ``None`` if missing /
+    malformed.  Returns the raw list of entry dicts so the caller
+    can iterate in order."""
+    sidecar = _origins_sidecar_path(merged_path)
+    if not sidecar.is_file():
+        return None
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _log(f"origins sidecar unreadable at {sidecar}: {exc!r}")
+        return None
+    if not isinstance(data, dict):
+        return None
+    origins = data.get("origins")
+    if not isinstance(origins, list):
+        return None
+    return origins
+
+
+def _restore_relative_leaf_paths(
+    node,  # noqa: ANN001 -- TreeNode
+    origin_dir: Path,
+) -> None:
+    """Recursively rewrite absolute leaf paths to be relative to
+    ``origin_dir`` where possible.
+
+    Inverse of :func:`_resolve_node_paths`.  We want the saved
+    source ``.scriptreetree`` to use relative leaf paths (canonical
+    convention) rather than absolute ones (merged-tree convention).
+    Paths that don't live under ``origin_dir`` are left absolute --
+    cross-tree references the user explicitly created.
+    """
+    if node.type == "leaf" and node.path is not None:
+        leaf = Path(node.path)
+        if leaf.is_absolute():
+            try:
+                rel = leaf.resolve().relative_to(origin_dir.resolve())
+                # Use forward slashes for cross-platform stability;
+                # ``Path.as_posix`` is the standard idiom for this.
+                node.path = rel.as_posix()
+            except ValueError:
+                # Leaf isn't under origin_dir -- keep absolute.
+                pass
+    elif node.type == "folder":
+        for child in node.children:
+            _restore_relative_leaf_paths(child, origin_dir)
+
+
+def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
+    """Push edits in a merged tree back to its originating source files.
+
+    Workflow:
+
+      1. Load the merged tree from disk.
+      2. Load the origins sidecar (created during
+         :func:`build_merged_tree`).
+      3. For each top-level folder in the merged tree:
+         - Find the matching origin entry by folder name.
+         - If the source file ended in ``.scriptreetree``: replace
+           that file's ``nodes`` with the folder's children, then
+           save -- preserving the original ``TreeDef.name`` and
+           other top-level metadata.
+         - If the source file ended in ``.scriptree``: the folder
+           should contain exactly one leaf whose path is the
+           source.  Leaf-only edits to a single-tool catalog are
+           not supported here (the leaf path IS the file; editing
+           "the tree wrapper" doesn't have an analog).  Skipped
+           with a clear reason.
+      4. Each leaf path is rewritten from absolute to
+         relative-to-origin-folder where possible (so the saved
+         source file uses canonical relative paths).
+
+    Returns a :class:`PushBackResult` summarising what was written,
+    skipped, or errored.  The caller is expected to surface this
+    to the user (status bar / dialog) so they know which files
+    on disk just changed.
+
+    Errors during individual file writes do NOT abort the whole
+    operation -- each file is independently best-effort.  This
+    matches the user contract: "save what you can, tell me what
+    you couldn't."
+    """
+    from scriptree.core.io import load_tree, save_tree
+    from scriptree.core.model import TreeDef, TreeNode
+
+    result = PushBackResult()
+
+    merged = Path(merged_path)
+    if not merged.is_file():
+        result.errors.append(
+            (str(merged), "merged tree file not found"),
+        )
+        return result
+
+    origins = _read_origins_sidecar(merged)
+    if origins is None:
+        result.errors.append(
+            (str(merged), "origins sidecar missing or malformed"),
+        )
+        return result
+
+    try:
+        loaded = load_tree(str(merged))
+    except Exception as exc:  # noqa: BLE001
+        result.errors.append((str(merged), f"load_tree failed: {exc!r}"))
+        return result
+
+    # Build a lookup of folder-name -> top-level node in the merged
+    # tree.  Iterate the merged tree's top level once, in order.
+    # When two folders share a name we use the first occurrence and
+    # the sidecar's order to disambiguate.
+    merged_top: list = list(loaded.nodes)
+
+    # Cross-reference the sidecar entries with the merged top in
+    # ORDER (position-stable).  If a sidecar entry's folder_name
+    # doesn't match the same-position folder in the merged tree
+    # (because the user renamed it), fall back to the FIRST
+    # remaining folder with that name.
+    used_indices: set[int] = set()
+
+    for i, entry in enumerate(origins):
+        src_path = entry.get("source_path")
+        sidecar_name = entry.get("folder_name", "")
+        if not src_path:
+            continue
+
+        # Pick the matching merged-tree folder.  Position-first,
+        # name-fallback.
+        chosen: int | None = None
+        if (
+            i < len(merged_top)
+            and i not in used_indices
+            and merged_top[i].type == "folder"
+        ):
+            chosen = i
+        else:
+            for j, node in enumerate(merged_top):
+                if j in used_indices:
+                    continue
+                if (
+                    node.type == "folder"
+                    and node.name == sidecar_name
+                ):
+                    chosen = j
+                    break
+        if chosen is None:
+            result.skipped.append((
+                src_path,
+                f"top-level folder '{sidecar_name}' not found in "
+                f"saved merged tree (deleted? renamed twice?)",
+            ))
+            continue
+        used_indices.add(chosen)
+        folder = merged_top[chosen]
+
+        src = Path(src_path)
+        ext = src.suffix.lower()
+
+        if ext == ".scriptreetree":
+            # Re-load the existing source so we preserve top-level
+            # metadata (TreeDef.name, etc.).  If load fails, fall
+            # back to a fresh TreeDef using the folder's display.
+            try:
+                existing = load_tree(str(src))
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"push_back: load_tree({src}) failed: {exc!r}; "
+                    f"will write a fresh TreeDef"
+                )
+                existing = TreeDef(name=folder.name, nodes=[])
+
+            # Restore relative leaf paths so the source file
+            # doesn't carry the merged tree's absolutes.
+            for child in folder.children:
+                _restore_relative_leaf_paths(child, src.parent)
+
+            # Build a new TreeDef preserving the source's name +
+            # other meta, but using the merged folder's children
+            # as the new node list.
+            new_tree = TreeDef(
+                name=existing.name or folder.name,
+                nodes=list(folder.children),
+            )
+            try:
+                save_tree(new_tree, str(src))
+                result.written.append(str(src))
+                _log(f"push_back: wrote {src}")
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(
+                    (str(src), f"save_tree failed: {exc!r}"),
+                )
+
+        elif ext == ".scriptree":
+            # Single-tool catalogs -- the folder wraps exactly one
+            # leaf that IS the source.  Editing the wrapper folder
+            # has no analog in the source.  Skip cleanly.
+            result.skipped.append((
+                str(src),
+                "single-tool .scriptree catalogs can't be edited "
+                "via the merged-tree wrapper (the leaf IS the "
+                "file)",
+            ))
+
+        else:
+            result.skipped.append((
+                str(src),
+                f"unknown source extension {ext!r}",
+            ))
+
+    return result
 
 
 # ---------------------------------------------------------------------------
