@@ -848,42 +848,134 @@ class ForestController(QObject):
         """Confirmation + dispatch for the per-cell "Uninstall app..."
         menu action.
 
-        Shows a strongly-worded confirmation dialog, then -- only
-        if the user explicitly confirms -- delegates to
-        ``uninstall_app`` to do the actual delete.
+        Pops a custom dialog with two checkboxes:
+
+          * **Also remove my local saved configurations** -- when
+            ticked, deletes every personal sidecar belonging to
+            tools in this app folder.  Default ON.
+          * **Also remove shared configurations stored with the
+            app** -- when ticked, the whole app folder goes,
+            sidecars and all.  When unticked, the sidecars are
+            copied to a sibling backup folder first.  Default ON.
+
+        Only delegates to ``uninstall_app`` after the user clicks
+        the destructive Uninstall button; cancel is a no-op.
         """
         from pathlib import Path
+        from PySide6.QtWidgets import (
+            QCheckBox, QDialog, QDialogButtonBox, QLabel,
+            QVBoxLayout,
+        )
+
         cat_path = getattr(cell, "catalog_path", None)
         if not cat_path:
             return
         app_dir = Path(cat_path).parent
-        # Confirmation: name the folder, say it will be deleted,
-        # require the destructive button to confirm.
+
+        # Peek at how many local sidecars exist BEFORE the user
+        # confirms, so the checkbox label can show a useful count.
         try:
-            box = QMessageBox(self.forest_window)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle("Uninstall app")
-            box.setText(
-                f"Uninstall the app at:\n\n"
-                f"  {app_dir}\n\n"
-                f"This will permanently delete every file in that "
-                f"folder.  This cannot be undone."
+            from scriptree.core.configs import (
+                find_personal_configs_for_app,
             )
-            del_btn = box.addButton(
-                "Uninstall", QMessageBox.ButtonRole.DestructiveRole,
+            local_count = len(
+                find_personal_configs_for_app(app_dir)
             )
-            cancel_btn = box.addButton(
-                "Cancel", QMessageBox.ButtonRole.RejectRole,
-            )
-            box.setDefaultButton(cancel_btn)
-            box.exec()
-            if box.clickedButton() is not del_btn:
-                return
         except Exception as exc:  # noqa: BLE001
-            _log(f"_on_uninstall_app: confirmation failed: {exc!r}")
+            _log(
+                f"_on_uninstall_app: local-count scan failed: {exc!r}"
+            )
+            local_count = 0
+        try:
+            shared_count = sum(
+                1 for f in app_dir.rglob("*")
+                if f.is_file() and (
+                    f.name.endswith(".scriptree.configs.json")
+                    or f.name.endswith(
+                        ".scriptreetree.treeconfigs.json"
+                    )
+                )
+            )
+        except Exception:  # noqa: BLE001
+            shared_count = 0
+
+        try:
+            dlg = QDialog(self.forest_window)
+            dlg.setWindowTitle("Uninstall app")
+            dlg.setMinimumWidth(520)
+            layout = QVBoxLayout(dlg)
+            header = QLabel(
+                f"Uninstall the app at:\n\n  {app_dir}\n\n"
+                f"This will permanently delete the app folder.  "
+                f"This cannot be undone."
+            )
+            header.setWordWrap(True)
+            layout.addWidget(header)
+
+            local_label = (
+                "Also remove my local saved configurations"
+                if local_count == 0 else
+                f"Also remove my local saved configurations "
+                f"({local_count} file{'s' if local_count != 1 else ''})"
+            )
+            cb_local = QCheckBox(local_label)
+            cb_local.setChecked(True)
+            cb_local.setToolTip(
+                "Personal sidecars saved under your user "
+                "configs folder for this app's tools.  Unchecked "
+                "leaves them in place so they reattach on a "
+                "future re-install at the same location."
+            )
+            layout.addWidget(cb_local)
+
+            shared_label = (
+                "Also remove shared configurations stored with "
+                "the app"
+                if shared_count == 0 else
+                f"Also remove shared configurations stored with "
+                f"the app "
+                f"({shared_count} file{'s' if shared_count != 1 else ''})"
+            )
+            cb_shared = QCheckBox(shared_label)
+            cb_shared.setChecked(True)
+            cb_shared.setToolTip(
+                "Sidecar files ('*.configs.json' / "
+                "'*.treeconfigs.json') stored INSIDE the app "
+                "folder.  Unchecked copies them to a sibling "
+                "'<app>_uninstalled_configs/' folder BEFORE "
+                "the app folder is removed."
+            )
+            layout.addWidget(cb_shared)
+
+            # Custom buttons -- DestructiveRole for the Uninstall
+            # button so platforms that style destructive actions
+            # (macOS, modern Linux DEs) show it in red.
+            buttons = QDialogButtonBox(dlg)
+            del_btn = buttons.addButton(
+                "Uninstall",
+                QDialogButtonBox.ButtonRole.DestructiveRole,
+            )
+            cancel_btn = buttons.addButton(
+                QDialogButtonBox.StandardButton.Cancel,
+            )
+            cancel_btn.setDefault(True)
+            del_btn.clicked.connect(dlg.accept)
+            cancel_btn.clicked.connect(dlg.reject)
+            layout.addWidget(buttons)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            remove_local = cb_local.isChecked()
+            remove_shared = cb_shared.isChecked()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_uninstall_app: dialog failed: {exc!r}")
             return
 
-        ok, msg = self.uninstall_app(cat_path)
+        ok, msg = self.uninstall_app(
+            cat_path,
+            remove_local_configs=remove_local,
+            remove_shared_configs=remove_shared,
+        )
         try:
             if ok:
                 QMessageBox.information(
@@ -922,7 +1014,13 @@ class ForestController(QObject):
         except Exception:  # noqa: BLE001
             pass
 
-    def uninstall_app(self, path: str) -> tuple[bool, str]:
+    def uninstall_app(
+        self,
+        path: str,
+        *,
+        remove_local_configs: bool = True,
+        remove_shared_configs: bool = True,
+    ) -> tuple[bool, str]:
         """Delete the on-disk folder of a forest-tracked app.
 
         Hard guards to prevent disaster:
@@ -939,6 +1037,32 @@ class ForestController(QObject):
             the app folder IS one of the install roots (case where
             someone names an app the same as the root by accident).
 
+        Parameters
+        ----------
+        path:
+            The catalog file inside the app folder being
+            uninstalled.  Its parent directory IS the app folder.
+        remove_local_configs:
+            When True (default), every personal sidecar in
+            ``get_personal_configs_dir()`` whose ``source_filename``
+            matches a tool inside the app folder AND whose
+            ``source_locations`` overlaps the app folder is deleted.
+            When False, those sidecars are left intact so the user's
+            saved personal configurations survive the uninstall and
+            line up automatically on a future re-install at the
+            same location.
+        remove_shared_configs:
+            When True (default), the app folder is removed wholesale
+            (``shutil.rmtree``), which incidentally also removes the
+            shared sidecars (``*.scriptree.configs.json``,
+            ``*.scriptreetree.treeconfigs.json``) that live inside
+            it.  When False, every shared sidecar inside the app
+            folder is first MOVED to a sibling backup directory
+            named ``<app_dir>_uninstalled_configs/`` under the same
+            install root, and only THEN is the app folder removed.
+            The backup folder's path is appended to the success
+            message so the user knows where to look.
+
         Behaviour on success: removes the app's folder via
         ``shutil.rmtree``, drops the ForestItem from
         ``self.forest.items``, adds the path to ``forest.excluded``
@@ -950,7 +1074,9 @@ class ForestController(QObject):
         prompt the user with a confirmation dialog BEFORE
         calling this -- ``uninstall_app`` itself does no UI.
 
-        v0.8.0a25 -- new in this release.
+        v0.8.0a25 -- initial release (folder delete only).
+        v0.8.0a26 -- added ``remove_local_configs`` /
+        ``remove_shared_configs`` knobs.
         """
         from pathlib import Path
         import shutil
@@ -1022,13 +1148,110 @@ class ForestController(QObject):
             except Exception:  # noqa: BLE001
                 pass
 
+        # Find the personal sidecars belonging to this app folder
+        # BEFORE we mutate the disk -- we need to walk the app
+        # folder for tool files, and that walk obviously can't
+        # happen after rmtree.
+        try:
+            from scriptree.core.configs import (
+                find_personal_configs_for_app,
+            )
+            local_sidecars = find_personal_configs_for_app(app_dir)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"uninstall_app: local-config scan failed: {exc!r}")
+            local_sidecars = []
+
+        # If the user asked us to keep shared configs, snapshot
+        # them to a sibling backup folder BEFORE the rmtree.  We
+        # name the backup deterministically (same parent, suffix
+        # ``_uninstalled_configs``) so the user has somewhere
+        # obvious to look.  If the backup folder already exists
+        # (a previous uninstall), append a numbered suffix.
+        backup_dir: Path | None = None
+        if not remove_shared_configs:
+            shared_sidecars = [
+                f for f in app_dir.rglob("*")
+                if f.is_file() and (
+                    f.name.endswith(".scriptree.configs.json")
+                    or f.name.endswith(
+                        ".scriptreetree.treeconfigs.json"
+                    )
+                )
+            ]
+            if shared_sidecars:
+                base = app_dir.parent / (
+                    app_dir.name + "_uninstalled_configs"
+                )
+                backup_dir = base
+                n = 2
+                while backup_dir.exists():
+                    backup_dir = (
+                        app_dir.parent
+                        / f"{app_dir.name}_uninstalled_configs-{n}"
+                    )
+                    n += 1
+                try:
+                    backup_dir.mkdir(parents=True, exist_ok=False)
+                    for sidecar in shared_sidecars:
+                        rel = sidecar.relative_to(app_dir)
+                        dest = backup_dir / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(sidecar, dest)
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"uninstall_app: shared-config backup failed: "
+                        f"{exc!r}"
+                    )
+                    return False, (
+                        f"Could not back up shared configs to "
+                        f"{backup_dir}: {exc!r}.  Refusing to delete "
+                        f"app folder because the backup would be "
+                        f"incomplete."
+                    )
+
         try:
             shutil.rmtree(app_dir)
         except Exception as exc:  # noqa: BLE001
             return False, f"Delete failed: {exc!r}"
 
+        # Now clean (or keep) the personal sidecars.  Doing this
+        # AFTER the rmtree is safe: we already enumerated them
+        # above; the rmtree only touched the app folder.
+        local_removed = 0
+        local_kept = 0
+        if local_sidecars:
+            if remove_local_configs:
+                for sidecar in local_sidecars:
+                    try:
+                        sidecar.unlink()
+                        local_removed += 1
+                    except Exception as exc:  # noqa: BLE001
+                        _log(
+                            f"uninstall_app: failed to delete personal "
+                            f"sidecar {sidecar}: {exc!r}"
+                        )
+            else:
+                local_kept = len(local_sidecars)
+
         self.forestChanged.emit()
-        return True, f"Uninstalled {app_dir.name} from {chosen_root}."
+
+        # Compose a human-readable summary line so the post-uninstall
+        # toast tells the user what actually happened.
+        parts = [f"Uninstalled {app_dir.name} from {chosen_root}."]
+        if local_removed:
+            parts.append(
+                f"Removed {local_removed} local config file(s)."
+            )
+        if local_kept:
+            parts.append(
+                f"Kept {local_kept} local config file(s) under "
+                f"{local_sidecars[0].parent}."
+            )
+        if backup_dir is not None:
+            parts.append(
+                f"Shared configs backed up to {backup_dir}."
+            )
+        return True, "  ".join(parts)
 
     # ------------------------------------------------------------------
     # User actions

@@ -84,6 +84,7 @@ without a QApplication.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -783,6 +784,113 @@ def save_personal_configs_at(
     path.write_text(
         json.dumps(configs_to_dict(cfg_set), indent=2), encoding="utf-8"
     )
+
+
+def find_personal_configs_for_app(
+    app_dir: str | Path,
+    *,
+    personal_dir: Path | None = None,
+) -> list[Path]:
+    """Enumerate every personal sidecar that "belongs to" the app
+    folder at ``app_dir``.
+
+    A personal sidecar belongs to ``app_dir`` when:
+
+      1. Its ``source_filename`` matches a ``.scriptree`` or
+         ``.scriptreetree`` file that currently lives anywhere
+         inside ``app_dir`` (recursive walk), AND
+      2. Its ``source_locations`` lists a directory that is
+         either ``app_dir`` itself or one of its sub-directories
+         (so a personal sidecar a user saved while the same tool
+         was loaded from a different location is NOT swept up
+         here -- they only want THIS install's personal data
+         removed).
+
+    The two-pronged match mirrors the load-time logic in
+    ``load_personal_configs_for``, which is the canonical
+    "does this sidecar belong to this tool here?" predicate.
+
+    Used by the uninstall flow to know which personal sidecars
+    to remove (or keep) when the user is wiping the app folder.
+
+    Parameters
+    ----------
+    app_dir:
+        The folder being uninstalled.  Need not exist (e.g. when
+        called post-rmtree for a dry-run), but if it does exist,
+        we walk it for tool files.
+    personal_dir:
+        Optional override for the personal-configs directory.
+        Defaults to ``get_personal_configs_dir()``.  Pass an
+        explicit dir from tests so the module stays Qt-free.
+
+    Returns
+    -------
+    Sorted list of absolute ``Path`` objects pointing at the
+    sidecar files that match.  Empty list when nothing matches
+    (or when ``personal_dir`` doesn't exist).
+    """
+    if personal_dir is None:
+        from .app_settings import get_personal_configs_dir
+        personal_dir = get_personal_configs_dir()
+    if not personal_dir.is_dir():
+        return []
+
+    app = Path(app_dir).resolve()
+
+    # Step 1: collect every .scriptree / .scriptreetree file the
+    # app folder currently contains, indexed by lowercase filename
+    # for fast membership tests.
+    tool_filenames: set[str] = set()
+    tool_dirs_lower: set[str] = set()
+    if app.is_dir():
+        for root, _dirs, files in os.walk(app):
+            for fname in files:
+                lower = fname.lower()
+                if lower.endswith(".scriptree") or lower.endswith(
+                    ".scriptreetree"
+                ):
+                    tool_filenames.add(lower)
+            tool_dirs_lower.add(str(Path(root).resolve()).lower())
+
+    if not tool_filenames:
+        return []
+
+    # Step 2: scan every personal sidecar.  Match by filename AND
+    # by ``source_locations`` overlap with the app folder tree.
+    matches: list[Path] = []
+    for entry in personal_dir.iterdir():
+        if not entry.is_file():
+            continue
+        lname = entry.name.lower()
+        # Cheap pre-filter -- our personal-sidecar names always
+        # end in ``-scriptree.configs.json`` or
+        # ``-scriptreetree.treeconfigs.json``.
+        if not (
+            lname.endswith("-scriptree.configs.json")
+            or lname.endswith("-scriptreetree.treeconfigs.json")
+        ):
+            continue
+        try:
+            data = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cfg_set = configs_from_dict(data)
+        src_fn = (cfg_set.source_filename or "").lower()
+        if src_fn not in tool_filenames:
+            continue
+        # source_locations must include at least one directory
+        # under the app folder (or the app folder itself).
+        locs_norm = []
+        for loc in cfg_set.source_locations:
+            try:
+                locs_norm.append(str(Path(loc).resolve()).lower())
+            except Exception:  # noqa: BLE001
+                continue
+        if any(loc in tool_dirs_lower for loc in locs_norm):
+            matches.append(entry.resolve())
+    matches.sort()
+    return matches
 
 
 def add_location_to_personal(
