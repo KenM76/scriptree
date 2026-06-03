@@ -9,6 +9,12 @@ gives the per-topic slice.
 
 ## All lessons
 
+- [pyside6] **no_console_popen_kwargs**: Windows-only flag set
+  (`CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`) that prevents a
+  console window from popping up when a GUI app spawns CLI tools.
+  Helper at `scriptree.core.runner.no_console_popen_kwargs()` —
+  merge into every Popen/run call site cross-platform.
+  → `rags/lessons/no_console_popen_kwargs.md`
 - [pyside6] **detached_process_breaks_bat**: DETACHED_PROCESS strips
   the console; cmd.exe needs one for `start "" pythonw.exe`. Use
   CREATE_NO_WINDOW. → `rags/lessons/detached_process_breaks_bat.md`

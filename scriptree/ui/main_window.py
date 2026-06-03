@@ -1302,7 +1302,15 @@ class MainWindow(QMainWindow):
 
         kwargs: dict = {"shell": False}
         if sys.platform == "win32":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200
+            # v0.8.0a29+: was DETACHED_PROCESS (0x00000008) |
+            # CREATE_NEW_PROCESS_GROUP (0x00000200), which BREAKS
+            # .bat shims because cmd.exe needs a console even if
+            # invisible.  CREATE_NO_WINDOW (0x08000000) is the
+            # right "no visible window but console available" flag.
+            # See no_console_popen_kwargs() in scriptree.core.runner
+            # for the full rationale.
+            from ..core.runner import no_console_popen_kwargs
+            kwargs.update(no_console_popen_kwargs())
         else:
             kwargs["start_new_session"] = True
         try:

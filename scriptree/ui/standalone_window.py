@@ -620,9 +620,14 @@ def _build_menu_actions(
             cmd = item.command
             work_dir = str(cwd) if cwd else None
             from ..core.sanitize import split_command
+            # v0.8.0a29+: no_console_popen_kwargs() suppresses the
+            # Windows console-window flash for custom-menu commands
+            # that invoke console-subsystem programs.
+            from ..core.runner import no_console_popen_kwargs
             act.triggered.connect(
                 lambda checked=False, c=cmd, d=work_dir: _sp.Popen(
                     split_command(c), shell=False, cwd=d,
+                    **no_console_popen_kwargs(),
                 )
             )
         menu.addAction(act)

@@ -212,6 +212,11 @@ def resolve_provider(
 
     stdin_payload = _stdin_payload(upstream_values, param_id)
 
+    # v0.8.0a29+: no_console_popen_kwargs() suppresses the Windows
+    # console-window flash when the provider executable is a
+    # console-subsystem program (py.exe, cmd.exe, .bat, etc).
+    # No-op on macOS / Linux.
+    from .runner import no_console_popen_kwargs
     try:
         proc = subprocess.run(
             argv,
@@ -222,6 +227,7 @@ def resolve_provider(
             cwd=cwd,
             env=env,
             shell=False,  # NEVER shell=True — explicit for the auditor
+            **no_console_popen_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return ProviderResult.failure(

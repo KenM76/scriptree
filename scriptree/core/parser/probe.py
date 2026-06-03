@@ -173,6 +173,11 @@ def parse_text(help_text: str) -> ToolDef:
 # --- internals -------------------------------------------------------------
 
 def _run_help(exe_path: str, args: tuple[str, ...]) -> str | None:
+    # v0.8.0a29+: no_console_popen_kwargs() suppresses the Windows
+    # console-window flash when the help-probed executable is a
+    # console-subsystem program (py.exe, cmd.exe, .bat, etc).
+    # No-op on macOS / Linux.
+    from scriptree.core.runner import no_console_popen_kwargs
     try:
         proc = subprocess.run(
             [exe_path, *args],
@@ -181,6 +186,7 @@ def _run_help(exe_path: str, args: tuple[str, ...]) -> str | None:
             encoding="utf-8",
             errors="replace",
             timeout=PROBE_TIMEOUT_SECONDS,
+            **no_console_popen_kwargs(),
         )
     except (FileNotFoundError, PermissionError, OSError):
         return None

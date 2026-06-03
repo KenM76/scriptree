@@ -98,11 +98,113 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .model import ActionDef, ParamDef, ParamType, ToolDef
+
+
+# ---------------------------------------------------------------------------
+# No-console-window kwargs (Windows GUI-launching-CLI gotcha)
+# ---------------------------------------------------------------------------
+
+def no_console_popen_kwargs() -> dict:
+    """Return :func:`subprocess.Popen` / :func:`subprocess.run` kwargs
+    that prevent a console window from popping up on Windows when
+    the parent process is a GUI (Windows-subsystem) executable like
+    ``pythonw.exe``.
+
+    Use as::
+
+        proc = subprocess.Popen(argv, **no_console_popen_kwargs())
+
+    or merge into existing kwargs::
+
+        kwargs = {"stdout": subprocess.PIPE, ...}
+        kwargs.update(no_console_popen_kwargs())
+        proc = subprocess.Popen(argv, **kwargs)
+
+    Returns an **empty dict on non-Windows platforms** so the same
+    call site works cross-platform with no branching.
+
+    ## Why this is needed
+
+    Windows allocates a console window for every console-subsystem
+    child process by default when the parent itself doesn't have a
+    console.  ScripTree's primary launcher is ``pythonw.exe``
+    (Windows subsystem, no console), so every spawned tool whose
+    ``executable`` is ``py.exe``, ``python.exe``, ``cmd.exe``, a
+    ``.bat`` file, or any console-subsystem ``.exe`` gets a fresh
+    console window flashed onto the user's desktop.  Even when we
+    redirect the child's stdout/stderr via ``PIPE`` or ``DEVNULL``,
+    the OS-level window allocation still happens; redirection
+    controls where streams GO, not whether a window is allocated.
+
+    The ``CREATE_NO_WINDOW`` flag tells the Windows kernel "do not
+    allocate a console for this child."  Streams continue to work
+    via ``PIPE`` exactly as if a console were present.
+
+    ## Flag selection rationale
+
+    Two flags, ORed together:
+
+    * ``CREATE_NO_WINDOW = 0x08000000`` — the actual no-window
+      switch.  This is what suppresses the user-visible console.
+
+    * ``CREATE_NEW_PROCESS_GROUP = 0x00000200`` — puts the child in
+      its own console-control-event group.  Without this, a Ctrl-C
+      delivered to ScripTree's process group would propagate to
+      every spawned tool, which doesn't match GUI-spawning-CLI
+      semantics.  Keeps the child's lifetime independent.
+
+    ## What we DON'T use, and why
+
+    * NOT ``DETACHED_PROCESS = 0x00000008`` — strips the console
+      ENTIRELY rather than just hiding the window.  That breaks
+      ``.bat`` shims because ``cmd.exe`` needs a console (even if
+      invisible) to interpret its own internal commands.  Lesson:
+      ``rags/lessons/detached_process_breaks_bat.md``.
+
+    * NOT ``STARTUPINFO`` with ``STARTF_USESHOWWINDOW`` +
+      ``SW_HIDE`` — that hides the window AFTER the OS allocates
+      it, which on slow machines can produce a visible flash.
+      ``CREATE_NO_WINDOW`` prevents allocation in the first place,
+      so there's nothing to hide.
+
+    ## Cross-platform behaviour
+
+    macOS and Linux don't allocate per-child console windows for
+    console-subsystem programs the way Windows does — children
+    inherit the parent's terminal (if any) or run windowless when
+    spawned from a GUI app.  No flag is needed; this function
+    returns ``{}`` so callers can merge it into kwargs blindly.
+
+    ## Audit / authoring rule
+
+    Every site in the codebase that spawns a user-controlled tool
+    (or any process whose console allocation we don't want the user
+    to see) must merge ``no_console_popen_kwargs()`` into its
+    Popen / run kwargs.  Sites exempt from this rule:
+
+    * ``explorer`` / ``open`` / ``xdg-open`` — file-manager
+      invocations, no console involved.
+    * Cases where the user explicitly wants a visible terminal
+      (which would be implemented via ``start cmd /k ...`` in the
+      tool's own argv, not by omitting this kwarg).
+
+    See also ``rags/lessons/no_console_popen_kwargs.md``.
+    """
+    if sys.platform != "win32":
+        return {}
+    # Constants defined inline so this module stays Qt-free and
+    # has zero import-time side effects.  Values are from
+    # winbase.h and stable across all Windows versions that
+    # support ``CREATE_NO_WINDOW`` (XP SP1+).
+    CREATE_NO_WINDOW = 0x08000000
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    return {"creationflags": CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP}
 
 
 class RunnerError(Exception):
@@ -1024,8 +1126,13 @@ def spawn_streaming(
 
     start = time.monotonic()
     stdin_arg = subprocess.PIPE if interactive else subprocess.DEVNULL
-    proc = subprocess.Popen(
-        cmd.argv,
+    # v0.8.0a29+: merge in no_console_popen_kwargs() so spawned
+    # tools that use console-subsystem executables (py.exe,
+    # python.exe, cmd.exe, .bat shims, any console .exe) don't
+    # flash a console window on Windows when ScripTree's parent is
+    # the windowless ``pythonw.exe`` launcher.  Cross-platform safe
+    # — returns {} on macOS / Linux.
+    _popen_kwargs: dict[str, Any] = dict(
         cwd=cmd.cwd,
         env=cmd.env,
         stdin=stdin_arg,
@@ -1036,6 +1143,8 @@ def spawn_streaming(
         errors="replace",
         bufsize=1,  # line-buffered
     )
+    _popen_kwargs.update(no_console_popen_kwargs())
+    proc = subprocess.Popen(cmd.argv, **_popen_kwargs)
     if on_start is not None:
         on_start(proc)
 

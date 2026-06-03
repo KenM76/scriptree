@@ -1994,9 +1994,14 @@ class ToolRunnerView(QWidget):
             if item.command:
                 cmd = item.command
                 cwd = self._tool.working_directory or None
+                # v0.8.0a29+: no_console_popen_kwargs() suppresses
+                # the Windows console-window flash for custom-menu
+                # commands that invoke console-subsystem programs.
+                from ..core.runner import no_console_popen_kwargs
                 act.triggered.connect(
                     lambda checked=False, c=cmd, d=cwd: _sp.Popen(
                         split_command(c), shell=False, cwd=d,
+                        **no_console_popen_kwargs(),
                     )
                 )
             menu.addAction(act)
