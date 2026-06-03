@@ -505,12 +505,21 @@ class ForestController(QObject):
         added to ``CellWindow._show_context_menu`` in v0.3.15."""
         cell._forest_menu_extension = self._populate_forest_menu
 
-    def _populate_forest_menu(self, menu: QMenu) -> None:
+    def _populate_forest_menu(
+        self, menu: QMenu, cell: Any | None = None,
+    ) -> None:
         """Insert forest-specific actions at the top of ``menu``.
 
         Layout: a ``Forest`` submenu so the standard cell menu stays
         readable.  All actions wire to controller methods directly
         (no signal hops, simpler debug).
+
+        ``cell`` is the right-clicked cell (v0.8.0a25+).  When
+        provided AND the cell is bound to a catalog under one of
+        the install roots, a per-cell "Uninstall app..." action is
+        added so the user can remove the app's files from disk.
+        Defaults to None for back-compat with callers on the
+        older 1-arg hook contract.
         """
         # v0.6.15 — icon helpers.  Universal save/open/refresh come
         # from Qt's standard set so they match every other app on
@@ -559,6 +568,10 @@ class ForestController(QObject):
             _bundled("folder"),
             "Re-organise (re-run category grouping)",
         )
+        a_rescue = forest_menu.addAction(
+            _std(_SP.SP_DesktopIcon),
+            "Bring all cells back on-screen",
+        )
         forest_menu.addSeparator()
         a_settings = forest_menu.addAction(
             _bundled("settings"), "Forest settings…",
@@ -571,12 +584,56 @@ class ForestController(QObject):
             _bundled("forest"), "About this forest",
         )
 
+        # v0.8.0a25 -- per-cell Uninstall action.  Only added when
+        # the right-clicked cell is bound to a catalog whose folder
+        # lives under one of the install roots (otherwise we have
+        # nothing to safely delete).  Lives at the bottom of the
+        # Forest submenu so the user doesn't trigger it by accident
+        # while reaching for Save or Refresh.
+        a_uninstall = None
+        if cell is not None:
+            cat_path = getattr(cell, "catalog_path", None)
+            if cat_path:
+                from pathlib import Path
+                from scriptree.core.app_install import (
+                    default_personal_root, default_shared_root,
+                )
+                try:
+                    parent = Path(cat_path).resolve().parent
+                    roots: list[Path] = []
+                    for fn in (
+                        default_personal_root, default_shared_root,
+                    ):
+                        try:
+                            roots.append(Path(fn()).resolve())
+                        except Exception:  # noqa: BLE001
+                            continue
+                    under_install_root = any(
+                        parent != r and parent.is_relative_to(r)
+                        for r in roots
+                    )
+                except Exception:  # noqa: BLE001
+                    under_install_root = False
+                if under_install_root:
+                    forest_menu.addSeparator()
+                    a_uninstall = forest_menu.addAction(
+                        _std(_SP.SP_TrashIcon),
+                        "Uninstall app from disk...",
+                    )
+                    # Capture both controller + cell so the slot
+                    # knows which catalog to delete.
+                    a_uninstall.triggered.connect(
+                        lambda _checked=False, c=cell:
+                        self._on_uninstall_app(c)
+                    )
+
         a_save.triggered.connect(self.save)
         a_save_as.triggered.connect(self._on_save_as)
         a_open.triggered.connect(self._on_open)
         a_refresh.triggered.connect(self.refresh_from_sources)
         a_autoadd.triggered.connect(self._on_autoadd_now)
         a_reorganise.triggered.connect(self.refresh_from_sources)
+        a_rescue.triggered.connect(self._on_rescue_offscreen)
         a_settings.triggered.connect(self._show_settings_dialog)
         a_excluded.triggered.connect(self._show_excluded_dialog)
         a_about.triggered.connect(self._on_about)
@@ -786,6 +843,192 @@ class ForestController(QObject):
                 self.forest.excluded.append(raw)
         if removed:
             self.forestChanged.emit()
+
+    def _on_uninstall_app(self, cell: Any) -> None:
+        """Confirmation + dispatch for the per-cell "Uninstall app..."
+        menu action.
+
+        Shows a strongly-worded confirmation dialog, then -- only
+        if the user explicitly confirms -- delegates to
+        ``uninstall_app`` to do the actual delete.
+        """
+        from pathlib import Path
+        cat_path = getattr(cell, "catalog_path", None)
+        if not cat_path:
+            return
+        app_dir = Path(cat_path).parent
+        # Confirmation: name the folder, say it will be deleted,
+        # require the destructive button to confirm.
+        try:
+            box = QMessageBox(self.forest_window)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Uninstall app")
+            box.setText(
+                f"Uninstall the app at:\n\n"
+                f"  {app_dir}\n\n"
+                f"This will permanently delete every file in that "
+                f"folder.  This cannot be undone."
+            )
+            del_btn = box.addButton(
+                "Uninstall", QMessageBox.ButtonRole.DestructiveRole,
+            )
+            cancel_btn = box.addButton(
+                "Cancel", QMessageBox.ButtonRole.RejectRole,
+            )
+            box.setDefaultButton(cancel_btn)
+            box.exec()
+            if box.clickedButton() is not del_btn:
+                return
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_uninstall_app: confirmation failed: {exc!r}")
+            return
+
+        ok, msg = self.uninstall_app(cat_path)
+        try:
+            if ok:
+                QMessageBox.information(
+                    self.forest_window, "Uninstall", msg,
+                )
+            else:
+                QMessageBox.warning(
+                    self.forest_window, "Uninstall failed", msg,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_rescue_offscreen(self) -> None:
+        """Manual hook for the Forest -> "Bring all cells back on-screen"
+        menu action.
+
+        Delegates to ``screen_watcher.rescue_all_cells`` which knows
+        how to clamp every registered CellWindow back inside the
+        nearest screen's available geometry.  Pops an
+        ``information`` box with the count so the user knows
+        something happened (or didn't).
+        """
+        try:
+            from scriptree.shell.screen_watcher import rescue_all_cells
+            moved = rescue_all_cells()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_rescue_offscreen: {exc!r}")
+            moved = 0
+        try:
+            QMessageBox.information(
+                self.forest_window, "Bring cells on-screen",
+                f"Moved {moved} off-screen cell(s) back into view."
+                if moved else
+                "All cells were already on-screen.",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def uninstall_app(self, path: str) -> tuple[bool, str]:
+        """Delete the on-disk folder of a forest-tracked app.
+
+        Hard guards to prevent disaster:
+
+          * ``path`` must be a real file (.scriptree or
+            .scriptreetree) that currently exists on disk.
+          * Its containing folder must be inside either
+            ``default_personal_root()`` (per-user install) OR
+            ``default_shared_root()`` (in-install ScripTreeApps tree),
+            with the parent of the catalog file -- the app's own
+            folder -- being a direct or grand-child of one of those
+            roots.  Refuse to delete from arbitrary user folders.
+          * Refuse to delete the root itself or the app folder when
+            the app folder IS one of the install roots (case where
+            someone names an app the same as the root by accident).
+
+        Behaviour on success: removes the app's folder via
+        ``shutil.rmtree``, drops the ForestItem from
+        ``self.forest.items``, adds the path to ``forest.excluded``
+        so the next auto-discovery doesn't suggest re-installing
+        from a sibling location, and fires ``forestChanged`` so
+        autosave persists the removal.
+
+        Returns ``(ok, message)``.  Caller is expected to
+        prompt the user with a confirmation dialog BEFORE
+        calling this -- ``uninstall_app`` itself does no UI.
+
+        v0.8.0a25 -- new in this release.
+        """
+        from pathlib import Path
+        import shutil
+        from scriptree.core.app_install import (
+            default_personal_root, default_shared_root,
+        )
+
+        try:
+            p = Path(path).resolve()
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Invalid path: {exc!r}"
+        if not p.is_file():
+            return False, f"Catalog file not found: {p}"
+
+        app_dir = p.parent
+        # Resolve install roots for the containment check.
+        roots: list[Path] = []
+        for fn in (default_personal_root, default_shared_root):
+            try:
+                roots.append(Path(fn()).resolve())
+            except Exception:  # noqa: BLE001
+                continue
+        if not roots:
+            return False, (
+                "Could not resolve the install roots; refusing to "
+                "uninstall to avoid deleting the wrong folder."
+            )
+
+        # Containment: app_dir must be UNDER one of the roots (not
+        # equal to one).  ``relative_to`` raises ValueError when the
+        # path isn't a descendant, which we catch.
+        chosen_root: Path | None = None
+        for root in roots:
+            try:
+                rel = app_dir.relative_to(root)
+            except ValueError:
+                continue
+            # Reject the empty / root-itself case.
+            if len(rel.parts) >= 1:
+                chosen_root = root
+                break
+        if chosen_root is None:
+            return False, (
+                f"App folder {app_dir} is not under a known install "
+                f"root.  Uninstall refused to avoid deleting from "
+                f"arbitrary user folders."
+            )
+        if app_dir.resolve() == chosen_root:
+            return False, (
+                f"Refusing to delete the install root itself: "
+                f"{app_dir}"
+            )
+
+        # Drop the ForestItem first so closing the cell windows
+        # doesn't re-add them via auto-discovery before the delete.
+        norm = _norm(str(p))
+        self.forest.items = [
+            it for it in self.forest.items
+            if _norm(it.path) != norm
+        ]
+        if str(p) not in self.forest.excluded:
+            self.forest.excluded.append(str(p))
+        # Close any spawned cell bound to this catalog so the
+        # files aren't held open during the rmtree.
+        win = self._spawned.pop(norm, None)
+        if win is not None:
+            try:
+                win.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            shutil.rmtree(app_dir)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Delete failed: {exc!r}"
+
+        self.forestChanged.emit()
+        return True, f"Uninstalled {app_dir.name} from {chosen_root}."
 
     # ------------------------------------------------------------------
     # User actions

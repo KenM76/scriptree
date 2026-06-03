@@ -428,6 +428,22 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # v0.8.0a25 -- watch for resolution / monitor configuration
+    # changes and rescue any cell stranded off-screen.  Triggered
+    # by Qt signals (screenAdded, screenRemoved,
+    # primaryScreenChanged, per-screen geometryChanged).  Without
+    # this hook, lowering resolution mid-session leaves cells at
+    # coordinates that no longer map to any visible screen and the
+    # user can't see or interact with them.
+    try:
+        from scriptree.shell import screen_watcher
+        screen_watcher.install(app)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[ring_main] screen_watcher install failed: {exc!r}",
+            file=sys.stderr,
+        )
+
     # ---- Single-instance handoff ---------------------------------------
     #
     # Default behaviour: if another ScripTreeRing process is already

@@ -7375,7 +7375,19 @@ class CellWindow(QMainWindow):
         forest_hook = getattr(self, "_forest_menu_extension", None)
         if forest_hook is not None:
             try:
-                forest_hook(menu)
+                # v0.8.0a25+ -- pass ``self`` as the originating cell
+                # so the forest extension can offer cell-specific
+                # actions (uninstall, etc.).  Older
+                # ``_populate_forest_menu`` accepts ``(menu)``
+                # only; the controller's new signature defaults
+                # the cell to None for the back-compat case where
+                # this hook fires before the controller has been
+                # updated.
+                try:
+                    forest_hook(menu, self)
+                except TypeError:
+                    # Hook still on the old 1-arg signature.
+                    forest_hook(menu)
                 menu.addSeparator()
             except Exception as _exc:  # noqa: BLE001
                 _log(f"forest_menu_extension failed: {_exc!r}")
