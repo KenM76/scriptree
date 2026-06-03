@@ -223,6 +223,46 @@ class _EditableTreeWidget(QTreeWidget):
             return
         super().mouseDoubleClickEvent(event)
 
+    # --- single right-click → context menu only (NEVER activation) -----
+    #
+    # v0.8.0a34+ -- pre-a34 the base QTreeWidget's mousePressEvent
+    # treated a right-click as a "click" and emitted ``itemClicked``,
+    # which is wired to ``_on_item_activated`` (line ~364) and
+    # launches the tool in standalone mode.  Right-click thus
+    # silently launched the program AND showed the context menu.
+    # Now we intercept right-button press/release before the base
+    # class can fire those signals.  The context menu still works
+    # because ``customContextMenuRequested`` is emitted from a
+    # separate ``contextMenuEvent()`` path that's independent of
+    # the mouse-press click tracking.
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.RightButton:
+            # Still update the current selection so the context
+            # menu acts on the row under the cursor -- the
+            # ``_show_context_menu`` code already does
+            # ``setCurrentItem`` defensively, but doing it here
+            # too means the visual selection updates immediately
+            # under the cursor.
+            try:
+                item = self.itemAt(event.pos())
+                if item is not None:
+                    self.setCurrentItem(item)
+            except Exception:  # noqa: BLE001
+                pass
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.RightButton:
+            # Swallow the release that would otherwise pair with a
+            # right press to fire itemClicked.  The context menu
+            # still appears via contextMenuEvent's separate path.
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     # --- drag/drop overrides ---
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -303,6 +343,16 @@ class TreeLauncherView(QWidget):
     ``{"kind": "tree", "path": str}`` for a subtree reference, or
     ``{"kind": "folder"}`` for an in-memory folder (the main window
     falls back to the whole loaded tree for a bare folder)."""
+
+    uninstallRequested = Signal(str)
+    """v0.8.0a34+ — emitted when the user picks "Uninstall app from
+    disk..." in a leaf's right-click context menu.  Arg: the absolute
+    catalog path (``.scriptree`` or ``.scriptreetree``) the user
+    clicked.  The main window forwards this to its forest controller's
+    uninstall flow (which pops the checkbox dialog with the
+    keep/remove-local + keep/remove-shared options) -- same code path
+    the cell-popup's per-item context menu uses, so the editor's
+    Uninstall and the cell-popup's Uninstall produce IDENTICAL UX."""
 
     treeModified = Signal(bool)
     """Emitted when dirty state changes. Arg: new dirty flag."""
@@ -1085,6 +1135,78 @@ class TreeLauncherView(QWidget):
             act_remove.setIcon(_tv_std_icon(_SP.SP_TrashIcon))
             act_remove.triggered.connect(self._remove_selected)
             menu.addAction(act_remove)
+
+            # v0.8.0a34+ -- Uninstall app from disk.  Mirrors the
+            # action surfaced in the cell-popup right-click menu
+            # (scriptree.shell.tree_popup._PerItemContextFilter).
+            # The catalog path that drives uninstall lives in the
+            # leaf's _ROLE_PATH; for subtrees we use the subtree's
+            # own .scriptreetree path.  Disabled with a tooltip
+            # when the catalog isn't under one of the install
+            # roots (the underlying uninstall_app would refuse it
+            # anyway -- this gives the user feedback BEFORE the
+            # click).
+            uninstall_path: str | None = None
+            if _is_leaf(item):
+                uninstall_path = item.data(0, _ROLE_PATH) or None
+            elif _is_subtree(item):
+                uninstall_path = item.data(0, _ROLE_SUBTREE) or None
+            if uninstall_path:
+                act_uninstall = QAction(
+                    "Uninstall app from disk...", self,
+                )
+                act_uninstall.setIcon(
+                    _tv_std_icon(_SP.SP_TrashIcon)
+                )
+                # Predicate matches the cell-popup's
+                # ``_catalog_is_uninstallable`` semantics: the
+                # catalog's parent folder must be a strict
+                # descendant of one of the install roots.
+                uninstallable = False
+                try:
+                    from scriptree.core.app_install import (
+                        default_personal_root,
+                        default_shared_root,
+                    )
+                    parent_dir = Path(
+                        uninstall_path
+                    ).resolve().parent
+                    for fn in (
+                        default_personal_root,
+                        default_shared_root,
+                    ):
+                        try:
+                            root = Path(fn()).resolve()
+                        except Exception:  # noqa: BLE001
+                            continue
+                        try:
+                            rel = parent_dir.relative_to(root)
+                        except ValueError:
+                            continue
+                        if len(rel.parts) >= 1:
+                            uninstallable = True
+                            break
+                except Exception:  # noqa: BLE001
+                    uninstallable = False
+                if uninstallable:
+                    act_uninstall.triggered.connect(
+                        lambda _=False, p=uninstall_path:
+                        self.uninstallRequested.emit(p)
+                    )
+                else:
+                    act_uninstall.setEnabled(False)
+                    act_uninstall.setToolTip(
+                        "This catalog is not under a managed "
+                        "install location (the personal "
+                        "app-data root or the shared "
+                        "<ScripTree>/ScripTreeApps tree).\n\n"
+                        "Drop-installed apps can be uninstalled "
+                        "from here; manually-placed catalogs "
+                        "must be removed by hand from their "
+                        "folder."
+                    )
+                menu.addAction(act_uninstall)
+
             if _is_folder(item):
                 act_rename = QAction("Rename", self)
                 act_rename.setIcon(

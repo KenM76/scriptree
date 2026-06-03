@@ -1123,37 +1123,102 @@ class _PerItemContextFilter(QObject):
         if not isinstance(obj, QMenu):
             return False
         et = event.type()
-        # ContextMenu is what Qt synthesises for right-click presses
-        # on menus on Windows; MouseButtonPress with RightButton is
-        # the cross-platform fallback we also accept.
-        is_context = (
-            et == QEvent.Type.ContextMenu
-            or (
-                et == QEvent.Type.MouseButtonPress
-                and getattr(event, "button", lambda: None)()
-                == Qt.MouseButton.RightButton
-            )
-        )
-        if not is_context:
-            return False
+
+        # v0.8.0a34+ -- SWALLOW the entire right-click event cycle
+        # (Press / Release / DblClick / ContextMenu) so the
+        # underlying QMenu doesn't see a release-time signal that
+        # would trigger the action.  Pre-a34 we only caught the
+        # context-event and the first press; the matching release
+        # got through and Qt's QMenu fired ``triggered`` on the
+        # action, launching the tool on right-click.
+        #
+        # Strategy:
+        #   * Catch ContextMenu OR right-button Press/Release/
+        #     DblClick.  Return True for every one to suppress.
+        #   * Only the FIRST event in the cycle (whichever Qt
+        #     delivers first -- ContextMenu on Windows, Press on
+        #     other platforms) actually shows the context dialog.
+        #     The rest are silently swallowed.
+        #
+        # A small per-menu "we already handled this click cycle"
+        # flag distinguishes "show the dialog" from "swallow".
+        # The flag clears on every non-right-button event so the
+        # next right-click starts fresh.
+        is_right_button = False
         try:
-            act = obj.actionAt(event.pos())
+            btn = event.button() if hasattr(event, "button") else None
+        except Exception:  # noqa: BLE001
+            btn = None
+        if et in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        ) and btn == Qt.MouseButton.RightButton:
+            is_right_button = True
+        is_context = (et == QEvent.Type.ContextMenu)
+
+        # Reset the per-cycle flag on any non-right-button event
+        # (a left click, a hover, a key, etc.) so the next
+        # right-click cycle is independent of the previous.
+        if not (is_right_button or is_context):
+            try:
+                obj.setProperty(
+                    "_st_right_click_handled", False,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+        # Swallow + maybe show: any right-button or context event
+        # is filtered out so Qt's default QMenu logic never sees
+        # it.  Only the first one shows the dialog.
+        already_handled = bool(
+            obj.property("_st_right_click_handled") or False
+        )
+        if already_handled:
+            return True  # swallow follow-up events in the same cycle
+
+        try:
+            pos = event.pos()
+        except Exception:  # noqa: BLE001
+            pos = None
+        try:
+            act = obj.actionAt(pos) if pos is not None else None
         except Exception:  # noqa: BLE001
             act = None
         if act is None:
-            return False
+            # No action under the cursor -- still swallow so the
+            # right-click doesn't escape to ancestor widgets, but
+            # don't open a dialog.
+            return True
         ctx = getattr(act, "_st_context", None)
         if not ctx:
-            return False
+            return True  # swallow but no dialog
+
         # Compose the globally-positioned point for the context
-        # menu.  ``globalPos`` is available on both events.
+        # dialog.  ``globalPos`` is available on QMouseEvent; for
+        # QContextMenuEvent (which has the same accessor) we use
+        # the same call.  Fall through to globalPosition().toPoint
+        # on Qt 6.4+ where globalPos is deprecated.
+        global_pt = QPoint(0, 0)
         try:
-            global_pt = event.globalPos()
+            global_pt = event.globalPos()  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             try:
-                global_pt = event.globalPosition().toPoint()
+                global_pt = event.globalPosition().toPoint()  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 global_pt = QPoint(0, 0)
+
+        # Mark the cycle as handled so the matching Release /
+        # ContextMenu events in this same cycle get swallowed
+        # without re-opening the dialog.
+        try:
+            obj.setProperty(
+                "_st_right_click_handled", True,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # v0.8.0a30+ -- do NOT explicitly close the parent menu
         # here.  Qt closes it automatically when our context dialog
         # gets focus; we then reopen it via the dialog's

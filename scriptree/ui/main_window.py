@@ -217,6 +217,14 @@ class MainWindow(QMainWindow):
         self._launcher.standaloneRequested.connect(
             self._on_tree_standalone_requested
         )
+        # v0.8.0a34+ -- Uninstall from the tree-view's right-click
+        # context menu.  Routes through the cell shell's existing
+        # uninstall dialog so the editor and the cell popup show
+        # identical UX (checkbox dialog with keep/remove-local +
+        # keep/remove-shared).  See ``_on_tree_uninstall_requested``.
+        self._launcher.uninstallRequested.connect(
+            self._on_tree_uninstall_requested
+        )
         self._launcher.treeModified.connect(self._on_tree_modified)
 
         self._tools_dock = ads.CDockWidget(self._dock_manager, "Tools")
@@ -1861,6 +1869,199 @@ class MainWindow(QMainWindow):
         """Right-click ▸ Edit on a tree leaf — open the tool editor
         bound to that file so Save writes back to it."""
         self._show_editor(tool, path)
+
+    def _on_tree_uninstall_requested(self, catalog_path: str) -> None:
+        """v0.8.0a34+ -- Right-click ▸ "Uninstall app from disk..." on
+        a tree leaf or subtree.
+
+        Routes to the same uninstall flow the cell-popup's per-item
+        context menu uses, so the user sees the SAME keep-or-remove
+        checkbox dialog regardless of which surface they triggered
+        the uninstall from.
+
+        We build a synthetic forest-controller-style invocation by
+        finding a forest controller via the same
+        ``_forest_menu_extension.__self__`` walk the cell side uses.
+        If no forest controller is attached (e.g. the editor was
+        launched stand-alone with no cell shell), we pop the dialog
+        through a one-shot controller-less helper.
+        """
+        try:
+            # Most-common case: the editor was launched FROM a cell
+            # shell.  The shell's forest controller already lives in
+            # the same process via the cell window that called us,
+            # but the editor doesn't have a direct handle.  Fall
+            # back to constructing the dialog inline using
+            # ForestController.uninstall_app semantics directly.
+            from PySide6.QtWidgets import (
+                QCheckBox, QDialog, QDialogButtonBox, QLabel,
+                QMessageBox, QVBoxLayout,
+            )
+            from scriptree.core.app_install import (
+                default_personal_root, default_shared_root,
+            )
+            from scriptree.core.configs import (
+                find_personal_configs_for_app,
+            )
+            app_dir = Path(catalog_path).parent
+            # Containment guard (mirror of ForestController.
+            # uninstall_app's check) so the editor surface refuses
+            # the same paths the cell shell would.
+            roots: list[Path] = []
+            for fn in (default_personal_root, default_shared_root):
+                try:
+                    roots.append(Path(fn()).resolve())
+                except Exception:  # noqa: BLE001
+                    continue
+            chosen_root: Path | None = None
+            for root in roots:
+                try:
+                    rel = app_dir.resolve().relative_to(root)
+                except ValueError:
+                    continue
+                if len(rel.parts) >= 1:
+                    chosen_root = root
+                    break
+            if chosen_root is None:
+                QMessageBox.warning(
+                    self, "Uninstall refused",
+                    f"The catalog at:\n  {catalog_path}\n\nis not "
+                    f"under a managed install location.  "
+                    f"Drop-installed apps can be uninstalled "
+                    f"from here; manually-placed catalogs must be "
+                    f"removed by hand.",
+                )
+                return
+
+            # Live counts for the dialog labels.
+            try:
+                local_count = len(
+                    find_personal_configs_for_app(app_dir)
+                )
+            except Exception:  # noqa: BLE001
+                local_count = 0
+            try:
+                shared_count = sum(
+                    1 for f in app_dir.rglob("*")
+                    if f.is_file() and (
+                        f.name.endswith(".scriptree.configs.json")
+                        or f.name.endswith(
+                            ".scriptreetree.treeconfigs.json"
+                        )
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                shared_count = 0
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Uninstall app")
+            dlg.setMinimumWidth(520)
+            layout = QVBoxLayout(dlg)
+            header = QLabel(
+                f"Uninstall the app at:\n\n  {app_dir}\n\n"
+                f"This will permanently delete the app folder.  "
+                f"This cannot be undone."
+            )
+            header.setWordWrap(True)
+            layout.addWidget(header)
+
+            cb_local = QCheckBox(
+                "Also remove my local saved configurations"
+                + (f" ({local_count} files)"
+                   if local_count else "")
+            )
+            cb_local.setChecked(True)
+            cb_local.setToolTip(
+                "Personal sidecars saved under your user configs "
+                "folder for this app's tools.  Unchecked leaves "
+                "them on disk so they reattach on a future "
+                "re-install at the same location."
+            )
+            layout.addWidget(cb_local)
+
+            cb_shared = QCheckBox(
+                "Also remove shared configurations stored with "
+                "the app"
+                + (f" ({shared_count} files)"
+                   if shared_count else "")
+            )
+            cb_shared.setChecked(True)
+            cb_shared.setToolTip(
+                "Sidecar files inside the app folder.  Unchecked "
+                "copies them to a sibling "
+                "'<app>_uninstalled_configs/' folder BEFORE the "
+                "app folder is removed."
+            )
+            layout.addWidget(cb_shared)
+
+            buttons = QDialogButtonBox(dlg)
+            del_btn = buttons.addButton(
+                "Uninstall",
+                QDialogButtonBox.ButtonRole.DestructiveRole,
+            )
+            cancel_btn = buttons.addButton(
+                QDialogButtonBox.StandardButton.Cancel,
+            )
+            cancel_btn.setDefault(True)
+            del_btn.clicked.connect(dlg.accept)
+            cancel_btn.clicked.connect(dlg.reject)
+            layout.addWidget(buttons)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            remove_local = cb_local.isChecked()
+            remove_shared = cb_shared.isChecked()
+
+            # Build an ephemeral ForestController-style call.
+            # We use the controller class directly even though the
+            # editor doesn't own one in its UI tree -- the
+            # ``uninstall_app`` method is pure logic (no forest UI
+            # state required beyond ``self.forest``) and we feed it
+            # a minimal stub.
+            from unittest.mock import MagicMock
+            from scriptree.shell.forest_controller import (
+                ForestController,
+            )
+            ctrl = ForestController.__new__(ForestController)
+            forest = MagicMock()
+            forest.items = []
+            forest.excluded = []
+            ctrl.forest = forest  # type: ignore[attr-defined]
+            ctrl._spawned = {}  # type: ignore[attr-defined]
+            ctrl.forestChanged = MagicMock()  # type: ignore[attr-defined]
+            ctrl.forest_window = self  # used as dialog parent
+
+            ok, msg = ctrl.uninstall_app(
+                catalog_path,
+                remove_local_configs=remove_local,
+                remove_shared_configs=remove_shared,
+            )
+            if ok:
+                QMessageBox.information(
+                    self, "Uninstall", msg,
+                )
+                # The catalog the editor was viewing is now gone --
+                # reset the launcher so the editor doesn't show a
+                # dangling state.
+                try:
+                    if self._launcher.tree_file() is not None and (
+                        str(self._launcher.tree_file())
+                        == catalog_path
+                    ):
+                        self._launcher.new_tree()
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                QMessageBox.warning(
+                    self, "Uninstall failed", msg,
+                )
+        except Exception as exc:  # noqa: BLE001
+            import sys as _sys
+            print(
+                f"[main_window] _on_tree_uninstall_requested "
+                f"failed: {exc!r}",
+                file=_sys.stderr,
+            )
 
     def _on_tree_standalone_requested(self, desc: object) -> None:
         """Double-right-click (or right-click ▸ Open standalone) on a
