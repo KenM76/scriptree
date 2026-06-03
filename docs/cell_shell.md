@@ -35,7 +35,7 @@ dock with each other).
 
 | Gesture | Standalone cell | Master / ring cell (and Forest hub) |
 |---|---|---|
-| **1× left click** | Toggle the cell's tool menu next to the cell. Click another cell → its menu opens (the previous one closes). Click the same cell again → the menu hides. Picking a tool launches the V1 standalone runner with the tool's default configuration. | **v0.6.20+:** collapse / expand the whole linked group. Forest single-click recursively tucks every link-descendant into the forest hub; ring single-click tucks the ring's members. Click again → expand. (Pre-v0.6.20 this opened a popup menu; the popup now lives on double-click — see below.) |
+| **1× left click** | Toggle the cell's tool menu next to the cell. Click another cell → its menu opens (the previous one closes). Click the same cell again → the menu hides. Picking a tool launches the V1 standalone runner with the tool's default configuration. **v0.8.0a28+:** right-click any entry inside the popup tree for a per-item context menu (**Open containing folder**, **Uninstall app from disk…** when the tool's catalog lives under an install root). | **v0.6.20+:** collapse / expand the whole linked group. Forest single-click recursively tucks every link-descendant into the forest hub; ring single-click tucks the ring's members. Click again → expand. (Pre-v0.6.20 this opened a popup menu; the popup now lives on double-click — see below.) |
 | **2× left click** | Opens V1: the **standalone runner** if the cell is bound to a `.scriptree`, or V1's **full editor** with the tree pre-loaded if the cell is bound to a `.scriptreetree`. | **v0.6.20+:** in-process popup tree with one sub-folder per member (union of every member's catalog for a ring; every forest item for the forest hub). Same content the single-click used to show. Works whether the group is expanded or collapsed (v0.6.23: the popup raises above the always-on-top member cells when the group is expanded). |
 | **1× right click** | Cell context menu organised into three sub-menus — **ScripTree ▶**, **Tree Ring ▶**, **Cell ▶** — plus top-level About / Settings / Preferences and role-aware Close / Exit-all entries. See "Right-click menu" below. | Same structure plus the **Forest ▶** submenu on the forest hub (Save / Open / Refresh / Auto-add / Forest settings / Manage excluded items / About this forest). |
 | **2× right click** | Opens V1's full editor on the cell's catalog (or a blank editor if no catalog is bound). | Opens V1's full editor on a *merged* `.scriptreetree` — each member becomes a top-level folder. The merged file is regenerated whenever membership changes; same membership = same temp file (V1 can keep it open). If no member has a catalog yet, a placeholder folder is shown so the editor never opens blank. |
@@ -276,6 +276,122 @@ is silently ignored (the standard `.scriptree` / `.scriptreetree`
 "new behaviour" of installing a *folder* is forest-specific,
 because the forest is the surface that knows how to pick up the
 newly-installed app via auto-discovery).
+
+### Uninstall: removing an installed app (v0.8.0a26+)
+
+The reverse of drop-install. There are **two ways** to reach
+it:
+
+1. **From the cell's tool-popup menu (recommended for one
+   specific tool):**
+   single-left-click the cell to open its tool menu, then
+   **right-click any tool entry**. A small context menu
+   appears with **Uninstall app from disk…** (when the
+   tool's containing catalog lives under one of the install
+   roots) plus **Open containing folder**.
+2. **From the cell's right-click context menu:**
+   right-click the cell, **Forest** ▶ **Uninstall app from
+   disk…**.
+
+Either entry pops the same checkbox-style confirmation
+dialog:
+
+> **Uninstall the app at: `<path>`**
+> This will permanently delete the app folder.
+>
+> ☑ Also remove my local saved configurations *(N files)*
+> ☑ Also remove shared configurations stored with the app
+>   *(N files)*
+
+The live counts are computed before the dialog opens so you
+know exactly what's about to be touched.
+
+**Local saved configurations** are the personal sidecars
+ScripTree wrote for this app's tools to your per-user configs
+folder (`%LOCALAPPDATA%\ScripTree\UserConfigs\` on Windows,
+under `Application Support` on macOS, `~/.config/ScripTree/`
+on Linux). A sidecar "belongs to" an app when *both* its
+recorded source filename matches a tool inside the app folder
+*and* its recorded source location resolves into that folder.
+The two-prong match means two different installs of the
+same-named tool don't sweep each other's personal configs.
+
+* **Box checked (default)** — those sidecars are deleted.
+* **Box unchecked** — sidecars are left on disk. If you
+  later re-install the same app at the same path, your
+  saved configurations re-attach automatically.
+
+**Shared configurations** are the `*.scriptree.configs.json`
+and `*.scriptreetree.treeconfigs.json` files that live
+**inside** the app folder. Normally they go with the
+`shutil.rmtree(app_dir)`.
+
+* **Box checked (default)** — they're removed with the
+  folder.
+* **Box unchecked** — before the rmtree, every shared
+  sidecar is copied into a sibling backup folder named
+  `<app>_uninstalled_configs/` (with a numbered suffix
+  `<app>_uninstalled_configs-2/`, `…-3/` if the path is
+  already taken). The success toast tells you exactly where
+  the backup went. If the copy step fails for any reason
+  (permissions, disk full, etc.) the uninstall is **refused**
+  — the app folder is not removed when its configs would
+  otherwise be lost.
+
+**Safety guards on the uninstall path itself:**
+
+* Refuses unless the app folder is a strict descendant of
+  either the personal install root or the shared install root.
+  Drop-installs elsewhere on disk are never touched by the
+  uninstall flow.
+* Refuses to delete the install root itself when the cell
+  happens to be bound to a catalog dropped directly in the
+  root (an edge case but the guard catches it).
+* The ForestItem is removed and the path is added to
+  `forest.excluded` **before** the rmtree, so auto-discovery
+  won't silently re-add the app from a sibling location while
+  cleanup is still running.
+* Any open cell bound to the catalog is closed first so the
+  files aren't held open during the delete.
+
+The uninstall is **not undoable** — the rmtree is a real
+filesystem delete, not a recycle-bin move. The shared-configs
+backup is the only recoverable scrap.
+
+---
+
+## Display-change recovery (v0.8.0a26+)
+
+If you change your screen resolution, unplug a monitor,
+re-arrange a multi-display layout, or remote-desktop in from
+a smaller machine while ScripTree is running, cells whose
+position no longer maps to any visible work area are
+**automatically pulled back on-screen**.
+
+Mechanics:
+
+* `scriptree.shell.screen_watcher` hooks every Qt screen-
+  change signal (`screenAdded`, `screenRemoved`,
+  `primaryScreenChanged`, per-screen `geometryChanged` and
+  `availableGeometryChanged`).
+* When any of those fires, a 200 ms debounce timer schedules
+  one rescue pass — Qt fires a storm of signals when a
+  monitor is plugged in, and we want one rescue per physical
+  event, not one per signal.
+* The rescue walks every registered cell and clamps its
+  top-left to the available geometry of the nearest visible
+  screen using the same `_clamp_to_screen` helper drag-end
+  uses, so behaviour is identical to "drag the cell off the
+  screen edge and release."
+
+If something didn't get caught (e.g. the OS reported the new
+layout in pieces that didn't trip any signal we hook),
+there's a manual escape hatch: **Forest** ▶ **Bring all
+cells back on-screen**. A toast tells you how many were
+moved.
+
+This replaces the old workaround of quitting ScripTree,
+deleting the ring/forest save file by hand, and starting over.
 
 ---
 

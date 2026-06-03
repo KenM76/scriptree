@@ -37,3 +37,17 @@ subprocess oddities encountered while building V3.
   cell-rect anchor + multi-monitor `screenAt` clamp + flip-above
   when off-bottom; fixed `(+12, +18)` offset goes off-screen on
   edges. → `rags/lessons/hover_tooltip_screen_clamp.md`
+- [pyside6] **qt_screen_change_signal_debounce**: Qt emits a storm
+  of `screenAdded`/`screenRemoved`/`primaryScreenChanged`/per-screen
+  `geometryChanged`/`availableGeometryChanged` on monitor topology
+  change; debounce via a 200 ms single-shot QTimer stored on the
+  QApplication. Hook new screens' per-screen signals in the
+  `screenAdded` closure too. →
+  `rags/lessons/qt_screen_change_signal_debounce.md`
+- [pyside6] **qmenu_per_action_right_click**: `QMenu` does NOT fire
+  `customContextMenuRequested` on actions. Use a QObject event
+  filter on EVERY QMenu in the tree (recursive + `aboutToShow` re-
+  walk + idempotency sentinel) watching `QEvent.ContextMenu` and
+  right-click `MouseButtonPress`. Stash per-action data as a Python
+  attribute on the QAction, not via `setData`. →
+  `rags/lessons/qmenu_per_action_right_click.md`

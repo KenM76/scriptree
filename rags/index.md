@@ -231,3 +231,47 @@ gives the per-topic slice.
   Dropbox running, ~70 ms killed. Kill Dropbox before any release
   build or unattended R:\ work.
   → `rags/lessons/dropbox_slows_python_on_subst.md`
+- [v3-process] **general-purpose__docs_lag_code_after_schema_v3_rename**:
+  schema v3 rename + capability-file expansion propagated through
+  code but not docs (v0.5.0+); 23-finding copy audit. Schema-bump
+  PR checklist: grep `docs/` for `file_open`/`file_save`/
+  `enum_radio`/`schema_version.*[12]`. Capability count lives in
+  security.md table only.
+  → `rags/lessons/general-purpose__docs_lag_code_after_schema_v3_rename.md`
+- [pyside6] **qt_screen_change_signal_debounce**: 200 ms single-shot
+  QTimer on `app._screen_rescue_timer` debounces Qt's `screenAdded`/
+  `screenRemoved`/`primaryScreenChanged`/per-screen `geometryChanged`/
+  `availableGeometryChanged` storm; new screens get their per-screen
+  signals hooked in the `screenAdded` closure.
+  → `rags/lessons/qt_screen_change_signal_debounce.md`
+- [pyside6] **qmenu_per_action_right_click**: `QMenu` has no
+  `customContextMenuRequested` for actions; install a recursive
+  event filter (per menu, sentinel-guarded, `aboutToShow` re-walk)
+  watching `QEvent.ContextMenu` + right-`MouseButtonPress`. Stash
+  per-action data as a Python attribute on the QAction.
+  → `rags/lessons/qmenu_per_action_right_click.md`
+- [v3-architecture] **personal_sidecar_two_prong_match**:
+  `find_personal_configs_for_app` matches on BOTH `source_filename`
+  (basename present under app_dir) AND a `source_locations` entry
+  under app_dir. Filename-only would cross-contaminate two installs
+  of the same-named tool. Stdlib-only.
+  → `rags/lessons/personal_sidecar_two_prong_match.md`
+- [v3-architecture] **uninstall_keep_remove_flags_with_backup**:
+  `uninstall_app(path, *, remove_local_configs=True,
+  remove_shared_configs=True)`. "Keep shared" path COPIES sidecars
+  to `<app>_uninstalled_configs/` (numbered on collision) BEFORE
+  `shutil.rmtree`; refuses the uninstall if the copy fails. Dialog
+  shows live counts; uses `DestructiveRole`.
+  → `rags/lessons/uninstall_keep_remove_flags_with_backup.md`
+- [v3-architecture] **popup_menu_root_catalog_path**: `tree_popup`
+  threads `source_dir` (resolution) AND `root_catalog` (the catalog
+  file the menu was built from) through node construction; every
+  leaf in a `.scriptreetree` stamps `root_catalog_path` = the tree
+  file itself, not the per-leaf catalog.
+  → `rags/lessons/popup_menu_root_catalog_path.md`
+- [v3-process] **controller_api_cell_or_path**: controller handlers
+  that gain a path-based call-site should branch on
+  `isinstance(target, (str, Path))` rather than fork a sibling
+  method. Use when pre-conditions are identical and only input
+  shape varies; new call-sites get the action for free.
+  → `rags/lessons/controller_api_cell_or_path.md`

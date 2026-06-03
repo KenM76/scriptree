@@ -66,7 +66,28 @@ scriptree/
 │   │                          #   position clamping, autoload list
 │   ├── tree_popup.py          # in-process QMenu builder for the
 │   │                          #   single-click cell popup; merges
-│   │                          #   member sub-folders for masters
+│   │                          #   member sub-folders for masters.
+│   │                          #   v0.8.0a28+: each leaf QAction
+│   │                          #   carries an `_st_context` dict
+│   │                          #   ({leaf_path, root_catalog_path,
+│   │                          #    node_name, node_display_name});
+│   │                          #   `_PerItemContextFilter` is
+│   │                          #   installed recursively on every
+│   │                          #   QMenu to intercept right-clicks
+│   │                          #   on actions (Qt does NOT fire
+│   │                          #   customContextMenuRequested for
+│   │                          #   per-action right-click — see
+│   │                          #   rags/lessons/
+│   │                          #   qmenu_per_action_right_click.md).
+│   ├── screen_watcher.py      # v0.8.0a26+: hooks every Qt screen-
+│   │                          #   change signal (screenAdded /
+│   │                          #   Removed / primaryScreenChanged /
+│   │                          #   per-screen geometryChanged /
+│   │                          #   availableGeometryChanged), 200 ms
+│   │                          #   single-shot QTimer debounce, calls
+│   │                          #   CellWindow._clamp_to_screen on
+│   │                          #   every registered cell.  Installed
+│   │                          #   from ring_main.py at startup.
 │   ├── merged_tree.py         # build_merged_tree_for_master:
 │   │                          #   temp .scriptreetree per ring
 │   │                          #   membership signature
@@ -169,6 +190,165 @@ one slips in.
 
 The UI layer only sees `ResolvedCommand` and line callbacks. It never
 builds argv or env itself.
+
+## Install / uninstall apps (v0.8.0a23 + a26 + a27 + a28)
+
+Pure-logic install lives in `scriptree.core.app_install`
+(Qt-free, stdlib only — `os`, `re`, `shutil`, `zipfile`).
+Public surface: `install_app(source, target_root, *,
+conflict_mode)` plus the four `ConflictMode` values
+(OVERWRITE / UPDATE / RENAME / CANCEL).  Two helpers
+(`default_personal_root()` / `default_shared_root()`) return
+the canonical install locations, honouring INI overrides at
+`install.personal_root` / `install.shared_root` and falling
+back to OS-specific defaults (`%LOCALAPPDATA%\ScripTree\Apps`
+on Windows, `Library/Application Support/ScripTree/Apps` on
+macOS, `XDG_DATA_HOME/ScripTree/Apps` on Linux).
+
+The UI half lives in `shell.cell_window` (drop handler on the
+forest master) and `shell.install_dialogs` (the conflict-
+resolution + name-edit prompts).  Drop-install is gated on
+the forest master only — drops on standalones, rings, or
+ring members are ignored.
+
+**Uninstall** lives on `ForestController` with signature:
+
+```
+def uninstall_app(
+    self, path,
+    *,
+    remove_local_configs: bool = True,
+    remove_shared_configs: bool = True,
+) -> tuple[bool, str]
+```
+
+Both flags default `True` so legacy callers retain "rm-rf
+the whole app folder, including any personal sidecars" — the
+defaults match the v0.8.0a25 behaviour before the flags were
+added.
+
+Containment guard: refuses unless the catalog's parent
+folder is a strict descendant of either install root.  The
+ForestItem is removed and the path added to `forest.excluded`
+BEFORE the rmtree so auto-discovery doesn't silently re-add
+the app while delete is in progress.  Any open cell bound
+to the catalog is closed first.
+
+**Personal-sidecar match.**  When `remove_local_configs=True`,
+`scriptree.core.configs.find_personal_configs_for_app` is
+called: a TWO-PRONG match — sidecar's `source_filename` must
+match a `.scriptree` / `.scriptreetree` inside the app folder
+AND at least one of its `source_locations` must resolve to a
+directory under the app folder.  Without the location prong,
+two installs of the same-named tool would sweep each other's
+personal data.  Stdlib-only (no Qt) so it's headlessly
+testable; accepts an explicit `personal_dir` for hermetic
+tests.
+
+**Shared-sidecar backup.**  When `remove_shared_configs=False`,
+every `*.scriptree.configs.json` / `*.scriptreetree.
+treeconfigs.json` inside the app folder is `shutil.copy2`'d
+to a sibling `<app>_uninstalled_configs/` (numbered `-2`,
+`-3`... if the path is taken) BEFORE the rmtree.  If the copy
+step fails, the whole uninstall is refused — the app folder
+is never removed when its configs would otherwise be lost.
+
+**UI entry points** (both pop the same checkbox dialog):
+
+* `forest_controller._populate_forest_menu` adds an
+  "Uninstall app from disk…" action to the cell's right-click
+  Forest submenu when the right-clicked cell is bound to a
+  catalog under an install root.
+* `tree_popup._PerItemContextFilter` (per-action right-click
+  in the cell's tool-popup tree) reaches the same handler
+  via `hex_win._forest_menu_extension.__self__`.  See the
+  "Per-action right-click in QMenu" section below.
+
+`ForestController._on_uninstall_app(target)` accepts EITHER
+a CellWindow OR a path string and routes both through the
+same dialog + `uninstall_app` pipeline.
+
+## Per-action right-click in QMenu (v0.8.0a28)
+
+Pattern used by `tree_popup._PerItemContextFilter` to give
+each leaf in the cell's tool-popup tree its own context menu.
+
+Pitfall first: `QMenu` does **not** fire
+`customContextMenuRequested` on actions — only on the menu's
+empty area.  Setting `setContextMenuPolicy(Qt.CustomContextMenu)`
+will silently do nothing per-action.
+
+Working recipe:
+
+1. **Stash context on each QAction** as a Python attribute
+   (Qt's `setData` only stores a single QVariant — Python
+   attrs let us stash arbitrary structured data):
+   ```python
+   act._st_context = {
+       "leaf_path": str(p),
+       "root_catalog_path": str(catalog),  # NOT leaf — tree
+                                           # uninstall keys
+                                           # off the catalog's
+                                           # parent folder
+       "node_name": name,
+       "node_display_name": display_name,
+   }
+   ```
+
+2. **A `QObject` event filter** watching both
+   `QEvent.ContextMenu` (Windows synthesises this for
+   right-click on menus) and `QEvent.MouseButtonPress` with
+   `Qt.MouseButton.RightButton` (cross-platform fallback).
+   `menu.actionAt(event.pos())` retrieves the QAction
+   under the cursor.
+
+3. **Install on every menu in the tree.**  Qt routes mouse
+   events to the menu currently under the cursor, NOT the
+   top-level menu — a filter only on the top-level catches
+   nothing once a submenu opens.  `_install_per_item_context`
+   walks `menu.actions()` recursively and re-installs on
+   `aboutToShow` for lazily-populated submenus.  Sentinel
+   attr `_st_per_item_filter_installed` makes the install
+   idempotent.
+
+4. **Parent the filter to the menu** (`flt.setParent(menu)`)
+   so it dies with the popup — no leaked QObjects between
+   invocations.
+
+5. **For tree catalogs**, every leaf's `root_catalog_path`
+   must point at the `.scriptreetree` itself, NOT the
+   individual `.scriptree` the leaf launches.  The
+   uninstall path scope is the catalog's parent folder; per-
+   leaf paths would point at sub-directories that aren't a
+   strict descendant of the install root.
+
+## Display-change rescue (v0.8.0a26)
+
+`scriptree.shell.screen_watcher` keeps cells visible across
+display reconfigurations.  Hooks every Qt screen-change
+signal at startup (via `screen_watcher.install(app)` in
+`ring_main.py`):
+
+* `QGuiApplication.screenAdded` / `.screenRemoved`
+* `QGuiApplication.primaryScreenChanged`
+* Per-screen `geometryChanged` and `availableGeometryChanged`
+
+A 200 ms single-shot `QTimer` debounce — **stored on the
+QApplication as `app._screen_rescue_timer`**, not on the
+filter object — coalesces the storm of signals Qt fires when
+a monitor is plugged in or resolution changes.  Storing the
+timer on the app is what makes the debounce span signal
+firings; a per-firing local timer would race.
+
+The rescue itself walks `CellRegistry.instance().all()` and
+delegates to `CellWindow._clamp_to_screen` — the same helper
+drag-end uses — so behaviour stays identical to "drag the
+cell off the edge and release."  Cells already on-screen are
+left alone (the clamp is a no-op for valid positions).
+
+A manual entry point lives at Forest right-click → "Bring
+all cells back on-screen" (`forest_controller._on_rescue_offscreen`),
+which calls `screen_watcher.rescue_all_cells()` directly.
 
 ## Standalone mode
 

@@ -184,3 +184,26 @@ design.
   after `master.show()` — without it, snap preview never renders on
   freshly-spawned masters even though the engine still emits.
   → `rags/lessons/snap_engine_wire_on_fresh_master.md`
+- [v3-architecture] **personal_sidecar_two_prong_match**:
+  `find_personal_configs_for_app` (`scriptree/core/configs.py`)
+  must match on BOTH `source_filename` (basename present anywhere
+  under app_dir) AND a `source_locations` entry resolving under
+  app_dir. Filename-only matching cross-contaminates two installs
+  of the same-named tool. Stdlib-only, mirror of load-time predicate.
+  → `rags/lessons/personal_sidecar_two_prong_match.md`
+- [v3-architecture] **uninstall_keep_remove_flags_with_backup**:
+  `ForestController.uninstall_app(path, *, remove_local_configs=True,
+  remove_shared_configs=True)` — both default True. Shared-config
+  "keep" path COPIES sidecars to a sibling `<app>_uninstalled_configs/`
+  (numbered `-2`, `-3` on collision) BEFORE `shutil.rmtree`; if the
+  copy raises, REFUSE the uninstall. Dialog labels show live file
+  counts; Uninstall button uses `DestructiveRole`.
+  → `rags/lessons/uninstall_keep_remove_flags_with_backup.md`
+- [v3-architecture] **popup_menu_root_catalog_path**:
+  `_add_node_to_menu` / `_build_menu_for_catalog` in `tree_popup.py`
+  thread BOTH `source_dir` (path resolution) and `root_catalog`
+  (the catalog FILE the menu was built from) through the recursion.
+  Every leaf in a `.scriptreetree` stamps `root_catalog_path` =
+  the tree file, not the per-leaf catalog — that's what keys
+  "Uninstall app..." to the correct app folder.
+  → `rags/lessons/popup_menu_root_catalog_path.md`

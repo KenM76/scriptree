@@ -50,3 +50,21 @@ diagnostics conventions.
   difference). Kill Dropbox before release builds and any
   unattended R:\ work.
   → `rags/lessons/dropbox_slows_python_on_subst.md`
+- [v3-process] **general-purpose__docs_lag_code_after_schema_v3_rename**:
+  schema v3 rename and capability-file expansion (v0.5.0+) propagated
+  through code but not through user-facing docs — copy audit found
+  23 findings (11 P0, 9 P1, 3 P2). Schema-bump PR checklist must
+  grep `docs/` for old widget names (`file_open`/`file_save`/
+  `enum_radio`) and `schema_version.*[12]`. Capability count should
+  live in ONE place (security.md table); README/features.md link
+  in. See `docs/COPY_AUDIT_2026-05-31.md`.
+  → `rags/lessons/general-purpose__docs_lag_code_after_schema_v3_rename.md`
+- [v3-process] **controller_api_cell_or_path**: when a controller
+  handler gains a second call-site that hands it a path instead of
+  a `CellWindow`, branch the existing method on `isinstance(target,
+  (str, Path))` rather than forking a sibling method. New
+  call-sites (CLI, programmatic, future right-click features) pick
+  up the action automatically. Different shape from the
+  "two-publics-share-a-helper" pattern — use it when pre-conditions
+  are identical and only the input shape varies.
+  → `rags/lessons/controller_api_cell_or_path.md`
