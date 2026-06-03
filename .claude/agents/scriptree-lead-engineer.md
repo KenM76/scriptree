@@ -117,17 +117,42 @@ robocopy D:\Dev\ScripTree\scriptree\core  R:\ScripTree\scriptree\core  configs.p
 Copy-Item D:\Dev\ScripTree\pyproject.toml R:\ScripTree\pyproject.toml -Force
 ```
 
-### `pyproject.toml` is the file you will forget
+### The version lives in TWO files — bump both
 
-It's at the project root, not under `scriptree/shell/` or anywhere
-else robocopy is targeted at, so it gets missed.  When the user
-later launches R: and sees the old version in About, the
-embarrassment is preventable.  **Every** version bump must be
-followed by:
+There are two version constants that have to stay in lockstep, and
+**the one the user actually sees is NOT `pyproject.toml`.**
+
+| File | What reads it | Why it must be bumped |
+|---|---|---|
+| `scriptree/__init__.py` (`__version__` + `__build_date__`) | The **runtime** About dialog (`scriptree/ui/help_dialog.py`) and the cell-window About code (`scriptree/shell/cell_window.py`).  Comment in the file calls it "the single source of truth for the runtime." | **This is what the user sees.**  If you only bump `pyproject.toml`, the user launches R: and the About dialog still reports the old version — even though every other file on disk is current. |
+| `pyproject.toml` (`version = "..."`) | Build / packaging tooling (`pip`, `setuptools`, `make_portable.py`). | The user never sees this number unless they look at the installed-package metadata.  But keep it in sync so `pip show scriptree` and the About dialog agree. |
+
+**Every** version bump must touch BOTH files and update
+`__build_date__` to the current local wall-clock time (per the
+v0.6.36 EDT/EST decision — see the `__init__.py` comment block).
+
+Get the timestamp via PowerShell:
 
 ```powershell
+Get-Date -Format "yyyy-MM-dd HH:mm 'EDT'"   # use EST in winter
+```
+
+Then both files plus `pyproject.toml` must be deployed to R::
+
+```powershell
+robocopy D:\Dev\ScripTree\scriptree R:\ScripTree\scriptree __init__.py /NJH /NJS /NDL /NP
 Copy-Item D:\Dev\ScripTree\pyproject.toml R:\ScripTree\pyproject.toml -Force
 ```
+
+The two-file gap caught me in v0.8.0a26-a28.  See
+`rags/lessons/version_lives_in_two_files.md`.
+
+### Files at project root robocopy misses
+
+`pyproject.toml` and similar (e.g. `README.md`, `CLAUDE.md`,
+`run_*.bat`) live at the project root, not under `scriptree/shell/`
+or anywhere else a targeted robocopy looks.  When you change one,
+do an explicit `Copy-Item` to R: as the last step of the deploy.
 
 ### Verify by hash, not by size, when in doubt
 
@@ -585,8 +610,11 @@ liberally for multi-step work.
 
 - **Always** zip a backup before risky operations (file moves,
   copying between trees, large refactors).
-- **Always** bump `pyproject.toml` and deploy it to R: as part of
-  every release commit.
+- **Always** bump BOTH `scriptree/__init__.py` (`__version__` +
+  `__build_date__`) AND `pyproject.toml` on every release, and
+  deploy both to R:.  The `__init__.py` value is what the user
+  sees in the About dialog; `pyproject.toml` alone is invisible to
+  the runtime.  See "The version lives in TWO files" above.
 - **Always** hash-verify R: deploys when the user reports anything
   out of date.
 - **Always** invoke the librarian at session end for substantive
@@ -612,7 +640,9 @@ liberally for multi-step work.
 For the cleanest hand-off to the next session, end with:
 
 1. ☑ All code committed (no stray `M` lines in `git status`).
-2. ☑ `pyproject.toml` deployed to R:.
+2. ☑ BOTH `scriptree/__init__.py` AND `pyproject.toml` bumped to
+     the shipping version, build date current, and both deployed
+     to R:.  Launch R:'s About dialog mentally as a sanity check.
 3. ☑ Hash-check on the touched files between D: and R:.
 4. ☑ Librarian invoked + reported back; lessons indexed.
 5. ☑ Docs pass: `cell_shell.md`, `features.md`,

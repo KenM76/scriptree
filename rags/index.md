@@ -69,6 +69,11 @@ gives the per-topic slice.
   `{a, an, and, or, the, of, to, in, on, for, at, by, as, is, if}`
   case-insensitively when deriving multi-word labels.
   → `rags/lessons/wordskip_list_for_abbreviations.md`
+- [v3-process] **version_lives_in_two_files**: About dialog reads
+  `scriptree/__init__.py::__version__`, NOT `pyproject.toml`.
+  Three releases shipped with stale About-dialog version because
+  only pyproject was bumped. Bump BOTH in every release commit.
+  → `rags/lessons/version_lives_in_two_files.md`
 - [v3-process] **backup_first_discipline**: timestamped
   `Compress-Archive` to OneDrive before every risky multi-file
   mutation. → `rags/lessons/backup_first_discipline.md`

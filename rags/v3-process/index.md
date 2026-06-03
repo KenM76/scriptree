@@ -4,6 +4,11 @@ How V3 actually got built: backup discipline, sweep-replace
 pattern, V2 stale-import hunting, beta reports, and the
 diagnostics conventions.
 
+- [v3-process] **version_lives_in_two_files**: the About dialog
+  reads `scriptree/__init__.py::__version__`, NOT `pyproject.toml`.
+  Three releases shipped with stale About-dialog version because
+  only pyproject was bumped. Bump BOTH in every release commit.
+  → `rags/lessons/version_lives_in_two_files.md`
 - [v3-process] **backup_first_discipline**: timestamped
   `Compress-Archive` to OneDrive before any risky multi-file
   mutation. → `rags/lessons/backup_first_discipline.md`
