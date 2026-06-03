@@ -750,6 +750,100 @@ def _collect_leaves(nodes: list[TreeNode]) -> list[TreeNode]:
 
 # --- shared tab-construction helpers (flat + nested-folder layouts) ─
 
+def _resolve_leaf_icon(
+    node: TreeNode,
+    tool,  # noqa: ANN001 -- ToolDef, avoid hoisting the import
+    tool_path: Path,
+):  # noqa: ANN201 -- returns QIcon
+    """Resolve a ``QIcon`` for a tree-leaf tab.
+
+    v0.8.0a32+.  Walks the icon-source chain in priority order and
+    returns the first one that resolves to a real image:
+
+      1. **Tree-node override** (``node.icon`` / ``node.icon_data``
+         / ``node.icon_format``) -- set when the tree author wanted
+         a leaf-specific glyph that differs from the tool's own.
+      2. **Tool's cell-icon** (``tool.cell_icon`` /
+         ``tool.cell_icon_data`` / ``tool.cell_icon_format``) --
+         the icon the tool advertises for use in cell shells.
+
+    For each source we check the embedded base64 form first
+    (``*_icon_data``); if that's absent we treat ``*_icon`` as:
+
+      * a bundled-icon name -- looks up
+        ``scriptree/resources/icons/icon-<name>.{svg,png}``;
+      * a relative path -- resolved against the tool file's parent
+        directory;
+      * an absolute path -- used verbatim.
+
+    Returns an empty ``QIcon()`` when no source resolves; callers
+    should detect ``isNull()`` and fall back to a no-icon tab.
+
+    Defensive: every QPixmap.loadFromData / file-existence check is
+    wrapped so a malformed icon never aborts tab construction.
+    """
+    from PySide6.QtGui import QIcon, QPixmap
+    import base64 as _b64
+    from pathlib import Path as _P
+
+    sources = [
+        (node.icon, node.icon_data, node.icon_format),
+        (
+            getattr(tool, "cell_icon", ""),
+            getattr(tool, "cell_icon_data", ""),
+            getattr(tool, "cell_icon_format", ""),
+        ),
+    ]
+    for icon_field, icon_data, icon_format in sources:
+        # Embedded base64 wins -- catalog stays self-contained.
+        if icon_data:
+            try:
+                raw = _b64.b64decode(icon_data)
+                px = QPixmap()
+                # PySide6's loadFromData auto-detects from the
+                # magic bytes when no format hint is given.  We
+                # had a bytes-vs-str hint that broke on Windows;
+                # the no-hint path is more portable.  ``str``
+                # format hint also works on Linux Qt but not all
+                # Windows Qt builds.
+                if px.loadFromData(raw) and not px.isNull():
+                    return QIcon(px)
+                # Fallback: explicit hint as str (some Qt builds
+                # need it for SVG, which lacks magic bytes).
+                hint = (icon_format or "").upper()
+                if hint and px.loadFromData(raw, hint) and not px.isNull():
+                    return QIcon(px)
+            except Exception:  # noqa: BLE001
+                pass
+        if icon_field:
+            # Bundled name? Try the shipped icon set first.
+            try:
+                resources = (
+                    _P(__file__).parent.parent
+                    / "resources" / "icons"
+                )
+                for ext in (".svg", ".png"):
+                    cand = resources / f"icon-{icon_field}{ext}"
+                    if cand.is_file():
+                        ic = QIcon(str(cand))
+                        if not ic.isNull():
+                            return ic
+            except Exception:  # noqa: BLE001
+                pass
+            # Path? Absolute or relative-to-tool.
+            try:
+                p = _P(icon_field)
+                if not p.is_absolute():
+                    p = tool_path.parent / p
+                if p.is_file():
+                    ic = QIcon(str(p))
+                    if not ic.isNull():
+                        return ic
+            except Exception:  # noqa: BLE001
+                pass
+    return QIcon()
+
+
 def _add_leaf_tab(
     tabs: QTabWidget,
     node: TreeNode,
@@ -824,7 +918,16 @@ def _add_leaf_tab(
     # Prefer the tree node's display_name override; fall back to
     # the tool's own name.
     tab_label = node.display_name or tool.name
-    tabs.addTab(tab, tab_label)
+    # v0.8.0a32+ -- show the tool's icon on the tab when one is
+    # configured.  Sources checked in order: tree-node icon
+    # override (per-leaf), then the tool's own cell-icon fields
+    # (catalog-level).  Empty QIcon when none of the sources
+    # resolve, so the tab still renders.
+    icon = _resolve_leaf_icon(node, tool, tool_path)
+    if icon.isNull():
+        tabs.addTab(tab, tab_label)
+    else:
+        tabs.addTab(tab, icon, tab_label)
     runners.append(runner)
     runner.visibilityChanged.connect(win._on_visibility_changed)
 
