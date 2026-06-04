@@ -1638,18 +1638,56 @@ class MainWindow(QMainWindow):
                 name = (
                     tree_path.name if tree_path else "(unsaved tree)"
                 )
-                def _save_tree() -> bool:
+                def _save_tree_with_pushback() -> bool:
+                    """Save the loaded tree.  When the saved file
+                    is a merged tree (built by
+                    ``scriptree.shell.merged_tree`` from a master
+                    cell's members), ALSO push edits back to the
+                    originating source files -- the same logic
+                    ``_save_tree`` uses for the explicit
+                    "Save current" path.
+
+                    v0.8.0a36+ -- pre-a36 Save-all and the
+                    close-dialog's "Save selected & Exit" wrote
+                    the merged tree to its temp file but did NOT
+                    push back to origins.  Symptom the user
+                    reported: "Save all doesn't save the changes
+                    I made."
+                    """
                     try:
-                        return self._launcher.save()
+                        ok = self._launcher.save()
                     except Exception:  # noqa: BLE001
                         return False
+                    if not ok:
+                        return False
+                    saved_path = self._launcher.tree_file()
+                    if saved_path is None:
+                        return True
+                    try:
+                        from scriptree.shell.merged_tree import (
+                            is_merged_tree, push_back_to_origins,
+                        )
+                        if is_merged_tree(saved_path):
+                            result = push_back_to_origins(saved_path)
+                            # Treat any per-file error as a partial
+                            # failure -- the merged tree itself
+                            # saved fine, but the user's intent
+                            # ("save the forest's source files")
+                            # didn't fully complete.
+                            return not result.errors
+                    except Exception:  # noqa: BLE001
+                        # Don't fail the save just because the
+                        # back-propagation died -- the temp file
+                        # still has the user's edits.
+                        return True
+                    return True
                 items.append({
                     "kind": "tree",
                     "label": f"Tree: {name}",
                     "path": (
                         str(tree_path) if tree_path else None
                     ),
-                    "save": _save_tree,
+                    "save": _save_tree_with_pushback,
                 })
         except Exception:  # noqa: BLE001
             pass

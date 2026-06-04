@@ -470,6 +470,21 @@ class TreeLauncherView(QWidget):
         self._tree_widget.customContextMenuRequested.connect(
             self._schedule_context_menu
         )
+        # v0.8.0a36+ -- wire the column header ("Tools" label row)
+        # to the same context menu so the user can right-click
+        # ANYWHERE on the tree surface to get Save.  Pre-a36
+        # right-clicking the header was a dead zone because
+        # ``customContextMenuRequested`` is emitted from
+        # QTreeWidget's viewport, not its QHeaderView -- so the
+        # user's natural target ("the header looks like the root,
+        # let me right-click it") produced nothing.
+        header = self._tree_widget.header()
+        header.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        header.customContextMenuRequested.connect(
+            self._on_header_context_menu
+        )
         self._tree_widget.rightDoubleClicked.connect(
             self._on_right_double_click
         )
@@ -1132,6 +1147,21 @@ class TreeLauncherView(QWidget):
         # opens the whole loaded tree standalone as the closest
         # existing capability.
         return {"kind": "folder"}
+
+    def _on_header_context_menu(self, pos) -> None:
+        """v0.8.0a36+ -- right-click on the tree's column header
+        ("Tools" label row).
+
+        Reuses the same menu builder as the body's context menu
+        but always with ``item=None`` (the header has no item
+        underneath the cursor).  Maps the header's local
+        position to global so the menu appears under the user's
+        cursor, not at the top-left of the screen.
+        """
+        menu = QMenu(self)
+        self._populate_context_menu_for(menu, item=None)
+        header = self._tree_widget.header()
+        menu.exec(header.mapToGlobal(pos))
 
     def _show_context_menu(self, pos) -> None:
         item = self._tree_widget.itemAt(pos)

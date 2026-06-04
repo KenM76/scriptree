@@ -184,6 +184,148 @@ def _resolve_node_paths(
             _resolve_node_paths(child, catalog_path)
 
 
+def _inline_subtree_refs(
+    node,  # noqa: ANN001 -- TreeNode
+    visited: set[str],
+):  # noqa: ANN201 -- returns TreeNode
+    """Recursively replace subtree references with their inlined
+    contents (v0.8.0a36+).
+
+    A "subtree reference" is a leaf node whose ``path`` points at
+    another ``.scriptreetree`` file.  Pre-a36, V1's tree-view
+    expanded these inline at render time -- which made them
+    READ-ONLY (the user couldn't drag / delete the expanded
+    content because it belonged to a different on-disk file).
+
+    The merged-tree-for-editing workflow needs the user to be
+    able to repair a broken state by deleting duplicates and
+    cycles.  Inlining at BUILD time bakes the subtree contents
+    into the merged TreeDef as plain folder children, making
+    them fully editable -- and on save, ``push_back_to_origins``
+    writes the new (possibly reduced) state back to the
+    originating ``.scriptreetree``.
+
+    Cycle handling
+    --------------
+
+    The ``visited`` set tracks .scriptreetree file paths currently
+    in the recursion stack.  When we encounter a subtree reference
+    whose path is already in ``visited``, we emit a placeholder
+    leaf node with name ``"(circular reference)"`` and DON'T
+    recurse -- mirroring the editor's view-time cycle guard at
+    ``tree_view.py::_expand_subtree``.
+
+    Trade-off note
+    --------------
+
+    Pre-a36 behaviour: subtree refs were LIVE -- the merged tree
+    reflected on-disk changes to the source on next re-open.
+    Post-a36: subtree refs are STATIC -- the contents are
+    snapshot at build time.  If the user wants to pick up an
+    external edit to a referenced subtree, they need to
+    re-trigger the master cell's "open in editor" gesture,
+    which calls ``build_merged_tree_for_master`` again.  The
+    cached merged-tree path is content-keyed by source paths
+    only, not by their mtimes; a manual rebuild may also need
+    to clear the cache attribute on the master.  See refactor
+    notes in the v0.8.0a36 commit message for a discussion.
+    """
+    from scriptree.core.io import load_tree
+    from scriptree.core.model import TreeNode
+
+    # Folders: recurse into children, return a copy with the
+    # inlined children list.
+    if node.type == "folder":
+        return TreeNode(
+            type="folder",
+            name=node.name,
+            display_name=node.display_name,
+            icon=node.icon,
+            icon_data=node.icon_data,
+            icon_format=node.icon_format,
+            children=[
+                _inline_subtree_refs(c, visited) for c in node.children
+            ],
+        )
+
+    # Leaves whose path points at a .scriptreetree are subtree
+    # references -- expand them.
+    if node.type == "leaf" and node.path:
+        low = node.path.lower()
+        if low.endswith(".scriptreetree"):
+            resolved = str(Path(node.path).resolve())
+            if resolved in visited:
+                # Cycle: emit a placeholder folder and stop
+                # recursing.  Marked clearly so the user sees
+                # where the cycle was.
+                return TreeNode(
+                    type="folder",
+                    name=node.name or "(circular reference)",
+                    children=[
+                        TreeNode(
+                            type="folder",
+                            name="(circular reference)",
+                            children=[],
+                        ),
+                    ],
+                )
+            try:
+                sub_tree = load_tree(node.path)
+            except Exception as exc:  # noqa: BLE001
+                # Best-effort: leave the broken ref as a folder
+                # with an error placeholder so the user can
+                # delete it.
+                _log(
+                    f"_inline_subtree_refs: load_tree({node.path}) "
+                    f"failed: {exc!r}"
+                )
+                return TreeNode(
+                    type="folder",
+                    name=node.name or Path(node.path).stem,
+                    children=[
+                        TreeNode(
+                            type="folder",
+                            name=f"(load error: {exc.__class__.__name__})",
+                            children=[],
+                        ),
+                    ],
+                )
+            # Resolve the sub-tree's leaves to absolute paths
+            # relative to ITS file (not the parent's).
+            for child in sub_tree.nodes:
+                _resolve_node_paths(child, Path(node.path))
+            # Push self into visited, recurse, then pop.  Using
+            # a copy of the set keeps siblings independent --
+            # two unrelated subtrees that both reference the
+            # same third tree shouldn't each block the other.
+            inner_visited = visited | {resolved}
+            inlined_children = [
+                _inline_subtree_refs(c, inner_visited)
+                for c in sub_tree.nodes
+            ]
+            return TreeNode(
+                type="folder",
+                name=node.name or sub_tree.name or Path(node.path).stem,
+                display_name=node.display_name,
+                icon=node.icon,
+                icon_data=node.icon_data,
+                icon_format=node.icon_format,
+                children=inlined_children,
+            )
+
+    # Leaves pointing at a .scriptree or anything else: keep as-is.
+    return TreeNode(
+        type="leaf",
+        name=node.name,
+        path=node.path,
+        configuration=node.configuration,
+        display_name=node.display_name,
+        icon=node.icon,
+        icon_data=node.icon_data,
+        icon_format=node.icon_format,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Synthetic tree builder
 # ---------------------------------------------------------------------------
@@ -211,6 +353,34 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
     merged_nodes: list = []
     member_names: list[str] = []
 
+    # v0.8.0a36+ -- name de-dup.  Two different source files can
+    # both name themselves "MSOffice" internally (their
+    # ``TreeDef.name`` matches even though their paths differ).
+    # Pre-a36 the merged tree showed both as "MSOffice" with no
+    # way for the user to tell them apart.  Now: when a name
+    # collides with one already used, disambiguate by appending
+    # the parent-folder hint, then a numeric counter as a
+    # last-resort fallback.  Order-stable across rebuilds
+    # because sources are already de-duped + ordered.
+    used_names: set[str] = set()
+
+    def _disambiguate(top_name: str, src_path: Path) -> str:
+        if top_name not in used_names:
+            return top_name
+        # First try the source's parent folder name as a hint.
+        parent = src_path.parent.name
+        if parent:
+            candidate = f"{top_name} ({parent})"
+            if candidate not in used_names:
+                return candidate
+        # Fall back to a numeric counter.
+        n = 2
+        while True:
+            candidate = f"{top_name} ({n})"
+            if candidate not in used_names:
+                return candidate
+            n += 1
+
     for src in sources:
         if not src.is_file():
             _log(f"skipping missing source: {src}")
@@ -223,13 +393,31 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
                 _log(f"load_tree({src}) failed: {exc!r}; skipping")
                 continue
             top_name = tree.name or src.stem
+            # v0.8.0a36+ disambiguate same-name sources.
+            top_name = _disambiguate(top_name, src)
+            used_names.add(top_name)
             # Resolve every leaf inside this member's nodes to absolute.
             for child in tree.nodes:
                 _resolve_node_paths(child, src)
+            # v0.8.0a36+ -- inline subtree references at build time
+            # so the merged tree is a flat, editable hierarchy.
+            # Pre-a36 a node whose path ended in .scriptreetree was
+            # rendered as a live SUBTREE reference in the editor,
+            # making its contents read-only.  Inlining moves the
+            # subtree's contents INTO the merged TreeDef so the
+            # user can delete / drag / repair them.  Cycles are
+            # detected via the ``visited`` set; on cycle, the
+            # offending leaf is replaced with a (circular ref)
+            # placeholder folder.
+            inlined_children = []
+            for child in tree.nodes:
+                inlined_children.append(
+                    _inline_subtree_refs(child, visited={str(src)})
+                )
             folder = TreeNode(
                 type="folder",
                 name=top_name,
-                children=list(tree.nodes),
+                children=inlined_children,
             )
             merged_nodes.append(folder)
             member_names.append(top_name)
@@ -241,6 +429,9 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
             except Exception as exc:  # noqa: BLE001
                 _log(f"load_tool({src}) failed: {exc!r}; using stem as name")
                 top_name = src.stem
+            # v0.8.0a36+ disambiguate same-name sources.
+            top_name = _disambiguate(top_name, src)
+            used_names.add(top_name)
             leaf = TreeNode(
                 type="leaf",
                 name=top_name,
