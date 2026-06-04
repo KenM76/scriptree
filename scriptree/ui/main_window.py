@@ -1940,37 +1940,41 @@ class MainWindow(QMainWindow):
     # --- launcher signal -----------------------------------------------------
 
     def _on_tool_selected(self, tool: ToolDef, path: str) -> None:
-        """v0.8.0a35+ -- single-click on a tree leaf NO LONGER auto-
-        opens the runner.
+        """Single-click on a tree leaf -> open the tool in the
+        editor's runner panel.
 
-        Pre-a35 behaviour (single-click -> ``_show_runner`` ->
-        runner panel with extras + command-line panes pops up)
-        surprised users -- they expected single-click in a tree
-        to NAVIGATE (select the row), not LAUNCH the tool's
-        runner.  Per the v0.8.0a35 user-direction:
+        ## History
 
-            "a single click in the tree on a tool also causes it
-            to pop up extra arguments and command line windows
-            in a single window."
+        Pre-a35: single-click opened the runner.  Works as
+        expected.
 
-        New policy:
+        a35: I (the lead engineer) made this a no-op in response
+        to a user report "a single click in the tree on a tool
+        also causes it to pop up extra arguments and command line
+        windows in a single window."  That was the WRONG fix --
+        the actual annoyance the user described was the
+        right-click ALSO firing itemClicked, which was already
+        fixed in a34 by overriding ``_EditableTreeWidget.
+        mousePressEvent`` / ``mouseReleaseEvent`` to swallow the
+        right-button cycle before itemClicked could fire.  Once
+        right-click was contained, single-click going to the
+        runner was the legitimate behaviour all along; the a35
+        no-op broke it.
 
-            single-click      -> select only (no popup)
-            double-click      -> open the runner (via _on_item_activated
-                                  in tree_view; we still receive
-                                  toolSelected but no-op on it)
-            right-click Open  -> standaloneRequested -> standalone window
-            right-click Edit  -> editRequested -> show tool editor
+        a38: reverted to the pre-a35 behaviour.  Single-click
+        opens the runner.  Right-click still goes through the
+        a34 event-filter so it shows the context menu without
+        launching anything.
 
-        Don't touch the Recent-files lists here -- selecting a
-        leaf isn't an "open" in the user-facing sense.  Recent
-        is built only from deliberate File -> Open and the
-        Recent menu itself (both go through ``_add_recent_file``).
+        ## What this does
+
+        Don't touch the Recent-files lists here -- clicking a
+        leaf in the Tools tree isn't an "open" in the user-facing
+        sense.  Recent is built only from deliberate File -> Open
+        and the Recent menu itself (both go through
+        ``_add_recent_file``).
         """
-        # Intentionally do nothing.  Single-click is select-only;
-        # the user must explicitly double-click or use the
-        # right-click menu to open anything.
-        return
+        self._show_runner(tool, path)
 
     def _on_tree_edit_requested(self, tool: ToolDef, path: str) -> None:
         """Right-click ▸ Edit on a tree leaf — open the tool editor

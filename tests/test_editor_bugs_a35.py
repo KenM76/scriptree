@@ -328,30 +328,28 @@ class TestB4_DropDoesNotNestLeafUnderLeaf:
 # B5 - Single-click launches runner
 # ===========================================================================
 
-class TestB5_SingleClickDoesNotLaunchRunner:
-    """Single-clicking a leaf in the editor's tree view selects
-    the item -- it should NOT auto-open the tool runner (which
-    shows the extras + command-line panels).  Users expect
-    navigation; launches require an explicit gesture
-    (double-click or right-click -> Open).
+class TestB5_SingleClickLaunchesRunner:
+    """Single-clicking a leaf in the editor's tree view MUST
+    open the runner.
+
+    History note: this test originally asserted the OPPOSITE
+    (in a35 I no-op'd ``_on_tool_selected`` because of a user
+    complaint about right-click also launching).  Turned out
+    the actual annoyance was right-click firing itemClicked --
+    which a34 fixed by swallowing right-button events.  The a35
+    no-op broke legitimate left-click activation; a38 reverted
+    it.  The test is rewritten to match the corrected policy.
     """
 
-    def test_single_click_does_not_emit_tool_selected_to_runner(
-        self, tmp_path,
-    ):
-        """The post-fix policy: single-click should fire a NEW
-        ``toolNavigated`` signal (just-for-selection) OR not
-        emit anything navigation-bound to the runner.  The
-        critical invariant: a single click MUST NOT pop the
-        runner.
+    def test_single_click_opens_runner(self, tmp_path):
+        """``_on_tool_selected`` MUST call ``_show_runner``.
 
-        We test the wiring: ``_on_tool_selected`` (currently
-        wired to ``toolSelected``) must NOT call
-        ``self._show_runner`` unconditionally; instead it should
-        either be unbound from ``toolSelected``, or
-        ``toolSelected`` should be repurposed for
-        editor-view-only display (so single-click selects, the
-        runner doesn't pop).
+        v0.8.0a38+ -- restored from the a35 no-op regression.
+        Right-click no longer hits this path (see the a34
+        mousePressEvent / mouseReleaseEvent overrides in
+        _EditableTreeWidget that swallow right-button before
+        itemClicked fires), so opening the runner here is the
+        legitimate single-left-click semantic.
         """
         from scriptree.ui.main_window import MainWindow
         mw = MainWindow.__new__(MainWindow)
@@ -361,7 +359,6 @@ class TestB5_SingleClickDoesNotLaunchRunner:
         mw._active_editor = None
         mw._runners = {}
         mw._unsaved_runner = None
-        # Track _show_runner calls.
         show_runner_calls = []
         mw._show_runner = lambda tool, path: show_runner_calls.append(
             (tool, path),
@@ -370,11 +367,12 @@ class TestB5_SingleClickDoesNotLaunchRunner:
 
         from scriptree.core.model import ToolDef
         tool = ToolDef(name="demo", executable="echo")
-        # Simulate single-click -> _on_tool_selected.
         mw._on_tool_selected(tool, "C:/fake/demo.scriptree")
 
-        assert show_runner_calls == [], (
-            f"single-click should NOT show the runner; got "
+        assert show_runner_calls == [
+            (tool, "C:/fake/demo.scriptree"),
+        ], (
+            f"single-click MUST open the runner; got "
             f"calls={show_runner_calls!r}"
         )
 
