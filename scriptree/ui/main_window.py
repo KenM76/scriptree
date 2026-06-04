@@ -1859,16 +1859,114 @@ class MainWindow(QMainWindow):
     # --- launcher signal -----------------------------------------------------
 
     def _on_tool_selected(self, tool: ToolDef, path: str) -> None:
-        # Don't touch the Recent-files lists here — clicking a leaf in
-        # the Tools tree isn't an "open" in the user-facing sense.
-        # Recent is built only from deliberate File -> Open and the
-        # Recent menu itself (both go through _add_recent_file).
-        self._show_runner(tool, path)
+        """v0.8.0a35+ -- single-click on a tree leaf NO LONGER auto-
+        opens the runner.
+
+        Pre-a35 behaviour (single-click -> ``_show_runner`` ->
+        runner panel with extras + command-line panes pops up)
+        surprised users -- they expected single-click in a tree
+        to NAVIGATE (select the row), not LAUNCH the tool's
+        runner.  Per the v0.8.0a35 user-direction:
+
+            "a single click in the tree on a tool also causes it
+            to pop up extra arguments and command line windows
+            in a single window."
+
+        New policy:
+
+            single-click      -> select only (no popup)
+            double-click      -> open the runner (via _on_item_activated
+                                  in tree_view; we still receive
+                                  toolSelected but no-op on it)
+            right-click Open  -> standaloneRequested -> standalone window
+            right-click Edit  -> editRequested -> show tool editor
+
+        Don't touch the Recent-files lists here -- selecting a
+        leaf isn't an "open" in the user-facing sense.  Recent
+        is built only from deliberate File -> Open and the
+        Recent menu itself (both go through ``_add_recent_file``).
+        """
+        # Intentionally do nothing.  Single-click is select-only;
+        # the user must explicitly double-click or use the
+        # right-click menu to open anything.
+        return
 
     def _on_tree_edit_requested(self, tool: ToolDef, path: str) -> None:
         """Right-click ▸ Edit on a tree leaf — open the tool editor
         bound to that file so Save writes back to it."""
         self._show_editor(tool, path)
+
+    def _persist_uninstall_to_forest_file(
+        self, catalog_path: str,
+    ) -> None:
+        """v0.8.0a35+ -- write the just-uninstalled catalog's
+        exclusion + items-removal into the per-user default
+        ``.scriptreeforest`` so a future forest launch picks it up.
+
+        The editor runs as a SEPARATE process from the live cell
+        shell (forest).  We can't notify the running forest
+        cross-process; updating the persisted state file is what
+        survives a relaunch.
+
+        Best-effort: if the file doesn't exist or isn't writable
+        we log + swallow rather than aborting the uninstall (the
+        on-disk app folder is already gone; the user's data is
+        already in the desired state).
+        """
+        try:
+            from scriptree.shell import forest_io
+            # Look up the configured/branded forest file path.
+            # The launcher passes branding=ScripTree by default;
+            # we re-read the same canonical location here.
+            try:
+                forest_file = forest_io.default_autoload_path(
+                    {"appName": "ScripTree"},
+                )
+            except Exception:  # noqa: BLE001
+                forest_file = None
+            if forest_file is None or not Path(forest_file).is_file():
+                # No autoload forest yet -- nothing to persist
+                # against; the running forest (if any) will
+                # write the file on its next save and pick up
+                # the missing catalog naturally.
+                return
+            try:
+                forest = forest_io.load_forest(forest_file)
+            except Exception as exc:  # noqa: BLE001
+                import sys as _sys
+                print(
+                    f"[main_window] load_forest({forest_file}) "
+                    f"failed during uninstall persist: {exc!r}",
+                    file=_sys.stderr,
+                )
+                return
+            # Normalise paths for comparison (Windows mixes / and
+            # \\, ScripTree's internal helpers use Path.resolve).
+            norm = str(Path(catalog_path).resolve())
+            forest.items = [
+                it for it in forest.items
+                if str(Path(it.path).resolve()) != norm
+            ]
+            if catalog_path not in forest.excluded and (
+                norm not in forest.excluded
+            ):
+                forest.excluded.append(catalog_path)
+            try:
+                forest_io.save_forest(forest, forest_file)
+            except Exception as exc:  # noqa: BLE001
+                import sys as _sys
+                print(
+                    f"[main_window] save_forest({forest_file}) "
+                    f"failed during uninstall persist: {exc!r}",
+                    file=_sys.stderr,
+                )
+        except Exception as exc:  # noqa: BLE001
+            import sys as _sys
+            print(
+                f"[main_window] _persist_uninstall_to_forest_file "
+                f"unexpected: {exc!r}",
+                file=_sys.stderr,
+            )
 
     def _on_tree_uninstall_requested(self, catalog_path: str) -> None:
         """v0.8.0a34+ -- Right-click ▸ "Uninstall app from disk..." on
@@ -2037,6 +2135,17 @@ class MainWindow(QMainWindow):
                 remove_shared_configs=remove_shared,
             )
             if ok:
+                # v0.8.0a35+ -- the ephemeral controller above
+                # only mutates a MagicMock forest, so the running
+                # forest's saved state file never sees the
+                # exclusion.  User report: "I uninstalled an app
+                # and it was still there when I loaded up."
+                # Mirror the exclusion into the on-disk default
+                # forest file so the next forest launch reads
+                # the new state.
+                self._persist_uninstall_to_forest_file(
+                    catalog_path,
+                )
                 QMessageBox.information(
                     self, "Uninstall", msg,
                 )

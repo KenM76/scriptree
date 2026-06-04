@@ -277,6 +277,42 @@ class _EditableTreeWidget(QTreeWidget):
             return
         super().dragMoveEvent(event)
 
+    def _is_legal_drop_target(
+        self, target,  # noqa: ANN001 -- QTreeWidgetItem|None
+        indicator_position,  # noqa: ANN001 -- DropIndicatorPosition
+    ) -> bool:
+        """v0.8.0a35+ -- predicate the dropEvent uses to reject
+        illegal Internal-Move drops.
+
+        A leaf in a ``.scriptreetree`` cannot have children: it's
+        a reference to a single ``.scriptree`` tool, not a
+        container.  Pre-a35 Qt's default ``QTreeWidget`` allowed
+        dropping a leaf ONTO another leaf, which silently nested
+        the dragged leaf as a child of the target.  The
+        in-memory ``TreeDef`` schema then refused to serialise
+        properly and the user saw symptoms like "ffmpeg toolkit
+        ended up with another tools tool".
+
+        Policy:
+          * Dropping ``OnItem`` (i.e. ONTO an item) is legal only
+            when the target is a folder.  Leaves and subtree
+            references reject the drop.
+          * Dropping ``AboveItem`` / ``BelowItem`` (i.e. as a
+            sibling) is always legal -- inserts the dragged item
+            next to the target at the same tree depth.
+          * Dropping ``OnViewport`` (empty space) is always legal --
+            appends to the top level.
+        """
+        from PySide6.QtWidgets import QAbstractItemView
+        if target is None:
+            return True  # OnViewport
+        if indicator_position != (
+            QAbstractItemView.DropIndicatorPosition.OnItem
+        ):
+            return True  # Above/Below the item is always sibling
+        # OnItem: only folders accept children.
+        return _is_folder(target)
+
     def dropEvent(self, event: QDropEvent) -> None:
         md = event.mimeData()
         if md.hasUrls():
@@ -302,7 +338,18 @@ class _EditableTreeWidget(QTreeWidget):
             # Drop had URLs but none were .scriptree — refuse silently.
             event.ignore()
             return
-        # Not a URL drop → let Qt handle it as InternalMove.
+
+        # v0.8.0a35+ -- guard Internal-Move drops so leaves cannot
+        # become children of other leaves.  See
+        # ``_is_legal_drop_target`` for the policy.
+        pos = event.position().toPoint()
+        target = self.itemAt(pos)
+        indicator = self.dropIndicatorPosition()
+        if not self._is_legal_drop_target(target, indicator):
+            event.ignore()
+            return
+
+        # Legal Internal-Move: let Qt do its thing.
         super().dropEvent(event)
         self.itemReordered.emit()
 
@@ -1094,6 +1141,28 @@ class TreeLauncherView(QWidget):
         if item is not None:
             self._tree_widget.setCurrentItem(item)
         menu = QMenu(self)
+        # v0.8.0a35+ -- the action-building logic is exposed via
+        # ``_populate_context_menu_for`` so it's testable in
+        # isolation (no need to synthesise a real right-click
+        # position).
+        self._populate_context_menu_for(menu, item)
+        menu.exec(
+            self._tree_widget.viewport().mapToGlobal(pos)
+        )
+
+    def _populate_context_menu_for(
+        self, menu: QMenu, item,  # noqa: ANN001 -- QTreeWidgetItem|None
+    ) -> None:
+        """Fill ``menu`` with the right-click actions appropriate
+        to ``item``.
+
+        Extracted from ``_show_context_menu`` in v0.8.0a35 so the
+        same action set can be tested without going through a
+        real mouse position.  Behaviour is identical to the
+        pre-a35 inline build, plus a Save action that the user
+        asked for ("right-clicked at the top of the tree with
+        forest open there was no save option").
+        """
         # v0.6.5 — program/built-in menu items get OS standard icons
         # too (the user: "menu items both for the program and apps").
         _SP = QStyle.StandardPixmap
@@ -1224,7 +1293,34 @@ class TreeLauncherView(QWidget):
         act_add_tool.setIcon(_tv_std_icon(_SP.SP_DialogOpenButton))
         act_add_tool.triggered.connect(self._add_tool_via_dialog)
         menu.addAction(act_add_tool)
-        menu.exec(self._tree_widget.viewport().mapToGlobal(pos))
+
+        # v0.8.0a35+ -- Save actions surfaced on every right-click,
+        # so the user doesn't have to fish through the menu bar to
+        # save the loaded tree.  Pre-a35 the only path was File ->
+        # Save (now File -> Save current); the right-click was
+        # surface-blind and offered no Save at all.  User
+        # explicitly asked for it: "When I right clicked at the
+        # top of the tree with forest open there was no save
+        # option."
+        menu.addSeparator()
+        act_save_tree = QAction("Save tree", self)
+        act_save_tree.setIcon(
+            _tv_std_icon(_SP.SP_DialogSaveButton)
+        )
+        act_save_tree.setToolTip(
+            "Save the currently loaded .scriptreetree.  When the "
+            "tree is the merged temp tree built by V3's forest, "
+            "this also pushes back to each origin file."
+        )
+        act_save_tree.triggered.connect(self._save_tree)
+        menu.addAction(act_save_tree)
+
+        act_save_tree_as = QAction("Save tree as...", self)
+        act_save_tree_as.setIcon(
+            _tv_std_icon(_SP.SP_DialogSaveButton)
+        )
+        act_save_tree_as.triggered.connect(self.save_as)
+        menu.addAction(act_save_tree_as)
 
     def _emit_edit_for(self, item) -> None:
         path = item.data(0, _ROLE_PATH)
