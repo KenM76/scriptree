@@ -847,9 +847,26 @@ class MainWindow(QMainWindow):
         # but a fresh install also gives it half of the left column.
         # Leave it untouched for now — the user can drag if needed.
 
-    def _uninstall_runner_panels(self) -> None:
+    def _uninstall_runner_panels(self, hide_docks: bool = True) -> None:
         """Return the active runner's output + bottom panels to their
-        internal splitter and reset dock titles."""
+        internal splitter and (optionally) hide the docks.
+
+        ``hide_docks`` (v0.8.0a40+) -- when ``True`` (the default),
+        ``toggleView(False)`` is called on the Output + Run-controls
+        docks so they disappear.  When ``False``, the panels are
+        returned to the runner's splitter but the DOCKS stay
+        visible.  ``_show_runner`` uses ``hide_docks=False``
+        because it's about to install a different runner -- and
+        toggling the docks off then immediately on creates a new
+        floating popup for users who have detached the docks
+        (the original a39 bug, only fully fixed once we stop the
+        off-on cycle for the cross-tool case too).
+
+        Callers:
+          * ``_show_runner``       -> hide_docks=False  (swap in place)
+          * ``_show_editor``       -> hide_docks=True   (switching to editor)
+          * ``_drop_cached_runner`` -> hide_docks=True  (no replacement)
+        """
         runner = self._active_runner
         if runner is None:
             return
@@ -865,11 +882,13 @@ class MainWindow(QMainWindow):
         bottom.setParent(None)
         runner._return_bottom_panel(bottom)
         self._active_runner = None
-        self._output_dock.toggleView(False)
-        self._run_controls_dock.toggleView(False)
-        # Reset form dock title when no tool is active — the dock will
-        # be showing the placeholder welcome widget.
-        self._form_dock.setWindowTitle("ScripTree")
+        if hide_docks:
+            self._output_dock.toggleView(False)
+            self._run_controls_dock.toggleView(False)
+            # Reset form dock title when no tool is active --
+            # the dock will be showing the placeholder welcome
+            # widget.
+            self._form_dock.setWindowTitle("ScripTree")
 
     # --- actions -------------------------------------------------------------
 
@@ -2342,7 +2361,13 @@ class MainWindow(QMainWindow):
         self._current_tool = tool
         self._current_path = path
         self._close_active_editor()
-        self._uninstall_runner_panels()
+        # v0.8.0a40+ -- hide_docks=False so the off-on cycle that
+        # creates a spurious floating popup (a39 bug) doesn't fire
+        # when the user switches between TWO DIFFERENT tools.  We
+        # immediately re-install the new runner's panels below;
+        # the docks should stay visible the whole time and just
+        # get their widget swapped.
+        self._uninstall_runner_panels(hide_docks=False)
         self._discard_unsaved_runner()
         # Path may have changed — recompute "Open in cell" availability.
         self._refresh_ring_actions()
