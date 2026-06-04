@@ -214,3 +214,44 @@ design.
   the tree file, not the per-leaf catalog — that's what keys
   "Uninstall app..." to the correct app folder.
   → `rags/lessons/popup_menu_root_catalog_path.md`
+- [v3-architecture] **merged_tree_pushback_to_origins**: v0.8.0a31
+  added a sidecar JSON `<merged>.scriptreetree.origins.json` mapping
+  top-level folder → source path; `push_back_to_origins` walks the
+  saved merged tree and writes each folder back, converting absolute
+  leaf paths to relative-to-origin and skipping `.scriptree`
+  single-tool sources cleanly.
+  → `rags/lessons/merged_tree_pushback_to_origins.md`
+- [v3-architecture] **editor_uninstall_persists_to_forest_file**:
+  editor and forest are separate processes; the editor must write
+  uninstall/drop changes to the per-user `.scriptreeforest` via
+  `MainWindow._persist_uninstall_to_forest_file` (best-effort,
+  logged) — removes from `items`, appends to `excluded`.
+  → `rags/lessons/editor_uninstall_persists_to_forest_file.md`
+- [v3-architecture] **merged_tree_dropped_origins_vs_skipped**:
+  `PushBackResult` distinguishes `written` / `skipped` (e.g.
+  `.scriptree` wrapper) / `errors` / `dropped_origins` (sidecar
+  entry with no matching top-level folder = user removed it →
+  forest excludes the source). Dropped origins do NOT modify the
+  source file on disk.
+  → `rags/lessons/merged_tree_dropped_origins_vs_skipped.md`
+- [v3-architecture] **merged_tree_inline_subtrees_at_build_time**:
+  `_inline_subtree_refs(node, visited)` recursively replaces
+  subtree-pointing leaves with their loaded contents at BUILD time
+  (not view time) so the editor owns them and can drag/delete
+  freely; cycle → "(circular reference)" placeholder. Trade-off:
+  subtree refs become STATIC in the merged tree.
+  → `rags/lessons/merged_tree_inline_subtrees_at_build_time.md`
+- [v3-architecture] **merged_tree_dedup_by_name_with_disambiguation**:
+  two `.scriptreetree` files with the same internal display name
+  must be disambiguated by appending the source's parent-folder
+  name in parens (`"MSOffice (a_apps)"`), falling back to a numeric
+  counter. Order-stable across rebuilds because the sidecar keys
+  by the disambiguated name.
+  → `rags/lessons/merged_tree_dedup_by_name_with_disambiguation.md`
+- [v3-architecture] **editor_forest_sync_via_forest_file**:
+  the `.scriptreeforest` file is the ONLY IPC channel between the
+  editor subprocess and the running forest. Every editor-side
+  action that affects forest membership/state MUST write through
+  it; no in-process signals, no live update — the contract is
+  edit closed → forest reloaded.
+  → `rags/lessons/editor_forest_sync_via_forest_file.md`

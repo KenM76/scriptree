@@ -292,3 +292,53 @@ gives the per-topic slice.
   method. Use when pre-conditions are identical and only input
   shape varies; new call-sites get the action for free.
   → `rags/lessons/controller_api_cell_or_path.md`
+- [v3-architecture] **merged_tree_pushback_to_origins**: v0.8.0a31
+  sidecar `<merged>.scriptreetree.origins.json` + `push_back_to_origins`
+  walk the saved merged tree and write each top-level folder back
+  to its origin; absolute→relative leaf paths; `.scriptree` sources
+  skipped cleanly.
+  → `rags/lessons/merged_tree_pushback_to_origins.md`
+- [v3-architecture] **editor_uninstall_persists_to_forest_file**:
+  editor and forest are separate processes; uninstall/drop must
+  write to `.scriptreeforest` via
+  `MainWindow._persist_uninstall_to_forest_file` to survive forest
+  relaunch.
+  → `rags/lessons/editor_uninstall_persists_to_forest_file.md`
+- [v3-architecture] **merged_tree_dropped_origins_vs_skipped**:
+  `PushBackResult` has four categories — written / skipped /
+  errors / dropped_origins. Dropped origins = user removed a
+  top-level folder; forest excludes the source but source file
+  stays on disk.
+  → `rags/lessons/merged_tree_dropped_origins_vs_skipped.md`
+- [v3-architecture] **merged_tree_inline_subtrees_at_build_time**:
+  inline subtree refs at MERGE BUILD TIME so the merged tree owns
+  the nodes outright (drag/delete works); cycle guard emits
+  "(circular reference)" placeholder. Trade-off: refs are static.
+  → `rags/lessons/merged_tree_inline_subtrees_at_build_time.md`
+- [v3-architecture] **merged_tree_dedup_by_name_with_disambiguation**:
+  two `.scriptreetree` files with the same internal name → append
+  parent-dir in parens (`"MSOffice (a_apps)"`), fall back to
+  numeric counter. Sidecar keys by disambiguated name so output
+  must be stable build-over-build.
+  → `rags/lessons/merged_tree_dedup_by_name_with_disambiguation.md`
+- [v3-architecture] **editor_forest_sync_via_forest_file**:
+  `.scriptreeforest` is the ONLY IPC channel between editor
+  subprocess and running forest. Every editor-side action affecting
+  forest state MUST write through it. No live update — edit closed
+  → forest reloaded.
+  → `rags/lessons/editor_forest_sync_via_forest_file.md`
+- [pyside6] **qtads_toggleview_off_on_cycles_floating_dock**:
+  `CDockWidget.toggleView(True)` re-shows an already-visible
+  FLOATING dock as a new popup. Short-circuit reinstall cycles;
+  guard `toggleView(True)` behind `isVisible()`.
+  → `rags/lessons/qtads_toggleview_off_on_cycles_floating_dock.md`
+- [pyside6] **qheaderview_right_click_separate_signal**:
+  `QTreeWidget.customContextMenuRequested` fires only from the
+  viewport. Wire `header().customContextMenuRequested` separately
+  (shared menu-builder, `item=None`); mapToGlobal via `header()`.
+  → `rags/lessons/qheaderview_right_click_separate_signal.md`
+- [v3-process] **vocabulary_disambiguation_before_editing**:
+  "editor" / "tree" / "popup" are 3-way ambiguous; the a35→a38
+  regression came from guessing wrong. Consult
+  `docs/LLM/glossary.md`, quote the referent, ask before editing.
+  → `rags/lessons/vocabulary_disambiguation_before_editing.md`

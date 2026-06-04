@@ -73,3 +73,11 @@ diagnostics conventions.
   "two-publics-share-a-helper" pattern — use it when pre-conditions
   are identical and only the input shape varies.
   → `rags/lessons/controller_api_cell_or_path.md`
+- [v3-process] **vocabulary_disambiguation_before_editing**:
+  "editor" / "tree" / "popup" are 3-way ambiguous in ScripTree
+  (MainWindow vs ToolEditorView vs StandaloneWindow;
+  TreeLauncherView vs `.scriptreetree` file vs merged tree).
+  v0.8.0a35→a38 regression: lead engineer guessed wrong surface
+  and had to revert. Ask before editing; consult
+  `docs/LLM/glossary.md`; quote the referent back to confirm.
+  → `rags/lessons/vocabulary_disambiguation_before_editing.md`

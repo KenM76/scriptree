@@ -57,3 +57,16 @@ subprocess oddities encountered while building V3.
   right-click `MouseButtonPress`. Stash per-action data as a Python
   attribute on the QAction, not via `setData`. →
   `rags/lessons/qmenu_per_action_right_click.md`
+- [pyside6] **qtads_toggleview_off_on_cycles_floating_dock**:
+  `QtAds.CDockWidget.toggleView(True)` is NOT idempotent against an
+  already-visible FLOATING dock — it re-shows the floating frame,
+  reading as a "new popup" to the user. Short-circuit reinstall
+  cycles and guard `toggleView(True)` behind `isVisible()`.
+  → `rags/lessons/qtads_toggleview_off_on_cycles_floating_dock.md`
+- [pyside6] **qheaderview_right_click_separate_signal**:
+  `QTreeWidget.customContextMenuRequested` fires from the viewport,
+  NOT from `QHeaderView`. Wire `header().setContextMenuPolicy` +
+  `header().customContextMenuRequested.connect(...)` separately,
+  sharing the body's menu-builder with `item=None`. mapToGlobal
+  goes through `header()`.
+  → `rags/lessons/qheaderview_right_click_separate_signal.md`
