@@ -1024,6 +1024,34 @@ class MainWindow(QMainWindow):
                             f"file(s) back from merged tree.",
                             5000,
                         )
+
+                    # v0.8.0a37+ -- handle dropped origins.  When
+                    # the user removed a top-level folder from the
+                    # merged tree (or moved its content elsewhere
+                    # so the corresponding source's top folder is
+                    # gone from the saved tree), drop the
+                    # corresponding forest item so the cell
+                    # doesn't re-spawn on next launch.
+                    for dropped in result.dropped_origins:
+                        try:
+                            self._persist_uninstall_to_forest_file(
+                                dropped,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            import sys as _sys
+                            print(
+                                f"[main_window] dropped-origin "
+                                f"persist for {dropped!r} failed: "
+                                f"{exc!r}",
+                                file=_sys.stderr,
+                            )
+                    if result.dropped_origins:
+                        self.statusBar().showMessage(
+                            f"Wrote {len(result.written)} source(s); "
+                            f"removed {len(result.dropped_origins)} "
+                            f"from the forest's membership.",
+                            6000,
+                        )
                     return
             except Exception as exc:  # noqa: BLE001
                 # Don't let a back-propagate failure swallow the
@@ -1669,6 +1697,21 @@ class MainWindow(QMainWindow):
                         )
                         if is_merged_tree(saved_path):
                             result = push_back_to_origins(saved_path)
+                            # v0.8.0a37+ -- propagate dropped
+                            # origins to the forest file so
+                            # Save All produces the same
+                            # forest-state changes Save current
+                            # does (otherwise the user's "remove
+                            # this top-level folder" edit only
+                            # registers when they pick Save
+                            # current vs Save all).
+                            for dropped in result.dropped_origins:
+                                try:
+                                    self._persist_uninstall_to_forest_file(
+                                        dropped,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
                             # Treat any per-file error as a partial
                             # failure -- the merged tree itself
                             # saved fine, but the user's intent

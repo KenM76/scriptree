@@ -513,9 +513,32 @@ class PushBackResult:
     """Tuples of (source_path, exception_repr) for files where the
     write attempt raised."""
 
+    dropped_origins: list[str] = field(default_factory=list)
+    """v0.8.0a37+ -- absolute paths of sources that were in the
+    origins sidecar but whose top-level folder is no longer
+    present in the saved merged tree (the user deleted the
+    folder or moved its contents elsewhere).
+
+    The caller (typically ``MainWindow._save_tree``) is expected
+    to update the on-disk ``.scriptreeforest`` to:
+
+      * remove these paths from ``forest.items``;
+      * append them to ``forest.excluded`` so auto-discovery
+        doesn't silently re-add them.
+
+    The SOURCE FILES on disk are NOT modified by the push-back
+    when an origin is dropped -- the user might want to keep
+    the .scriptreetree on disk and just remove it from the
+    forest's membership.  An explicit Uninstall flow handles
+    the delete-from-disk case (see ``forest_controller.
+    uninstall_app``)."""
+
     @property
     def total(self) -> int:
-        return len(self.written) + len(self.skipped) + len(self.errors)
+        return (
+            len(self.written) + len(self.skipped)
+            + len(self.errors) + len(self.dropped_origins)
+        )
 
 
 def _origins_sidecar_path(merged_path: Path | str) -> Path:
@@ -725,11 +748,32 @@ def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
                     chosen = j
                     break
         if chosen is None:
-            result.skipped.append((
-                src_path,
-                f"top-level folder '{sidecar_name}' not found in "
-                f"saved merged tree (deleted? renamed twice?)",
-            ))
+            # v0.8.0a37+ -- distinguish "user-removed top-level
+            # folder" (dropped origin) from "couldn't write the
+            # source" (skip).  When the sidecar entry has no
+            # matching folder in the saved merged tree, the user
+            # has REMOVED that source from the forest's view --
+            # they moved its contents elsewhere, or they
+            # deleted the folder outright.  We record it on
+            # ``dropped_origins`` so the caller can update the
+            # forest file (remove from items, append to
+            # excluded) -- otherwise the forest would re-spawn
+            # the cell on next launch as if nothing changed.
+            #
+            # Skipped vs dropped:
+            #   * dropped = sidecar's top-level folder is GONE
+            #     from the saved merged tree.  Forest must lose
+            #     the corresponding cell.
+            #   * skipped = the folder is present but we
+            #     couldn't write the source (e.g. .scriptree
+            #     single-tool source -- see below).
+            result.dropped_origins.append(src_path)
+            _log(
+                f"push_back: top-level folder "
+                f"'{sidecar_name}' missing from saved tree -- "
+                f"marking origin {src_path!r} as dropped so the "
+                f"forest layer can excludes it"
+            )
             continue
         used_indices.add(chosen)
         folder = merged_top[chosen]
