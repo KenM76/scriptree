@@ -9,6 +9,12 @@ gives the per-topic slice.
 
 ## All lessons
 
+- [v3-architecture] **auto_organise_doubles_path_segment**: the
+  category auto-organise generator writes leaf paths with a
+  doubled `ScripTree/Apps/` segment because it computes relatives
+  from the wrong base.  Tools missing from
+  `_groups/<X>__auto.scriptreetree` catalogs.
+  → `rags/lessons/auto_organise_doubles_path_segment.md`
 - [pyside6] **no_console_popen_kwargs**: Windows-only flag set
   (`CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`) that prevents a
   console window from popping up when a GUI app spawns CLI tools.

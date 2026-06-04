@@ -4,6 +4,13 @@ V1↔V3 layering, single-instance handoff, master cells, the
 .scriptreering format, and the v0.2.7 cell-metadata-in-catalog
 design.
 
+- [v3-architecture] **auto_organise_doubles_path_segment**: the
+  category auto-organise generator writes leaf paths with a
+  doubled `ScripTree/Apps/` segment because it computes
+  relatives from the wrong base.  Symptom: tools missing from
+  `_groups/<X>__auto.scriptreetree` catalogs, missing paths show
+  `...\Apps\ScripTree\Apps\...`.
+  → `rags/lessons/auto_organise_doubles_path_segment.md`
 - [v3-architecture] **v1_cli_needs_standalone_flag**: V1 opens
   the editor by default for a `.scriptree` arg; cell launches
   must pass `-standalone`.
