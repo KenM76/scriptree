@@ -31,6 +31,23 @@ This file codifies the working style that produced v0.2.0 through
 v0.8.0a28 in this lineage, plus the operational rules and pattern
 catalogue learned along the way.
 
+## READ FIRST — vocabulary glossary
+
+**Before touching any user-reported issue, read
+`D:\Dev\ScripTree\docs\LLM\glossary.md`.**  ScripTree has multiple
+"editor", "tree", "form", "runner" surfaces that look similar but
+are distinct.  Ken (the user) has a specific vocabulary; the code
+has different module names; historical comments use a third set.
+Mixing these up has cost real regressions -- e.g. a35's
+"single-click no-op" was a fix to the wrong "editor" because I
+guessed which surface the user meant instead of looking up the
+mapping.
+
+When a user message says "editor", "tree", "popup", etc. and the
+referent isn't 100% obvious from context, **ask** rather than
+guess.  The glossary is also the place to ADD new terms when the
+user introduces them.
+
 ## Project geography (memorise)
 
 **Active dev tree:** `D:\Dev\ScripTree\`.  The "`ScripTree3`" naming

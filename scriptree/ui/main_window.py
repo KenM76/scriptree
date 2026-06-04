@@ -748,11 +748,19 @@ class MainWindow(QMainWindow):
             self._form_dock.toggleView(True)
 
         # Output dock: reparent the runner's output panel into it.
+        # v0.8.0a39+ -- only call toggleView when the dock is
+        # actually hidden.  Pre-a39, ``toggleView(True)`` was
+        # invoked unconditionally on every tool click, which (for
+        # docks that have been detached + floated) causes ads to
+        # re-show the floating window even when it was already
+        # visible -- the user sees a "popup window" appear with
+        # every click.  ``isVisible()`` is the correct guard.
         output = runner.output_panel
         output.setParent(None)
         self._output_dock.setWidget(output)
         self._output_dock.setWindowTitle(f"Output — {runner._tool.name}")
-        self._output_dock.toggleView(True)
+        if not self._output_dock.isVisible():
+            self._output_dock.toggleView(True)
 
         # Run controls dock: reparent the bottom panel (extras + cmd
         # line) into it. The runner's internal splitter still hosts the
@@ -764,7 +772,8 @@ class MainWindow(QMainWindow):
         self._run_controls_dock.setWindowTitle(
             f"Run controls — {runner._tool.name}"
         )
-        self._run_controls_dock.toggleView(True)
+        if not self._run_controls_dock.isVisible():
+            self._run_controls_dock.toggleView(True)
 
         # ads gives a freshly-revealed dock half of its parent area's
         # vertical space — way too tall for the run controls. The
@@ -2304,6 +2313,32 @@ class MainWindow(QMainWindow):
             return path
 
     def _show_runner(self, tool: ToolDef, path: str | None) -> None:
+        # v0.8.0a39+ -- short-circuit when the user clicks the SAME
+        # tool they're already looking at.  Pre-a39, every click
+        # ran ``_uninstall_runner_panels`` -> ``_install_runner_panels``
+        # which toggles the Run-controls + Output QtAds docks off
+        # and back on.  When those docks have been detached
+        # (floating in their own window), each off-on cycle
+        # appears to the user as a NEW floating popup -- the
+        # symptom the user described as "it pops up a new one
+        # every time I click on a tool."
+        #
+        # Same-tool re-click is a no-op except for refreshing the
+        # tree's path_prepend (in case the loaded tree changed
+        # since the last click; the cached runner may outlive
+        # several tree-load events).
+        key = self._runner_key(path)
+        cached = self._runners.get(key) if key is not None else None
+        if (
+            cached is not None
+            and cached is self._active_runner
+            and self._active_editor is None
+        ):
+            cached.set_tree_path_prepend(
+                self._launcher.tree_path_prepend(),
+            )
+            return
+
         self._current_tool = tool
         self._current_path = path
         self._close_active_editor()
@@ -2312,7 +2347,6 @@ class MainWindow(QMainWindow):
         # Path may have changed — recompute "Open in cell" availability.
         self._refresh_ring_actions()
 
-        key = self._runner_key(path)
         if key is not None:
             view = self._runners.get(key)
             if view is None:
