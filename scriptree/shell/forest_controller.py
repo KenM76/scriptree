@@ -127,7 +127,23 @@ def _log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _derive_label(name: str) -> str:
-    """1-3 char abbreviation of a forest's name for the cell label."""
+    """[DEPRECATED in v0.8.0a46]  1-3 char abbreviation of a
+    forest's name for the cell label.
+
+    Was used pre-v0.6.7 when the forest cell was letters-only
+    (no glyph) -- "Forest" became "Fo", "My Stuff" became "MS",
+    etc.  v0.6.7 added the proper glyph and the abbreviation
+    became redundant; v0.8.0a46 stopped calling this from
+    ``ForestController.__init__`` / ``open`` and
+    ``ForestSettingsDialog._save`` because the unconditional
+    re-apply was overwriting any value the user cleared via the
+    cell Settings dialog every launch.
+
+    Kept in place so external code that imports it (none in
+    tree, but defensive) still resolves.  Do NOT add new
+    callers -- if a feature needs a cell label, get it from the
+    user via the cell Settings dialog.
+    """
     name = (name or "").strip()
     if not name:
         return "F"
@@ -298,15 +314,24 @@ class ForestController(QObject):
             role="master",
             is_forest_master=True,
         )
-        # Use the forest's name as the cell's text label.  This goes
-        # through the standard ``apply_label_change`` so it persists
-        # via the same machinery as user-set labels.
-        try:
-            self.forest_window.apply_label_change(
-                text_label=_derive_label(self.forest.name),
-            )
-        except Exception:  # noqa: BLE001
-            self.forest_window._text_label = _derive_label(self.forest.name)
+        # v0.8.0a46+ -- DO NOT auto-set the cell's text label from the
+        # forest's name.  Pre-v0.6.7 the forest cell was letters-only
+        # (no glyph), so we stamped a 1-3 char abbreviation
+        # ("Fo" for "Forest") via ``_derive_label`` and called
+        # ``apply_label_change`` to make it visible on the hex.
+        # v0.6.7 added the proper conifer / fractal-tree glyph (set
+        # below from ``self.forest.icon_data`` or the bundled
+        # ``forest`` asset).  The auto-text-label became redundant
+        # AND actively harmful: it overwrote any value the user
+        # cleared via the cell Settings dialog every time
+        # ``ForestController.__init__`` ran (i.e. every launch), so
+        # the "Fo" abbreviation kept coming back even after the user
+        # explicitly removed it.  See the analogous removals in
+        # ``open()`` (post-load) and ``ForestSettingsDialog._save``
+        # (post-rename).  The hover tooltip / popup header falls
+        # through ``tree_popup._popup_header_text`` to the "Forest"
+        # role default when ``_text_label`` is empty, which is the
+        # behaviour the user wants.
 
         # v0.6.7 — give the bare forest hub an icon (was letters
         # only).  Prefer the forest's own embedded icon; otherwise
@@ -1576,13 +1601,12 @@ class ForestController(QObject):
         for it in list(self.forest.items):
             self._despawn_item(it)
         self.forest = load_forest(path)
-        if self.forest_window is not None:
-            try:
-                self.forest_window.apply_label_change(
-                    text_label=_derive_label(self.forest.name),
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        # v0.8.0a46+ -- do NOT stamp ``_derive_label(name)`` here;
+        # see the matching note in ``__init__`` for the full
+        # rationale.  Opening a different forest file leaves the
+        # cell's user-set ``_text_label`` alone (or empty, which
+        # falls back to the "Forest" role default in
+        # ``_popup_header_text``).
         for it in list(self.forest.items):
             self._spawn_item(it)
         self.forestChanged.emit()

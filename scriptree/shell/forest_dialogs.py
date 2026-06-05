@@ -676,14 +676,16 @@ class ForestSettingsDialog(QDialog):
         f.auto_discover.roots = self._roots.values()
         f.auto_discover.include = self._include.values()
         f.auto_discover.update_mode = self._mode.value()
-        if self._controller.forest_window is not None:
-            from scriptree.shell.forest_controller import _derive_label
-            try:
-                self._controller.forest_window.apply_label_change(
-                    text_label=_derive_label(f.name),
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        # v0.8.0a46+ -- the forest settings dialog used to call
+        # ``apply_label_change(text_label=_derive_label(f.name))``
+        # here so renaming the forest also retouched the cell's
+        # text label (the pre-v0.6.7 letters-only era's
+        # 1-3 char abbreviation).  We no longer auto-stamp anything:
+        # the forest cell renders via its glyph, and any text label
+        # is the user's explicit choice via the cell Settings
+        # dialog.  See the matching removal in
+        # ``ForestController.__init__`` and ``open()`` for the full
+        # rationale.
         # Persist launch preferences (v0.3.21+).  These don't change
         # the currently-loaded forest; they apply at the next launch.
         from scriptree.shell.forest_io import ForestPreferences
