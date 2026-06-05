@@ -1376,9 +1376,27 @@ class _PerItemContextFilter(QObject):
         x_btn = QToolButton()
         x_btn.setText("✕")  # ✕ — Unicode multiplication X
         x_btn.setProperty("stContextClose", "1")
-        x_btn.setToolTip("Close (the tool menu will reopen)")
+        x_btn.setToolTip(
+            "Close this panel and bring the tool menu back "
+            "(click outside or pick an action to close everything "
+            "instead)"
+        )
         x_btn.setCursor(_Qt.CursorShape.PointingHandCursor)
-        x_btn.clicked.connect(dlg.close)
+        # v0.8.0a44+ -- track WHY the dialog closed so the
+        # ``finished`` handler can decide whether to bring the tool
+        # menu back.  X-close => reopen (user explicitly dismissed
+        # the action panel, expects to keep browsing the catalog).
+        # Action picked / outside-click => leave the menu gone (user
+        # finished what they wanted, or asked to dismiss everything
+        # by clicking elsewhere).  Default is "outside" because Qt
+        # fires ``finished`` for outside-click dismissals without
+        # ever calling our button handlers.
+        dlg._st_close_reason = "outside"  # type: ignore[attr-defined]
+
+        def _close_via_x() -> None:
+            dlg._st_close_reason = "x"  # type: ignore[attr-defined]
+            dlg.close()
+        x_btn.clicked.connect(_close_via_x)
         header.addWidget(x_btn)
         outer.addLayout(header)
 
@@ -1398,10 +1416,12 @@ class _PerItemContextFilter(QObject):
         )
         btn_open.setCursor(_Qt.CursorShape.PointingHandCursor)
         leaf_path = ctx.get("leaf_path", "")
-        btn_open.clicked.connect(
-            lambda _c=False, p=leaf_path, d=dlg:
-            (self._on_open_folder(p), d.close())
-        )
+
+        def _trigger_open(_c: bool = False, p: str = leaf_path) -> None:
+            dlg._st_close_reason = "action"  # type: ignore[attr-defined]
+            self._on_open_folder(p)
+            dlg.close()
+        btn_open.clicked.connect(_trigger_open)
         outer.addWidget(btn_open)
 
         # --- Uninstall app from disk... (always present) ---------
@@ -1421,10 +1441,13 @@ class _PerItemContextFilter(QObject):
         btn_uninstall.setCursor(_Qt.CursorShape.PointingHandCursor)
         root_cat = ctx.get("root_catalog_path") or ""
         if root_cat and self._catalog_is_uninstallable(root_cat):
-            btn_uninstall.clicked.connect(
-                lambda _c=False, p=root_cat, d=dlg:
-                (self._on_uninstall_by_path(p), d.close())
-            )
+            def _trigger_uninstall(
+                _c: bool = False, p: str = root_cat,
+            ) -> None:
+                dlg._st_close_reason = "action"  # type: ignore[attr-defined]
+                self._on_uninstall_by_path(p)
+                dlg.close()
+            btn_uninstall.clicked.connect(_trigger_uninstall)
         else:
             btn_uninstall.setEnabled(False)
             btn_uninstall.setToolTip(
@@ -1437,58 +1460,166 @@ class _PerItemContextFilter(QObject):
             )
         outer.addWidget(btn_uninstall)
 
-        # ---- v0.8.0a43+: close the tool menu, do NOT reopen ------
+        # ---- v0.8.0a44+: snapshot overlay + close real menu ------
         #
-        # The history of this surface, briefly:
+        # GOAL.  The user wants the underlying tool menu to LOOK
+        # like it's still there while the per-item action dialog is
+        # open: keeps the visual context, the right-clicked tool's
+        # row stays right where they aimed.  But the menu must NOT
+        # respond to input -- the freeze experiment in a42 proved
+        # that any approach that keeps the real QMenu visible also
+        # keeps Qt's popup-grab alive, which steals the dialog's
+        # own clicks.  See
+        # ``rags/lessons/qmenu_freeze_under_floating_dialog.md``.
         #
-        # * pre-a30: explicit ``menu.close()`` + no reopen.  Simple
-        #   but the user had no way to right-click another tool
-        #   without re-clicking the cell -- mildly annoying.
-        # * a30-a41: rely on Qt to auto-close the menu when the
-        #   dialog gets focus, then re-open via a 50 ms timer on
-        #   ``dlg.finished`` so the user could chain right-clicks.
-        #   On the user's Qt build the menu actually STAYED open
-        #   (the dialog's ``Qt.Tool`` flag doesn't aggressively
-        #   pull focus) and the user could drift its highlight by
-        #   moving the mouse -- the "action menu gets left behind"
-        #   complaint.
-        # * a42: tried to keep the menu visible but FROZEN via an
-        #   app-level ``_MenuFreezeFilter`` that swallowed every
-        #   interactive event on QMenu instances.  That fixed the
-        #   drift but broke clicking the dialog itself, because
-        #   Qt's popup-grab routes every mouse event in the
-        #   application through the active QMenu's event loop --
-        #   we swallowed the dialog's clicks too.
-        # * a43 (this code): walk back to the simplest design that
-        #   actually works.  Close the menu when the dialog opens
-        #   (releases the popup grab so the dialog clicks land);
-        #   do NOT reopen on dismissal (the user reported the
-        #   reopen as a spurious popup).  The dialog's title bar
-        #   already shows the tool name so the visual association
-        #   "this dialog is for THIS tool" doesn't need the menu
-        #   to remain on screen.
+        # SOLUTION.  Before closing the real menu, grab a QPixmap
+        # of every visible menu in the popup chain (top menu + any
+        # open submenus) plus their on-screen geometry.  Close the
+        # real menu (releases the popup grab so the dialog is
+        # clickable).  For each snapshot, create a frameless,
+        # mouse-transparent, always-on-top QLabel painted with the
+        # pixmap at the original position -- the user sees an exact
+        # visual replica of the menu chain.  Show the dialog on
+        # top.
         #
-        # We walk up the menu chain to ``activePopupWidget()``
-        # because closing only the deepest submenu the user
-        # right-clicked in would leave the parent menus open --
-        # ``close()`` on the root QMenu cascades to all open
-        # children.
+        # DISMISS BEHAVIOUR (also user-spec'd):
+        #
+        #   * X button on dialog       -> close dialog, destroy
+        #     snapshot labels, RE-OPEN the real tool menu so the
+        #     user can keep browsing.
+        #   * Action picked in dialog  -> close dialog, destroy
+        #     snapshot labels, do NOT reopen.  (User finished the
+        #     action; they expect a clean slate.)
+        #   * Click outside dialog     -> dialog dismisses with
+        #     ``finished`` and the default ``_st_close_reason ==
+        #     "outside"``; we destroy the snapshots and do NOT
+        #     reopen.  (User asked the whole stack to go away by
+        #     clicking elsewhere.)
+        #
+        # Collection walk: we go up from ``source_menu`` to the
+        # root (parent chain, while visible), THEN back down from
+        # the root collecting any submenus that are also visible.
+        # This catches both the case where the user right-clicked
+        # in the top menu and the case where they're inside a
+        # submenu.  Dedup by ``id(menu)`` so a menu seen from both
+        # directions isn't snapshotted twice.
+        dlg._st_menu_screenshots = []  # type: ignore[attr-defined]
         if source_menu is not None:
             try:
-                root_menu = source_menu
-                while True:
-                    parent = root_menu.parent()
-                    if isinstance(parent, QMenu) and parent.isVisible():
-                        root_menu = parent
+                # Walk up to root.
+                chain_up = []
+                m = source_menu
+                while m is not None:
+                    if isinstance(m, QMenu) and m.isVisible():
+                        chain_up.append(m)
+                    parent = m.parent() if isinstance(m, QMenu) else None
+                    if isinstance(parent, QMenu):
+                        m = parent
                     else:
                         break
-                # ``close()`` is safer than ``hide()`` because it
-                # also tears down the modal popup event loop the
-                # QMenu was running via ``exec()`` -- without that,
-                # the cell's call site is still blocked.
-                root_menu.close()
+                root_menu = chain_up[-1] if chain_up else source_menu
+                # Walk down from root to catch open siblings /
+                # deeper submenus we didn't pass through.
+                def _collect_open(m, acc):  # noqa: ANN001
+                    if not isinstance(m, QMenu):
+                        return
+                    for action in m.actions():
+                        sub = action.menu()
+                        if sub is not None and sub.isVisible():
+                            acc.append(sub)
+                            _collect_open(sub, acc)
+                all_menus = list(chain_up)
+                _collect_open(root_menu, all_menus)
+                # Dedup preserving order.
+                seen_ids = set()
+                unique_menus = []
+                for mm in all_menus:
+                    if id(mm) in seen_ids:
+                        continue
+                    seen_ids.add(id(mm))
+                    unique_menus.append(mm)
+                # Grab snapshots WHILE the menus are still on
+                # screen.  ``QWidget.grab()`` returns a QPixmap of
+                # the widget's current rendering; we capture
+                # position too so the overlay can be placed
+                # pixel-perfectly.
+                snapshots = []
+                for mm in unique_menus:
+                    try:
+                        pos = mm.mapToGlobal(QPoint(0, 0))
+                        pixmap = mm.grab()
+                        snapshots.append((pixmap, pos))
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"menu.grab() failed: {exc!r}")
+                # Close the real menu now (releases popup grab,
+                # ends ``menu.exec`` loop).  ``close()`` on the
+                # root cascades through all submenus.
+                try:
+                    root_menu.close()
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"root_menu.close() failed: {exc!r}")
+                # Mount overlay labels.
+                from PySide6.QtWidgets import QLabel as _QLabel
+                for pixmap, pos in snapshots:
+                    overlay = _QLabel(None)
+                    overlay.setPixmap(pixmap)
+                    overlay.setFixedSize(pixmap.size())
+                    overlay.setWindowFlags(
+                        _Qt.WindowType.Tool
+                        | _Qt.WindowType.FramelessWindowHint
+                        | _Qt.WindowType.WindowStaysOnTopHint
+                        | _Qt.WindowType.WindowTransparentForInput
+                    )
+                    overlay.setAttribute(
+                        _Qt.WidgetAttribute.WA_ShowWithoutActivating,
+                        True,
+                    )
+                    overlay.setAttribute(
+                        _Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                        True,
+                    )
+                    # WA_DeleteOnClose so the cleanup loop in
+                    # ``_on_dialog_finished`` doesn't leak QObjects
+                    # if the user is fast and triggers something
+                    # before we get to the explicit close.
+                    overlay.setAttribute(
+                        _Qt.WidgetAttribute.WA_DeleteOnClose, True,
+                    )
+                    overlay.move(pos)
+                    overlay.show()
+                    dlg._st_menu_screenshots.append(overlay)  # type: ignore[attr-defined]
             except Exception as exc:  # noqa: BLE001
-                _log(f"close-source-menu failed: {exc!r}")
+                _log(f"snapshot-overlay setup failed: {exc!r}")
+
+        # Tear-down: destroy snapshots; if X was the close path,
+        # reopen the real tool menu so the user can keep browsing.
+        # Run-soon via 50 ms QTimer so Qt finishes the dialog's
+        # own teardown / re-event-loop transitions before we
+        # ``menu.exec()`` again (without the delay the new menu
+        # can land under the closing dialog's z-order on some
+        # platforms; the same delay was used by the pre-a43 reopen
+        # path and that worked there).
+        def _on_dialog_finished(_r: int = 0) -> None:
+            reason = getattr(dlg, "_st_close_reason", "outside")
+            for overlay in getattr(dlg, "_st_menu_screenshots", []):
+                try:
+                    overlay.close()  # WA_DeleteOnClose handles dispose
+                except Exception:  # noqa: BLE001
+                    pass
+            dlg._st_menu_screenshots = []  # type: ignore[attr-defined]
+            if reason == "x":
+                # Re-show the real tool menu so the user can
+                # right-click another tool / pick a tool to run
+                # without re-clicking the cell.
+                hex_win = self._hex_win
+                try:
+                    QTimer.singleShot(
+                        50, lambda hw=hex_win: show_tree_popup_for(hw),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"reopen-on-X failed: {exc!r}")
+
+        dlg.finished.connect(_on_dialog_finished)
 
         # Position the dialog at the right-click point.  Clamp to
         # the screen's available geometry so the dialog isn't born

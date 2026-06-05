@@ -73,16 +73,23 @@ subprocess oddities encountered while building V3.
   v0.8.0a39/a40; fixed in a41.
   → `rags/lessons/qtads_setwidget_cycles_floating_dock.md`
 - [pyside6] **qmenu_freeze_under_floating_dialog**: a QMenu
-  CANNOT be "frozen visible" under a sibling dialog. Qt's
+  CANNOT be "frozen visible" under a sibling dialog -- Qt's
   popup-grab on the menu intercepts every mouse press in the app
-  (including the dialog's) and an app-level event filter that
-  swallows mouse events on QMenu instances breaks dialog clicks
-  too. The popup grab is non-negotiable -- the only ways to make
-  the dialog clickable are (a) close the menu, or (b) hide it and
-  overlay a screenshot widget. ScripTree v0.8.0a43 closes the
-  menu on dialog-open (walk up to the root popup and ``close()``)
-  and does NOT reopen on dismiss. v0.8.0a42 tried the freeze and
-  it broke clicks -- lesson rewritten with the failure analysis.
+  (the dialog's clicks included) and an app-level event filter
+  that swallows mouse events on QMenu instances breaks the dialog
+  too. The popup grab is non-negotiable. Solution (a44):
+  **screenshot overlay**. Before closing the real menu, grab a
+  ``QPixmap`` of every visible menu in the popup chain (walk up
+  to root, then back down for open submenus); close the real
+  menus; show each pixmap as a frameless, mouse-transparent,
+  always-on-top ``QLabel`` at the original position. The user
+  sees the menu chain still there; the grab is released so the
+  dialog clicks land. Tag close reason ("x" / "action" /
+  "outside") via a dialog attribute set by each handler so
+  ``finished`` can decide: X => reopen real menu, otherwise
+  destroy overlays and don't reopen. Window flags that matter:
+  ``WindowTransparentForInput`` + ``WA_TransparentForMouseEvents``
+  + ``WA_ShowWithoutActivating``.
   → `rags/lessons/qmenu_freeze_under_floating_dialog.md`
 - [pyside6] **qheaderview_right_click_separate_signal**:
   `QTreeWidget.customContextMenuRequested` fires from the viewport,
