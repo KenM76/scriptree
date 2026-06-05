@@ -11,6 +11,20 @@ design.
   `_groups/<X>__auto.scriptreetree` catalogs, missing paths show
   `...\Apps\ScripTree\Apps\...`.
   → `rags/lessons/auto_organise_doubles_path_segment.md`
+- [v3-architecture] **forest_hub_cell_stable_settings_id**:
+  ``CellWindow.__init__`` accepts an optional ``hexagon_id``; if
+  omitted it generates a fresh ``uuid.uuid4()``.  Pre-v0.8.0a47
+  the forest hub cell was constructed without one, so it got a
+  new uuid every launch and ALL its per-cell QSettings entries
+  (``hexagon/<uuid>/text_label``, ``/icon_path``, ``/size_px``,
+  ``/transparency``, etc.) were re-saved under a new uuid every
+  run -- user customisations silently vanished on restart.
+  Fix: pass the frozen sentinel ``FOREST_HUB_HEX_ID =
+  "forest-hub"`` defined at the top of ``forest_controller.py``.
+  Do NOT change the literal -- existing users' saved settings
+  live at ``hexagon/forest-hub/*`` from a47 onward.  Regression
+  test in ``tests/test_forest.py``.
+  → `rags/lessons/forest_hub_cell_stable_settings_id.md`
 - [v3-architecture] **v1_cli_needs_standalone_flag**: V1 opens
   the editor by default for a `.scriptree` arg; cell launches
   must pass `-standalone`.

@@ -123,6 +123,31 @@ def _log(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stable identifier for the forest hub cell
+# ---------------------------------------------------------------------------
+#
+# Forest cells persist per-cell QSettings under
+# ``hexagon/<id>/<field>``.  Pre-v0.8.0a47 the forest hub got a fresh
+# ``uuid.uuid4()`` from ``CellWindow.__init__`` on every launch, so
+# none of the cell-Settings-dialog choices the user made for the
+# forest (text label, icon, size, transparency, always-on-top,
+# label opacity, text-over-icon, collapse behaviour) ever survived a
+# restart -- they were re-saved under a new uuid every run and the
+# old uuid's entries became zombies.
+#
+# The forest hub is a SINGLETON per ScripTreeRing process (there is
+# exactly one workspace root, even when the user switches between
+# different ``.scriptreeforest`` files via ``open()``), so a fixed
+# sentinel id is correct.  Passed as ``hexagon_id=`` to the
+# ``CellWindow`` constructor in ``ForestController.__init__`` below.
+#
+# DO NOT change the literal once it's shipped -- every existing
+# user's saved settings live at ``hexagon/forest-hub/*`` from a47
+# onward, and changing the value would orphan them.
+FOREST_HUB_HEX_ID = "forest-hub"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -308,11 +333,33 @@ class ForestController(QObject):
         # Build the forest cell.  CellWindow construction needs to
         # happen here (not at module load) so the QApplication is
         # already up by the time we instantiate Qt widgets.
+        #
+        # v0.8.0a47+ -- pass a STABLE ``hexagon_id`` so the forest
+        # cell's per-cell QSettings entries
+        # (``hexagon/<id>/text_label``, ``hexagon/<id>/icon_path``,
+        # ``hexagon/<id>/size_px``, etc.) survive across launches.
+        # Pre-a47 the forest_window was given a fresh
+        # ``uuid.uuid4()`` every launch (the CellWindow default),
+        # so anything the user customised via the cell Settings
+        # dialog -- text label, icon, size, transparency,
+        # always-on-top -- silently vanished on the next run.
+        # See the matching cleanup at ``rags/lessons/
+        # forest_hub_cell_stable_settings_id.md`` (filed below).
+        #
+        # The forest hub is a singleton per ScripTreeRing process
+        # so a fixed sentinel is correct -- there is exactly one
+        # "forest cell" per workspace and its QSettings should
+        # always live at the same key.  If we ever support
+        # multiple forests in one process, the id will need to be
+        # derived from the forest file path instead, but that's
+        # not a near-term concern (forest is the singular
+        # workspace root).
         from scriptree.shell.cell_window import CellWindow
         self.forest_window = CellWindow(
             self._branding,
             role="master",
             is_forest_master=True,
+            hexagon_id=FOREST_HUB_HEX_ID,
         )
         # v0.8.0a46+ -- DO NOT auto-set the cell's text label from the
         # forest's name.  Pre-v0.6.7 the forest cell was letters-only

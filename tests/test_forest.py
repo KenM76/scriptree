@@ -406,6 +406,39 @@ class TestForestCell:
         assert ctrl.forest_window._is_forest_master is True
         ctrl.forest_window.close()
 
+    def test_forest_cell_has_stable_settings_id(self) -> None:
+        """v0.8.0a47 regression: the forest hub's ``_id`` must be the
+        ``FOREST_HUB_HEX_ID`` sentinel so per-cell QSettings entries
+        (``hexagon/<id>/text_label`` etc.) survive across launches.
+
+        Pre-a47 the forest cell got a fresh ``uuid.uuid4()`` from
+        ``CellWindow.__init__`` every run, so user customisations
+        on the forest cell silently vanished after restart.  Locking
+        this to the sentinel value keeps the saved settings live.
+
+        If a future change wants to relax this (e.g. derive per-
+        forest ids from the file path), update the sentinel name
+        and the comment in ``forest_controller`` together -- but
+        DO NOT change the literal value ``"forest-hub"``; every
+        existing user's saved settings live at that key.
+        """
+        from scriptree.shell.forest_controller import (
+            ForestController, FOREST_HUB_HEX_ID,
+        )
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.start(forest=ForestDef(), suppress_first_run=True)
+        assert ctrl.forest_window._id == FOREST_HUB_HEX_ID
+        assert FOREST_HUB_HEX_ID == "forest-hub"  # frozen literal
+        # Derived QSettings key must also be deterministic and
+        # use the sentinel -- this is what guarantees saved
+        # settings round-trip across launches.
+        assert ctrl.forest_window._settings_key("text_label") == (
+            "hexagon/forest-hub/text_label"
+        )
+        ctrl.forest_window.close()
+
     def test_forest_cell_uses_branding_default_size(self) -> None:
         from scriptree.shell.forest_controller import ForestController
         _fresh_registry()
