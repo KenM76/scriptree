@@ -1096,6 +1096,53 @@ def build_tree_popup_menu(hex_win) -> QMenu:  # noqa: ANN001 — CellWindow
 # we ALSO install via ``aboutToShow`` so freshly-opened submenus
 # pick up the filter too.
 
+class _MenuFreezeFilter(QObject):
+    """Swallow interactive events on every ``QMenu`` instance.
+
+    Installed on ``QApplication`` for the lifetime of the per-item
+    context dialog (v0.8.0a42+).  While installed, the underlying
+    cell tool menu stays visible at its current position but cannot
+    be navigated -- mouse-move / hover / press / wheel / key /
+    context-menu events targeting any QMenu are dropped, so the
+    right-clicked action remains the active highlight and the user
+    can't accidentally drift the highlight to a different item
+    while the per-item dialog is open.
+
+    Why an app-level filter?  Qt routes mouse events to the topmost
+    QMenu under the cursor, not to the menu we showed the dialog
+    for; freezing the whole tree (top menu + every submenu) with
+    one filter is simpler and more robust than tracking which
+    specific menu(s) belong to the active popup chain.
+
+    Events NOT swallowed:
+      * Paint, resize, show/hide -- the menu must still repaint as
+        the dialog moves over it and Qt's hide-on-dialog-close path
+        must still work.
+      * Anything not targeting a QMenu (the per-item dialog itself,
+        the cell window, the rest of the app are untouched).
+    """
+
+    _FREEZE_TYPES = frozenset({
+        QEvent.Type.MouseMove,
+        QEvent.Type.HoverMove,
+        QEvent.Type.HoverEnter,
+        QEvent.Type.HoverLeave,
+        QEvent.Type.MouseButtonPress,
+        QEvent.Type.MouseButtonRelease,
+        QEvent.Type.MouseButtonDblClick,
+        QEvent.Type.Wheel,
+        QEvent.Type.KeyPress,
+        QEvent.Type.KeyRelease,
+        QEvent.Type.ShortcutOverride,
+        QEvent.Type.ContextMenu,
+    })
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if isinstance(obj, QMenu) and event.type() in self._FREEZE_TYPES:
+            return True  # swallow -- menu does not respond
+        return False
+
+
 class _PerItemContextFilter(QObject):
     """QObject event filter that intercepts right-clicks on actions
     inside a QMenu and dispatches to a per-item context menu.
@@ -1225,12 +1272,23 @@ class _PerItemContextFilter(QObject):
         # ``finished`` signal so the user can keep using the
         # tree popup after the right-click action.  See
         # ``_show_for_action``'s ``_reopen_parent`` closure below.
-        self._show_for_action(ctx, global_pt)
+        #
+        # v0.8.0a42+ -- pass ``obj`` (the menu) and ``act`` (the
+        # right-clicked action) through so the dialog can freeze
+        # the menu in place AND keep the user's right-clicked item
+        # visually highlighted while the dialog is open.
+        self._show_for_action(ctx, global_pt, obj, act)
         return True
 
     # ---- per-item context menu construction ------------------
 
-    def _show_for_action(self, ctx: dict, global_pt: QPoint) -> None:
+    def _show_for_action(
+        self,
+        ctx: dict,
+        global_pt: QPoint,
+        source_menu: QMenu | None = None,
+        source_action: QAction | None = None,
+    ) -> None:
         """Build + show the per-item context dialog.
 
         v0.8.0a30+ -- this used to be a QMenu, which had two
@@ -1253,6 +1311,16 @@ class _PerItemContextFilter(QObject):
         Qt's event-loop fully process the dialog's destruction
         before we re-show, avoiding a race where Qt receives the
         re-show before it finished closing.
+
+        ``source_menu`` / ``source_action`` (v0.8.0a42+) -- the
+        QMenu the user right-clicked and the QAction under the
+        cursor at right-click time.  Used to (1) install the
+        ``_MenuFreezeFilter`` so the menu stops responding to
+        mouse / keyboard input while the dialog is open, and (2)
+        pin the right-clicked action as the menu's active item so
+        it stays visually highlighted (the user's mental "this
+        dialog is for THIS item" association doesn't drift).
+        Both default to ``None`` so older callers still work.
 
         Entries shown:
 
@@ -1421,6 +1489,46 @@ class _PerItemContextFilter(QObject):
         dlg.finished.connect(
             lambda _r=0: QTimer.singleShot(50, _reopen_parent)
         )
+
+        # ---- v0.8.0a42+: freeze the underlying menu in place -----
+        # Pin the right-clicked action as the menu's active item so
+        # the highlight stays anchored to the action this dialog
+        # belongs to, then install a QApplication-level
+        # ``_MenuFreezeFilter`` that swallows mouse / keyboard /
+        # wheel events on every open QMenu.  Both are removed when
+        # the dialog finishes (X clicked, action picked, click
+        # outside, etc.) so the menu can be interacted with again
+        # if ``_reopen_parent`` was a no-op (the menu was still
+        # alive and the guard skipped the re-show).
+        if source_menu is not None and source_action is not None:
+            try:
+                source_menu.setActiveAction(source_action)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"setActiveAction failed: {exc!r}")
+        _app = QApplication.instance()
+        if _app is not None:
+            freezer = _MenuFreezeFilter(_app)
+            _app.installEventFilter(freezer)
+            # Keep a strong ref so the GC doesn't drop the filter
+            # mid-dialog -- the QObject itself can't anchor to the
+            # dialog because we want it on the application, not
+            # parented to the dialog.
+            dlg._st_menu_freezer = freezer  # type: ignore[attr-defined]
+
+            def _remove_freezer(_r: int = 0) -> None:
+                app = QApplication.instance()
+                flt = getattr(dlg, "_st_menu_freezer", None)
+                if app is not None and flt is not None:
+                    try:
+                        app.removeEventFilter(flt)
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"removeEventFilter failed: {exc!r}")
+                try:
+                    delattr(dlg, "_st_menu_freezer")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            dlg.finished.connect(_remove_freezer)
 
         # Position the dialog at the right-click point.  Clamp to
         # the screen's available geometry so the dialog isn't born
