@@ -1368,20 +1368,12 @@ class _PerItemContextFilter(QObject):
         outer.setContentsMargins(2, 2, 2, 4)
         outer.setSpacing(0)
 
-        # --- Header row: title + X close button -------------------
+        # --- Header row: title + edit + X close ------------------
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 4, 4)
         title_lbl = QLabel(f"<b>{label}</b>")
         header.addWidget(title_lbl, 1)
-        x_btn = QToolButton()
-        x_btn.setText("✕")  # ✕ — Unicode multiplication X
-        x_btn.setProperty("stContextClose", "1")
-        x_btn.setToolTip(
-            "Close this panel and bring the tool menu back "
-            "(click outside or pick an action to close everything "
-            "instead)"
-        )
-        x_btn.setCursor(_Qt.CursorShape.PointingHandCursor)
+
         # v0.8.0a44+ -- track WHY the dialog closed so the
         # ``finished`` handler can decide whether to bring the tool
         # menu back.  X-close => reopen (user explicitly dismissed
@@ -1392,6 +1384,72 @@ class _PerItemContextFilter(QObject):
         # fires ``finished`` for outside-click dismissals without
         # ever calling our button handlers.
         dlg._st_close_reason = "outside"  # type: ignore[attr-defined]
+
+        # v0.8.0a45+ -- "Open in developer editor" icon button.
+        # Sits next to the X.  Resolves to the tool's
+        # ``root_catalog_path`` (the .scriptree or .scriptreetree
+        # the action belongs to) -- for single-tool cells this is
+        # the cell's catalog itself; for multi-tool cells it's the
+        # owning tree.  Routes through ``launch_editor_with_tree``
+        # which works for both extensions (V1's CLI opens the
+        # editor when the path is passed positionally without
+        # ``-standalone``).  Treated as an "action" for the
+        # close-reason matrix so the snapshot overlay is dismissed
+        # cleanly without reopening the tool menu.
+        edit_btn = QToolButton()
+        edit_btn.setProperty("stContextClose", "1")
+        edit_btn.setIcon(
+            QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_FileDialogContentsView,
+            )
+        )
+        edit_btn.setText("")
+        edit_btn.setToolTip(
+            "Open this tool in the developer editor "
+            "(closes this panel and the tool menu)"
+        )
+        edit_btn.setCursor(_Qt.CursorShape.PointingHandCursor)
+        root_catalog = ctx.get("root_catalog_path") or ctx.get("leaf_path", "")
+
+        def _open_in_editor(
+            _c: bool = False, p: str = root_catalog,
+        ) -> None:
+            dlg._st_close_reason = "action"  # type: ignore[attr-defined]
+            try:
+                from scriptree.shell.v1_launcher import (
+                    launch_editor_with_tree,
+                )
+                if p:
+                    launch_editor_with_tree(p)
+                else:
+                    _log(
+                        "_open_in_editor: no catalog path in ctx; "
+                        "skipping"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_open_in_editor failed: {exc!r}")
+            dlg.close()
+        edit_btn.clicked.connect(_open_in_editor)
+        # Disable the button when there's nothing to open (degenerate
+        # ctx without a catalog path -- shouldn't happen in practice
+        # but be defensive).
+        if not root_catalog:
+            edit_btn.setEnabled(False)
+            edit_btn.setToolTip(
+                "No catalog path associated with this item -- "
+                "the developer editor has nothing to open"
+            )
+        header.addWidget(edit_btn)
+
+        x_btn = QToolButton()
+        x_btn.setText("✕")  # ✕ — Unicode multiplication X
+        x_btn.setProperty("stContextClose", "1")
+        x_btn.setToolTip(
+            "Close this panel and bring the tool menu back "
+            "(click outside or pick an action to close everything "
+            "instead)"
+        )
+        x_btn.setCursor(_Qt.CursorShape.PointingHandCursor)
 
         def _close_via_x() -> None:
             dlg._st_close_reason = "x"  # type: ignore[attr-defined]

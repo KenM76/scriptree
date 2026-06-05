@@ -206,19 +206,41 @@ def launch_tool(
 
 
 def launch_editor_with_tree(scriptreetree_path: str | Path) -> None:
-    """Spawn V1 with a ``.scriptreetree`` file loaded in the full editor.
+    """Spawn V1 with a catalog file loaded in the full editor.
 
-    Used on double-left-click of a cell, and on double-right-click for
-    the master cell's "open composite editor" gesture.  V1's existing
-    CLI accepts the path positionally; the launcher routes to the main
-    window with the tree loaded into the launcher dock.
+    Despite the legacy "with_tree" name, V1's CLI accepts BOTH
+    ``.scriptree`` (single-tool) AND ``.scriptreetree`` (multi-tool)
+    paths positionally.  In either case, V1 opens its MainWindow
+    with the catalog loaded into the launcher dock -- this is the
+    correct entry point for the "open in developer editor" gesture
+    no matter whether the cell binds a single tool or a tree.  See
+    ``scriptree/main.py`` CLI docstring (V1's frozen public API).
+
+    Used on:
+      * double-left-click of a cell (lock-open via
+        ``show_tree_for(mode="lock-open")``)
+      * double-right-click of a cell (composite editor for masters,
+        same path for standalones)
+      * right-click action panel's "edit in developer editor" icon
+        button (v0.8.0a45+)
+
+    Fire-and-forget -- we do not wait for V1 to exit.  Use
+    ``launch_tool`` instead when you specifically want the
+    lightweight standalone runner (``-standalone`` flag).
     """
     p = Path(scriptreetree_path)
     cmd = _v1_launcher_cmd() + [str(p)]
     _log(
-        f"launch_editor_with_tree: tree={p.name!r}  exists={p.is_file()}"
+        f"launch_editor_with_tree: catalog={p.name!r} "
+        f"(ext={p.suffix.lower()})  exists={p.is_file()}"
     )
     _spawn(cmd)
+
+
+# Alias for naming-accuracy in callers that pass either extension.
+# Prefer this name in new code; ``launch_editor_with_tree`` is kept
+# for the old call-sites that say "tree" deliberately.
+launch_editor_with_catalog = launch_editor_with_tree
 
 
 def launch_editor_blank() -> None:
@@ -322,15 +344,22 @@ def show_tree_for(hex_win, mode: str = "standalone") -> None:  # noqa: ANN001
             )
             # Fall through to lock-open path.
     # lock-open / fallback / unknown mode → full editor.
+    #
+    # v0.8.0a45+ -- previously the ``.scriptree`` branch called
+    # ``launch_tool`` here, which mis-routed double-left-click on
+    # a single-tool cell into V1's standalone runner instead of
+    # the developer editor.  V1's CLI happily accepts either
+    # extension positionally and opens the editor in both cases
+    # (the ``-standalone`` flag is what distinguishes editor from
+    # runner; ``launch_editor_with_tree`` doesn't pass it).
     catalog = getattr(hex_win, "_catalog_path", None)
     if catalog is None:
         launch_editor_blank()
         return
     p = Path(catalog)
-    if p.suffix.lower() == ".scriptreetree":
+    ext = p.suffix.lower()
+    if ext in (".scriptreetree", ".scriptree"):
         launch_editor_with_tree(p)
-    elif p.suffix.lower() == ".scriptree":
-        launch_tool(p)
     else:
         launch_editor_blank()
 

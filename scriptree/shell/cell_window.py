@@ -10180,29 +10180,17 @@ class CellWindow(QMainWindow):
             # double-right click should bring them up in the full
             # editor in the same sub-folder style."
             #
-            # v0.8.0a25+ shortcut (per user request 2026-06-02): if
-            # the cell binds a tree (or a master whose merged tree)
-            # contains EXACTLY ONE leaf, double-left launches that
-            # tool directly instead of popping a one-item menu --
-            # which is just an extra click before the inevitable
-            # launch.  Falls through to the standard behaviour for
-            # any cell with ≥ 2 leaves or no leaves at all.
+            # v0.8.0a45+ REMOVED: the a25 "single-tool shortcut"
+            # called ``launch_tool`` (V1 standalone runner) for
+            # cells that contained exactly one leaf.  Per updated
+            # user spec, single-tool cells should behave like
+            # tree cells -- double-left opens the developer EDITOR,
+            # not the standalone runner.  Falling through to the
+            # standalone-cell branch below routes the .scriptree
+            # path through ``show_tree_for(mode="lock-open")``,
+            # which now ends up at ``launch_editor_with_tree`` for
+            # both extensions (see v1_launcher.py a45 fix).
             if not self._locked_open:
-                single_tool = self._single_leaf_path()
-                if single_tool is not None:
-                    _log(
-                        f"click(double) id={self._id[:8]} — single-tool "
-                        f"shortcut, launching {single_tool!r}"
-                    )
-                    try:
-                        from scriptree.shell.v1_launcher import launch_tool
-                        launch_tool(single_tool)
-                    except Exception as exc:  # noqa: BLE001
-                        _log(
-                            f"click(double): single-tool launch failed: "
-                            f"{exc!r}"
-                        )
-                    return
                 if self.role == "master":
                     # Popup-style menu — same builder as single-click,
                     # already produces sub-folders per member.
