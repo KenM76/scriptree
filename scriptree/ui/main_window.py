@@ -94,6 +94,8 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..core.io import load_tool
@@ -239,9 +241,26 @@ class MainWindow(QMainWindow):
         )
 
         # --- Output panel dock (under Tools, same left column) ---
+        #
+        # v0.8.0a41+ -- PERSISTENT HOST WIDGET.  The dock's widget is
+        # set ONCE at construction time and never replaced.  When the
+        # active tool changes, the runner's ``output_panel`` is
+        # reparented INTO ``_output_host`` (a transparent QWidget with
+        # a zero-margin QVBoxLayout) and removed via ``setParent(None)``
+        # on uninstall.  Earlier code called
+        # ``self._output_dock.setWidget(new_panel)`` on every tool
+        # click, which on a FLOATING dock re-triggers QtAds's
+        # show-floating-frame path and pops a new window on the user's
+        # screen.  Persistent host = QtAds never sees a content swap,
+        # so the floating frame stays put.  See
+        # ``rags/lessons/qtads_setwidget_cycles_floating_dock.md``.
         self._output_dock = ads.CDockWidget(self._dock_manager, "Output")
         self._output_dock.setObjectName("OutputDock")
-        self._output_dock.setWidget(QLabel(""))  # placeholder
+        self._output_host = QWidget()
+        _oh_layout = QVBoxLayout(self._output_host)
+        _oh_layout.setContentsMargins(0, 0, 0, 0)
+        _oh_layout.setSpacing(0)
+        self._output_dock.setWidget(self._output_host)
         self._output_dock.setFeatures(_DOCK_FEATURES)
         self._dock_manager.addDockWidget(
             ads.BottomDockWidgetArea, self._output_dock, tools_area
@@ -253,12 +272,17 @@ class MainWindow(QMainWindow):
         # line collapsibles) lives here. Detachable like Output —
         # users who want a clean form view can collapse the extras /
         # cmd group boxes inside, or float the whole dock to a second
-        # monitor. Hidden until a tool is loaded.
+        # monitor. Hidden until a tool is loaded.  Same persistent-host
+        # pattern as ``_output_dock`` (see comment above).
         self._run_controls_dock = ads.CDockWidget(
             self._dock_manager, "Run controls"
         )
         self._run_controls_dock.setObjectName("RunControlsDock")
-        self._run_controls_dock.setWidget(QLabel(""))  # placeholder
+        self._run_controls_host = QWidget()
+        _rc_layout = QVBoxLayout(self._run_controls_host)
+        _rc_layout.setContentsMargins(0, 0, 0, 0)
+        _rc_layout.setSpacing(0)
+        self._run_controls_dock.setWidget(self._run_controls_host)
         self._run_controls_dock.setFeatures(_DOCK_FEATURES)
         self._dock_manager.addDockWidget(
             ads.BottomDockWidgetArea, self._run_controls_dock, form_area
@@ -747,28 +771,27 @@ class MainWindow(QMainWindow):
         if not self._form_dock.isVisible():
             self._form_dock.toggleView(True)
 
-        # Output dock: reparent the runner's output panel into it.
-        # v0.8.0a39+ -- only call toggleView when the dock is
-        # actually hidden.  Pre-a39, ``toggleView(True)`` was
-        # invoked unconditionally on every tool click, which (for
-        # docks that have been detached + floated) causes ads to
-        # re-show the floating window even when it was already
-        # visible -- the user sees a "popup window" appear with
-        # every click.  ``isVisible()`` is the correct guard.
+        # Output dock: reparent the runner's output panel into the
+        # PERSISTENT HOST (see __init__ for the rationale).  We add
+        # the panel to ``_output_host``'s layout instead of calling
+        # ``self._output_dock.setWidget(output)`` so QtAds never
+        # observes a content swap on the dock itself -- a floating
+        # dock receiving setWidget() re-shows its floating frame,
+        # which the user sees as "a new popup window every click."
+        # The host's layout is permanent; only its children change.
         output = runner.output_panel
         output.setParent(None)
-        self._output_dock.setWidget(output)
+        self._output_host.layout().addWidget(output)
         self._output_dock.setWindowTitle(f"Output — {runner._tool.name}")
         if not self._output_dock.isVisible():
             self._output_dock.toggleView(True)
 
-        # Run controls dock: reparent the bottom panel (extras + cmd
-        # line) into it. The runner's internal splitter still hosts the
-        # form on top; the dock now owns the bottom pane and can be
-        # floated, tabbed, or hidden independently.
+        # Run controls dock: same persistent-host pattern.  Reparent
+        # the runner's bottom panel (extras + cmd line) into
+        # ``_run_controls_host`` -- never call setWidget on the dock.
         bottom = runner.bottom_panel
         bottom.setParent(None)
-        self._run_controls_dock.setWidget(bottom)
+        self._run_controls_host.layout().addWidget(bottom)
         self._run_controls_dock.setWindowTitle(
             f"Run controls — {runner._tool.name}"
         )
@@ -855,27 +878,33 @@ class MainWindow(QMainWindow):
         ``toggleView(False)`` is called on the Output + Run-controls
         docks so they disappear.  When ``False``, the panels are
         returned to the runner's splitter but the DOCKS stay
-        visible.  ``_show_runner`` uses ``hide_docks=False``
-        because it's about to install a different runner -- and
-        toggling the docks off then immediately on creates a new
-        floating popup for users who have detached the docks
-        (the original a39 bug, only fully fixed once we stop the
-        off-on cycle for the cross-tool case too).
+        visible.
 
-        Callers:
-          * ``_show_runner``       -> hide_docks=False  (swap in place)
-          * ``_show_editor``       -> hide_docks=True   (switching to editor)
-          * ``_drop_cached_runner`` -> hide_docks=True  (no replacement)
+        Note (v0.8.0a41+): the persistent-host architecture in
+        ``_install_runner_panels`` means the docks no longer pop a
+        new floating frame when a different tool is installed, so
+        ``hide_docks`` is now purely about user-visible intent:
+
+          * ``_show_runner``       -> hide_docks=False  (about to swap
+            in another tool; keep the docks where they are so the user
+            sees continuity instead of a hide/re-show flicker).
+          * ``_show_editor``       -> hide_docks=True   (switching to
+            the field editor; no runner is active so the docks should
+            disappear).
+          * ``_drop_cached_runner`` -> hide_docks=True  (no replacement).
         """
         runner = self._active_runner
         if runner is None:
             return
+        # The output panel currently lives inside
+        # ``_output_host``'s layout (NOT directly under the dock --
+        # see __init__/install for the persistent-host rationale).
+        # ``setParent(None)`` is enough to detach it from the host;
+        # we then put it back into the runner's own splitter.
         output = runner.output_panel
         output.setParent(None)
         runner._inner_splitter.addWidget(output)
-        # Reattach the bottom (extras + cmd) panel to the runner's
-        # main layout so a re-installed runner finds it where
-        # ``_build_form_panel`` originally placed it.  v0.8.0a12+
+        # Same for the bottom (extras + cmd) panel.  v0.8.0a12+
         # uses ``_return_bottom_panel`` instead of
         # ``_bottom_splitter.addWidget`` because the splitter is gone.
         bottom = runner.bottom_panel

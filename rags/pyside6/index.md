@@ -63,6 +63,15 @@ subprocess oddities encountered while building V3.
   reading as a "new popup" to the user. Short-circuit reinstall
   cycles and guard `toggleView(True)` behind `isVisible()`.
   → `rags/lessons/qtads_toggleview_off_on_cycles_floating_dock.md`
+- [pyside6] **qtads_setwidget_cycles_floating_dock**:
+  `QtAds.CDockWidget.setWidget(new_widget)` on a CURRENTLY-FLOATING
+  dock also re-triggers the show-floating-frame path — independent
+  of the toggleView antipattern above. Fix: wrap a permanent host
+  `QWidget`+`QVBoxLayout` into the dock once, then reparent
+  runner-owned panels in/out of the host's layout. The dock's widget
+  never changes → no re-show. Hit on every per-tool content swap in
+  v0.8.0a39/a40; fixed in a41.
+  → `rags/lessons/qtads_setwidget_cycles_floating_dock.md`
 - [pyside6] **qheaderview_right_click_separate_signal**:
   `QTreeWidget.customContextMenuRequested` fires from the viewport,
   NOT from `QHeaderView`. Wire `header().setContextMenuPolicy` +
