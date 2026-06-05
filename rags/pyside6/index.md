@@ -72,18 +72,17 @@ subprocess oddities encountered while building V3.
   never changes → no re-show. Hit on every per-tool content swap in
   v0.8.0a39/a40; fixed in a41.
   → `rags/lessons/qtads_setwidget_cycles_floating_dock.md`
-- [pyside6] **qmenu_freeze_under_floating_dialog**: when a
-  frameless QDialog is shown next to an open QMenu (per-item
-  context panel), the menu stays VISIBLE and keeps responding to
-  mouse/hover/wheel/key events -- the user moves the mouse, the
-  highlight drifts away from the item the dialog belongs to, and
-  the visual association breaks. Fix: install a
-  ``QApplication``-level event filter that swallows interactive
-  events on every ``QMenu`` instance while the dialog is alive;
-  pin the right-clicked action as active before showing the
-  dialog; remove the filter on ``dlg.finished``. Strong ref on the
-  dialog or the filter is GC'd mid-life. Use ``finished`` not
-  ``destroyed`` (the C++ object is gone in destroyed).
+- [pyside6] **qmenu_freeze_under_floating_dialog**: a QMenu
+  CANNOT be "frozen visible" under a sibling dialog. Qt's
+  popup-grab on the menu intercepts every mouse press in the app
+  (including the dialog's) and an app-level event filter that
+  swallows mouse events on QMenu instances breaks dialog clicks
+  too. The popup grab is non-negotiable -- the only ways to make
+  the dialog clickable are (a) close the menu, or (b) hide it and
+  overlay a screenshot widget. ScripTree v0.8.0a43 closes the
+  menu on dialog-open (walk up to the root popup and ``close()``)
+  and does NOT reopen on dismiss. v0.8.0a42 tried the freeze and
+  it broke clicks -- lesson rewritten with the failure analysis.
   → `rags/lessons/qmenu_freeze_under_floating_dialog.md`
 - [pyside6] **qheaderview_right_click_separate_signal**:
   `QTreeWidget.customContextMenuRequested` fires from the viewport,

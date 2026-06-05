@@ -1096,51 +1096,19 @@ def build_tree_popup_menu(hex_win) -> QMenu:  # noqa: ANN001 — CellWindow
 # we ALSO install via ``aboutToShow`` so freshly-opened submenus
 # pick up the filter too.
 
-class _MenuFreezeFilter(QObject):
-    """Swallow interactive events on every ``QMenu`` instance.
-
-    Installed on ``QApplication`` for the lifetime of the per-item
-    context dialog (v0.8.0a42+).  While installed, the underlying
-    cell tool menu stays visible at its current position but cannot
-    be navigated -- mouse-move / hover / press / wheel / key /
-    context-menu events targeting any QMenu are dropped, so the
-    right-clicked action remains the active highlight and the user
-    can't accidentally drift the highlight to a different item
-    while the per-item dialog is open.
-
-    Why an app-level filter?  Qt routes mouse events to the topmost
-    QMenu under the cursor, not to the menu we showed the dialog
-    for; freezing the whole tree (top menu + every submenu) with
-    one filter is simpler and more robust than tracking which
-    specific menu(s) belong to the active popup chain.
-
-    Events NOT swallowed:
-      * Paint, resize, show/hide -- the menu must still repaint as
-        the dialog moves over it and Qt's hide-on-dialog-close path
-        must still work.
-      * Anything not targeting a QMenu (the per-item dialog itself,
-        the cell window, the rest of the app are untouched).
-    """
-
-    _FREEZE_TYPES = frozenset({
-        QEvent.Type.MouseMove,
-        QEvent.Type.HoverMove,
-        QEvent.Type.HoverEnter,
-        QEvent.Type.HoverLeave,
-        QEvent.Type.MouseButtonPress,
-        QEvent.Type.MouseButtonRelease,
-        QEvent.Type.MouseButtonDblClick,
-        QEvent.Type.Wheel,
-        QEvent.Type.KeyPress,
-        QEvent.Type.KeyRelease,
-        QEvent.Type.ShortcutOverride,
-        QEvent.Type.ContextMenu,
-    })
-
-    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
-        if isinstance(obj, QMenu) and event.type() in self._FREEZE_TYPES:
-            return True  # swallow -- menu does not respond
-        return False
+# NOTE: a v0.8.0a42 ``_MenuFreezeFilter`` class lived here briefly
+# (an app-level event filter that swallowed mouse / hover / wheel /
+# key events on every QMenu).  The idea was to keep the underlying
+# tool menu visible while the per-item context dialog was open.  It
+# was REMOVED in a43 because Qt's popup-grab routes the dialog's own
+# mouse events through the active QMenu's event loop -- the filter
+# swallowed those too and the dialog's buttons became unclickable.
+#
+# The correct shape is in ``_show_for_action`` below: close the menu
+# explicitly when the dialog opens (which releases the popup grab),
+# and don't reopen on dismissal.  The lesson at
+# ``rags/lessons/qmenu_freeze_under_floating_dialog.md`` documents
+# both why the freeze idea was tempting and why it can't work.
 
 
 class _PerItemContextFilter(QObject):
@@ -1266,17 +1234,19 @@ class _PerItemContextFilter(QObject):
         except Exception:  # noqa: BLE001
             pass
 
-        # v0.8.0a30+ -- do NOT explicitly close the parent menu
-        # here.  Qt closes it automatically when our context dialog
-        # gets focus; we then reopen it via the dialog's
-        # ``finished`` signal so the user can keep using the
-        # tree popup after the right-click action.  See
-        # ``_show_for_action``'s ``_reopen_parent`` closure below.
-        #
-        # v0.8.0a42+ -- pass ``obj`` (the menu) and ``act`` (the
-        # right-clicked action) through so the dialog can freeze
-        # the menu in place AND keep the user's right-clicked item
-        # visually highlighted while the dialog is open.
+        # v0.8.0a43+ -- pass ``obj`` (the menu) and ``act`` (the
+        # right-clicked action) through so ``_show_for_action``
+        # can close the menu BEFORE showing the dialog.  Without
+        # the close, Qt's popup-grab on the menu intercepts every
+        # mouse press in the application (the dialog's buttons
+        # included) and the dialog appears unclickable.  History
+        # of this approach -- a30 relied on Qt auto-closing the
+        # menu on focus change (didn't work on all builds), a42
+        # tried to keep it visible-but-frozen via an app-level
+        # event filter (broke dialog clicks), a43 explicitly
+        # closes the menu which is the only design that handles
+        # all three goals: dialog clickable, menu doesn't drift,
+        # no spurious reopen on dismiss.
         self._show_for_action(ctx, global_pt, obj, act)
         return True
 
@@ -1312,15 +1282,18 @@ class _PerItemContextFilter(QObject):
         before we re-show, avoiding a race where Qt receives the
         re-show before it finished closing.
 
-        ``source_menu`` / ``source_action`` (v0.8.0a42+) -- the
-        QMenu the user right-clicked and the QAction under the
-        cursor at right-click time.  Used to (1) install the
-        ``_MenuFreezeFilter`` so the menu stops responding to
-        mouse / keyboard input while the dialog is open, and (2)
-        pin the right-clicked action as the menu's active item so
-        it stays visually highlighted (the user's mental "this
-        dialog is for THIS item" association doesn't drift).
-        Both default to ``None`` so older callers still work.
+        ``source_menu`` / ``source_action`` (v0.8.0a42+, semantics
+        revised in a43) -- the QMenu the user right-clicked and
+        the QAction under the cursor at right-click time.  Used in
+        a43+ to walk up to the root popup and ``close()`` it BEFORE
+        showing the dialog: this releases Qt's popup mouse grab so
+        the dialog's own buttons receive clicks normally.  Without
+        the close, the QMenu's modal event loop intercepts every
+        mouse press in the application and the dialog appears
+        unclickable.  Both default to ``None`` so older callers
+        still work (they get the old "leave the menu alone" path,
+        which is fine for tests that don't actually display the
+        dialog).
 
         Entries shown:
 
@@ -1464,71 +1437,58 @@ class _PerItemContextFilter(QObject):
             )
         outer.addWidget(btn_uninstall)
 
-        # --- Reopen parent tree popup on close -------------------
-        # When the user dismisses this dialog -- via X, an action,
-        # or click-outside -- bring the tree popup back so they can
-        # right-click another tool without re-clicking the cell.
-        # 50 ms delay lets Qt finish the dialog's teardown before
-        # we re-show; without it the new popup can land under the
-        # closing dialog's z-order.
-        def _reopen_parent() -> None:
+        # ---- v0.8.0a43+: close the tool menu, do NOT reopen ------
+        #
+        # The history of this surface, briefly:
+        #
+        # * pre-a30: explicit ``menu.close()`` + no reopen.  Simple
+        #   but the user had no way to right-click another tool
+        #   without re-clicking the cell -- mildly annoying.
+        # * a30-a41: rely on Qt to auto-close the menu when the
+        #   dialog gets focus, then re-open via a 50 ms timer on
+        #   ``dlg.finished`` so the user could chain right-clicks.
+        #   On the user's Qt build the menu actually STAYED open
+        #   (the dialog's ``Qt.Tool`` flag doesn't aggressively
+        #   pull focus) and the user could drift its highlight by
+        #   moving the mouse -- the "action menu gets left behind"
+        #   complaint.
+        # * a42: tried to keep the menu visible but FROZEN via an
+        #   app-level ``_MenuFreezeFilter`` that swallowed every
+        #   interactive event on QMenu instances.  That fixed the
+        #   drift but broke clicking the dialog itself, because
+        #   Qt's popup-grab routes every mouse event in the
+        #   application through the active QMenu's event loop --
+        #   we swallowed the dialog's clicks too.
+        # * a43 (this code): walk back to the simplest design that
+        #   actually works.  Close the menu when the dialog opens
+        #   (releases the popup grab so the dialog clicks land);
+        #   do NOT reopen on dismissal (the user reported the
+        #   reopen as a spurious popup).  The dialog's title bar
+        #   already shows the tool name so the visual association
+        #   "this dialog is for THIS tool" doesn't need the menu
+        #   to remain on screen.
+        #
+        # We walk up the menu chain to ``activePopupWidget()``
+        # because closing only the deepest submenu the user
+        # right-clicked in would leave the parent menus open --
+        # ``close()`` on the root QMenu cascades to all open
+        # children.
+        if source_menu is not None:
             try:
-                # Guard against re-showing when the cell already
-                # has a fresh popup (race protection).
-                if getattr(
-                    self._hex_win, "_tree_popup_menu", None,
-                ) is not None:
-                    return
-                # Local import avoids the module-level circular
-                # since ``show_tree_popup_for`` is defined below
-                # in this same file.
-                show_tree_popup_for(self._hex_win)
+                root_menu = source_menu
+                while True:
+                    parent = root_menu.parent()
+                    if isinstance(parent, QMenu) and parent.isVisible():
+                        root_menu = parent
+                    else:
+                        break
+                # ``close()`` is safer than ``hide()`` because it
+                # also tears down the modal popup event loop the
+                # QMenu was running via ``exec()`` -- without that,
+                # the cell's call site is still blocked.
+                root_menu.close()
             except Exception as exc:  # noqa: BLE001
-                _log(f"reopen-parent-on-context-close: {exc!r}")
-
-        dlg.finished.connect(
-            lambda _r=0: QTimer.singleShot(50, _reopen_parent)
-        )
-
-        # ---- v0.8.0a42+: freeze the underlying menu in place -----
-        # Pin the right-clicked action as the menu's active item so
-        # the highlight stays anchored to the action this dialog
-        # belongs to, then install a QApplication-level
-        # ``_MenuFreezeFilter`` that swallows mouse / keyboard /
-        # wheel events on every open QMenu.  Both are removed when
-        # the dialog finishes (X clicked, action picked, click
-        # outside, etc.) so the menu can be interacted with again
-        # if ``_reopen_parent`` was a no-op (the menu was still
-        # alive and the guard skipped the re-show).
-        if source_menu is not None and source_action is not None:
-            try:
-                source_menu.setActiveAction(source_action)
-            except Exception as exc:  # noqa: BLE001
-                _log(f"setActiveAction failed: {exc!r}")
-        _app = QApplication.instance()
-        if _app is not None:
-            freezer = _MenuFreezeFilter(_app)
-            _app.installEventFilter(freezer)
-            # Keep a strong ref so the GC doesn't drop the filter
-            # mid-dialog -- the QObject itself can't anchor to the
-            # dialog because we want it on the application, not
-            # parented to the dialog.
-            dlg._st_menu_freezer = freezer  # type: ignore[attr-defined]
-
-            def _remove_freezer(_r: int = 0) -> None:
-                app = QApplication.instance()
-                flt = getattr(dlg, "_st_menu_freezer", None)
-                if app is not None and flt is not None:
-                    try:
-                        app.removeEventFilter(flt)
-                    except Exception as exc:  # noqa: BLE001
-                        _log(f"removeEventFilter failed: {exc!r}")
-                try:
-                    delattr(dlg, "_st_menu_freezer")
-                except Exception:  # noqa: BLE001
-                    pass
-
-            dlg.finished.connect(_remove_freezer)
+                _log(f"close-source-menu failed: {exc!r}")
 
         # Position the dialog at the right-click point.  Clamp to
         # the screen's available geometry so the dialog isn't born

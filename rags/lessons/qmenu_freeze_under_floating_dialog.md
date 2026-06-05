@@ -1,133 +1,132 @@
-# Freezing a QMenu in place while a sibling dialog has focus
+# A QMenu cannot be "frozen but visible" under a sibling dialog — close it instead
 
 **Tag**: `pyside6`
-**Date**: 2026-06-05
-**Versions affected**: pre-v0.8.0a42 — fixed in v0.8.0a42
+**Date**: 2026-06-05 (revised after v0.8.0a42 → a43 walkback)
+**Versions affected**: v0.8.0a42 — replaced by an explicit-close design in a43
 
 ## TL;DR
 
-When you pop a frameless `QDialog` next to an open `QMenu` (e.g. for a
-per-item context panel), the menu stays VISIBLE and continues to
-respond to mouse-move / hover / wheel / key events. The user moves
-their mouse toward the dialog, drifts over the menu, and watches the
-highlighted action drift away from the one their dialog belongs to —
-the visual association between "this dialog" and "this menu item"
-breaks immediately.
+When you show a frameless `QDialog` next to an open `QMenu` (e.g. for
+a per-item context panel), there is **no way** to keep the menu
+visible AND let the user click the dialog's buttons. Qt's popup-grab
+on the menu intercepts every mouse press in the application — the
+dialog's own clicks are routed through the menu's modal event loop
+before they reach the dialog.
 
-**Fix**: while the dialog is alive, install a QApplication-level event
-filter that swallows interactive events targeted at every `QMenu`
-instance. Pin the right-clicked action as the menu's active item once
-so the highlight stays anchored. Remove the filter on `dialog.finished`.
+You have two real options:
 
-This is independent of the
-[per-action right-click filter](qmenu_per_action_right_click.md)
-that catches the right-click in the first place — that one only
-intercepts a brief event cycle, this one suspends ALL menu
-interaction for the lifetime of a sibling window.
+1. **Close the menu when the dialog opens.** Releases the popup grab,
+   the dialog becomes clickable, the user mentally bridges "this
+   dialog is for the item I right-clicked" via the dialog's title.
+   This is the design ScripTree shipped in v0.8.0a43.
+2. **Hide the menu and overlay a screenshot widget.** Same end-state
+   visually as the "frozen" idea but the screenshot is a regular
+   `QLabel` with no event loop, no popup grab, no input. More work,
+   only worth it if the user really, really needs the menu to stay
+   on screen.
 
-## Why an APP-level filter, not per-menu?
+The "install an app-level event filter and swallow events on
+QMenu instances" approach (v0.8.0a42) is tempting but broken — the
+swallowed events include the dialog's clicks. See the failure
+section below.
 
-Qt routes mouse events to the topmost `QMenu` *under the cursor*, not
-to the menu we showed the dialog for. A submenu the user hovered into
-will be the actual recipient of mouse-move events, and a filter only
-on the top menu won't see them. The popup chain can also contain
-menus we don't directly know about (Qt's own submenus opened lazily).
+## Why the freeze idea fails
 
-Filtering at `QApplication.installEventFilter` level and gating on
-`isinstance(obj, QMenu)` covers every open menu in one shot.
+The intuition was: install a QObject event filter on `QApplication`
+that returns `True` (swallow) for `MouseMove` / `HoverMove` /
+`MouseButtonPress` / `KeyPress` / etc. whenever the target is a
+`QMenu`. Menu stays painted, can't navigate. Dialog can be clicked.
 
-## The freezer
+What actually happens: when a `QMenu` is shown via `exec()`, it
+becomes the **active popup widget** (`QApplication.activePopupWidget()`)
+and acquires an **implicit mouse grab**. Qt routes every mouse event
+in the application to the active popup, regardless of which window
+the cursor is over. The dialog's button is under the cursor, the
+user clicks — Qt sends the press to the QMenu first, our filter sees
+it, swallows it, the dialog never receives the event.
 
-```python
-class _MenuFreezeFilter(QObject):
-    _FREEZE_TYPES = frozenset({
-        QEvent.Type.MouseMove,
-        QEvent.Type.HoverMove,
-        QEvent.Type.HoverEnter,
-        QEvent.Type.HoverLeave,
-        QEvent.Type.MouseButtonPress,
-        QEvent.Type.MouseButtonRelease,
-        QEvent.Type.MouseButtonDblClick,
-        QEvent.Type.Wheel,
-        QEvent.Type.KeyPress,
-        QEvent.Type.KeyRelease,
-        QEvent.Type.ShortcutOverride,
-        QEvent.Type.ContextMenu,
-    })
+Variants that DON'T fix it:
 
-    def eventFilter(self, obj, event) -> bool:
-        if isinstance(obj, QMenu) and event.type() in self._FREEZE_TYPES:
-            return True            # swallow -- menu does not respond
-        return False                # everything else flows normally
-```
+- Filtering only events whose `event.pos()` lies inside the menu's
+  rect: still misses, because Qt's popup-grab redirects the event to
+  the menu regardless of where it came from. `event.pos()` is the
+  position relative to the menu, often well outside any sensible
+  bound.
+- `WA_TransparentForMouseEvents` on the menu: hit-testing is at the
+  widget level, the popup grab is at the Qt-event-routing level —
+  the attribute affects which child widget gets the event, not
+  whether the popup chain receives it at all.
+- `setEnabled(False)` on the menu: greys out every action visually
+  (ugly) and may not even break the grab.
 
-**Events deliberately NOT swallowed**: `Paint`, `Resize`, `Show`,
-`Hide`. The menu must still repaint as the dialog moves over it, and
-Qt's hide-on-dialog-close path must still work. Events on non-`QMenu`
-objects (the dialog itself, the rest of the app) pass through
-untouched.
+The mouse grab is the load-bearing piece. To break it, you must end
+the popup loop — either by closing the menu, hiding it via
+`hide()` (which Qt treats as a popup dismiss), or by destroying it.
+None of those are "frozen but visible." The popup grab is
+non-negotiable.
 
-`ShortcutOverride` is in the swallow set because without it a keypress
-inside the menu's event loop still triggers a shortcut-bound action
-even when `KeyPress` is dropped.
-
-## Install/remove pairing
+## What v0.8.0a43 does
 
 ```python
-_app = QApplication.instance()
-freezer = _MenuFreezeFilter(_app)
-_app.installEventFilter(freezer)
-dlg._st_menu_freezer = freezer    # keep a strong ref on the dialog
-
-def _remove(_r: int = 0) -> None:
-    app = QApplication.instance()
-    flt = getattr(dlg, "_st_menu_freezer", None)
-    if app is not None and flt is not None:
-        app.removeEventFilter(flt)
-    try: delattr(dlg, "_st_menu_freezer")
-    except Exception: pass
-
-dlg.finished.connect(_remove)
+# In _show_for_action, BEFORE dlg.show():
+if source_menu is not None:
+    root_menu = source_menu
+    while True:
+        parent = root_menu.parent()
+        if isinstance(parent, QMenu) and parent.isVisible():
+            root_menu = parent
+        else:
+            break
+    root_menu.close()   # cascades to all open submenus; releases grab
 ```
 
-Two anchors that matter:
+`close()` is preferred over `hide()` because it also tears down the
+modal popup event loop the `QMenu` was running via `exec()` — without
+that, the cell window's call site (`menu.exec(global_pt)`) is still
+blocked.
 
-1. **Strong ref on the dialog** — `_app.installEventFilter` doesn't
-   take ownership; without `dlg._st_menu_freezer = freezer` the
-   `QObject` is eligible for GC the moment the local goes out of
-   scope, and your menus get un-frozen seconds into the dialog.
-2. **`finished` not `destroyed`** — `destroyed` fires after the C++
-   object is gone, so `getattr(dlg, ...)` raises. `finished` runs
-   while the Python wrapper is still valid and is emitted on every
-   close path (X, accept, reject, escape).
+We walk up to the root menu because the user might have right-clicked
+inside a submenu; closing only the deepest submenu would leave the
+parents open and they'd still hold the popup grab.
 
-## Anchoring the highlight
+We do **not** reopen the menu when the dialog dismisses. The earlier
+v0.8.0a30→a41 design did, via a 50 ms `QTimer` on `dlg.finished`,
+but the user reported the reopen as a spurious popup ("then the tool
+menu pops up again"). The dialog's title bar already shows the tool
+name so the visual association doesn't need the menu to stay on
+screen, and the user can re-click the cell if they want to right-click
+another tool.
 
-Before showing the dialog, pin the right-clicked action as the menu's
-active item:
+## Why the dialog itself wasn't the problem (debunking a tempting
+red herring)
 
-```python
-source_menu.setActiveAction(source_action)
-```
+It's natural to suspect window flags: `Qt.Tool | FramelessWindowHint
+| WindowStaysOnTopHint` doesn't aggressively pull focus, so maybe Qt
+doesn't auto-close the menu when the dialog appears. That's true on
+recent Qt builds — but it's not really the menu's "focus" that
+matters, it's the popup grab. Changing the dialog's flags to
+`Qt.Dialog` (which would pull focus) does cause Qt's popup auto-close
+to fire, but only as a side effect; relying on it is platform-fragile.
+Explicit `menu.close()` is the deterministic version.
 
-Without this, the highlight is wherever the user's mouse happened to
-be when they right-clicked, which is usually correct but isn't
-guaranteed. Calling `setActiveAction` once makes the association
-deterministic. The freezer then keeps it pinned because every event
-that would shift the highlight gets swallowed.
+## Three-attempt history (don't repeat it)
 
-## Where this lives in ScripTree
+* **pre-a30**: explicit `menu.close()` + no reopen. Worked but no
+  way to chain right-clicks. Replaced.
+* **a30-a41**: relied on Qt to auto-close the menu when the dialog
+  got focus, then re-opened via a 50 ms timer on `dlg.finished` so
+  the user could chain right-clicks. The menu stayed open on some Qt
+  builds; the highlight drifted with the cursor; the reopen was
+  spurious.
+* **a42**: tried to keep the menu visible-but-frozen via an app-level
+  `_MenuFreezeFilter`. Swallowed mouse / hover / wheel / key events
+  on every QMenu instance. Drift fixed, dialog clicks dead.
+* **a43** (current): close the menu, no reopen. Simple, works,
+  shippable.
 
-- `scriptree/shell/tree_popup.py`:
-  - `_MenuFreezeFilter` (sibling of `_PerItemContextFilter`)
-  - `_show_for_action(ctx, global_pt, source_menu, source_action)` —
-    extended signature so the right-click handler can plumb the menu
-    + action through
-  - Install/remove happens in `_show_for_action`'s tail, gated on
-    `source_menu is not None and source_action is not None` so older
-    callers still work.
+## User report (verbatim, both rounds)
 
-## User report (verbatim)
+Round 1 (a41 problem → motivated a42's freeze):
 
 > "When I left click on a cell and pop up the tool menu, then right
 > click a tool in the menu to bring up the action menu for that
@@ -136,17 +135,27 @@ that would shift the highlight gets swallowed.
 > end up navigating the tool menu and the action menu get's left
 > behind."
 
-## When to apply
+Round 2 (a42's freeze → motivated a43's walkback):
 
-Any time you show a sibling popup (dialog, panel, tooltip-like
-window) that should "belong to" one item of an open QMenu. Without
-this freeze, the menu acts independently and the visual link breaks
-the moment the user moves the mouse.
+> "Now when I right click the tool in the tool menu, I can't click
+> on anything in the action menu until I click on the x on the tool
+> menu to close it. then the other menu becomes active. after this I
+> can click on the items in the action menu and they activate, but
+> then the tool menu-pops up again."
 
 ## Cross-reference
 
 - `rags/lessons/qmenu_per_action_right_click.md` — how the
-  right-click on a QAction is captured in the first place
-- `rags/lessons/qmenu_outside_click_redispatches.md` — Qt's quirky
-  re-dispatch behaviour when menus close; relevant if you ever want
-  to **dismiss** the menu instead of freezing it
+  right-click on a `QAction` is captured in the first place (event
+  filter on every QMenu in the popup tree)
+- `rags/lessons/qmenu_outside_click_redispatches.md` — Qt's
+  outside-click rebroadcast quirk when menus close
+
+## File pointers
+
+- `scriptree/shell/tree_popup.py`:
+  - `_show_for_action(ctx, global_pt, source_menu, source_action)`
+    — the close-menu-before-show path lives in the tail of this
+    method
+  - The note where `_MenuFreezeFilter` used to be — kept as a
+    comment block so future me doesn't re-discover the dead-end
