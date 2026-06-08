@@ -1,0 +1,32 @@
+{
+  "schema_version": 3,
+  "name": "Regex tester",
+  "description": "Demo of the v0.8.0a48+ 'regex' widget. Type a pattern in the Pattern field and watch the validity badge turn green / red as you type. Click the box icon to open the regex helper (Test / Library / Reference). When you Run, the tool applies the pattern to the Sample text and prints every match plus its captures.",
+  "executable": "python",
+  "working_directory": ".",
+  "argument_template": [
+    "regex_tester.py",
+    "{pattern}",
+    "{sample}"
+  ],
+  "params": [
+    {
+      "id": "pattern",
+      "label": "Pattern",
+      "description": "Regex pattern. Validation is live: green check = parses, red cross = parse error (hover the field to see the error message). Click the box icon on the right to open the helper dialog (test against sample input, browse the built-in library, or save patterns of your own).",
+      "type": "string",
+      "widget": "regex",
+      "required": true,
+      "default": "\\b\\w+@\\w+\\.\\w+\\b"
+    },
+    {
+      "id": "sample",
+      "label": "Sample text",
+      "description": "Input text to run the pattern against.",
+      "type": "string",
+      "widget": "textarea",
+      "required": true,
+      "default": "Reach me at alice@example.com or bob@scriptree.dev.\nIgnore non-matches like @no.tld or just-a-word.\nThe finalist was carol@regex.io -- 5/5 stars."
+    }
+  ]
+}

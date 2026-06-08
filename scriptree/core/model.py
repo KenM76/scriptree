@@ -140,12 +140,27 @@ class Widget(str, Enum):
     # the Add button opens ``QFileDialog.getOpenFileNames`` and the
     # param's ``file_filter`` is applied.
     FILE_LIST = "file_list"
+    # v0.8.0a48+ — regex pattern field.  A QLineEdit with live
+    # validation (red border + tooltip on parse error, green badge
+    # when valid), a recent-patterns dropdown, optional flags
+    # toggles, and a wrench button that opens the regex helper
+    # dialog (Test / Library / Reference tabs).  The dialog's
+    # Library tab is sourced from the vendored CommonRegex package
+    # plus the user's personal library at
+    # ``%APPDATA%/ScripTree/regex_library.json``.  See
+    # ``scriptree/ui/widgets/regex_widget.py`` for the widget and
+    # ``scriptree/ui/widgets/regex_helper.py`` for the dialog.
+    # On the wire this still emits a plain string (the regex
+    # pattern itself), so tool downstreams that take a regex as a
+    # CLI arg see no change -- the widget is purely an authoring
+    # aid for the user.
+    REGEX = "regex"
 
 
 # Which widgets are valid for each param type. The editor uses this to
 # constrain the widget dropdown when the user changes the type.
 VALID_WIDGETS: dict[ParamType, tuple[Widget, ...]] = {
-    ParamType.STRING: (Widget.TEXT, Widget.TEXTAREA),
+    ParamType.STRING: (Widget.TEXT, Widget.TEXTAREA, Widget.REGEX),
     ParamType.INTEGER: (Widget.NUMBER, Widget.TEXT),
     ParamType.NUMBER: (Widget.NUMBER, Widget.TEXT),
     ParamType.BOOLEAN: (Widget.CHECKBOX,),

@@ -1606,6 +1606,15 @@ def build_widget_for(param: ParamDef) -> ParamWidget:
         WidgetKind.FOLDER_LIST: FolderListWidget,
         WidgetKind.FILE_LIST: FileListWidget,
     }
+    # v0.8.0a48+ — regex widget.  Lazy import to keep cold-start
+    # cheap; the regex_widget module pulls in QRegularExpression
+    # which is otherwise unused by the param-widget primitives.
+    if param.widget == WidgetKind.REGEX:
+        from scriptree.ui.widgets.regex_widget import RegexWidget
+        widget = RegexWidget(param)
+        tooltip = _build_tooltip(param)
+        _apply_tooltip_recursively(widget, tooltip)
+        return widget
     cls = mapping.get(param.widget, TextWidget)
     widget = cls(param)
     tooltip = _build_tooltip(param)

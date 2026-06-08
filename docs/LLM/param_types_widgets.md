@@ -46,6 +46,7 @@ accept the files.
 | `folder`     | line edit + Browse (`getExistingDirectory`) | directories     |
 | `folder_list` | `QListWidget` + Add / Remove / Up / Down | ordered list of folders (search paths, ignore lists, library roots) |
 | `file_list`  | `QListWidget` + Add / Remove / Up / Down | ordered list of files |
+| `regex`      | `QLineEdit` + ✓/✗ badge + 🔧 helper button | regex pattern fields — live validation, helper dialog with Test / Library / Reference tabs (see [regex_widget.md](regex_widget.md)) |
 
 Widget names mirror the [HTML5 form-element vocabulary][html5-forms]
 where there's a direct analogue — `text`, `textarea`, `number`,
@@ -78,7 +79,7 @@ implementation's fallback.
 
 | type          | legal widgets                       |
 |---------------|-------------------------------------|
-| `string`      | `text`, `textarea`                  |
+| `string`      | `text`, `textarea`, `regex`         |
 | `integer`     | `number`, `text`                    |
 | `number`      | `number`, `text`                    |
 | `boolean`     | `checkbox`                          |

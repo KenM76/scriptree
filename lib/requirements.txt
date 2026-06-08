@@ -20,3 +20,11 @@ PySide6==6.10.2
 # Imported as `PySide6QtAds`. Built on top of PySide6; version must be
 # compatible with the pinned PySide6 (QtAds 4.5.x pins PySide6 6.10.x).
 PySide6-QtAds==4.5.0.2
+
+# --- Regex helper (v0.8.0a48+) ---
+# CommonRegex — single-file (~6 KB), pure-Python collection of
+# pre-built tested regex patterns (email, phone, link, date,
+# ipv4, time, money, btc-address, credit-card, etc.).  Used by
+# the regex helper dialog's "Library" tab to give users one-click
+# access to common patterns.  MIT licensed.  No transitive deps.
+CommonRegex==1.5.4
