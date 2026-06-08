@@ -81,3 +81,13 @@ diagnostics conventions.
   and had to revert. Ask before editing; consult
   `docs/LLM/glossary.md`; quote the referent back to confirm.
   → `rags/lessons/vocabulary_disambiguation_before_editing.md`
+- [v3-process] **pip_target_existing_dir_clobbers_siblings**:
+  ``pip install --target lib/pypi`` into the live vendor dir
+  silently DELETES sibling-package files (PySide6 .exe entries
+  vanished when CommonRegex was installed this way during
+  v0.8.0a48).  Workaround when ``update_lib.py --upgrade`` is
+  blocked by a Python process holding files: install to a
+  ``mktemp -d`` first, then ``cp -r`` the result into
+  ``lib/pypi/``.  Always ``git status --short | grep '^.D'``
+  after vendored-pip installs to catch the collision.
+  → `rags/lessons/pip_target_existing_dir_clobbers_siblings.md`
