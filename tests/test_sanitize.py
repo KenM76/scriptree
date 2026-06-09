@@ -1,7 +1,9 @@
 """Tests for the input sanitization module (core/sanitize.py)."""
 from __future__ import annotations
 
-from scriptree.core.sanitize import sanitize_all_values, sanitize_value
+from scriptree.core.sanitize import (
+    sanitize_all_values, sanitize_all_values_detailed, sanitize_value,
+)
 
 
 class TestSanitizeValue:
@@ -93,3 +95,65 @@ class TestSanitizeAllValues:
             labels={"output": "Output"},
         )
         assert any("traversal" in w for w in warnings)
+
+
+class TestRegexFieldsAreExempt:
+    """v0.8.0a49+ -- regex-widget fields skip the sanitizer entirely
+    because their valid content is full of ``_SHELL_META`` characters
+    (``|`` ``(`` ``)`` ``{`` ``}`` ``$`` etc.).  Adding warnings for
+    every metacharacter in a regex was 100% false-positive noise.
+    The skip is independent of the global ``is_globally_muted``
+    flag.
+    """
+
+    def test_regex_field_with_metacharacters_produces_no_warnings(
+        self,
+    ) -> None:
+        warnings = sanitize_all_values(
+            {"pattern": r"(foo|bar){2,5}$"},
+            labels={"pattern": "Pattern"},
+            regex_ids={"pattern"},
+        )
+        assert warnings == [], (
+            f"regex field should be skipped, got: {warnings}"
+        )
+
+    def test_regex_skip_does_not_affect_other_fields(self) -> None:
+        warnings = sanitize_all_values(
+            {
+                "pattern": r"(foo|bar){2,5}$",   # regex -- skipped
+                "name": "evil;rm -rf /",          # plain -- still flagged
+            },
+            labels={"pattern": "Pattern", "name": "Name"},
+            regex_ids={"pattern"},
+        )
+        # The plain "name" field should still produce warnings;
+        # only the regex field is exempt.
+        assert any("Name" in w for w in warnings)
+        assert not any("Pattern" in w for w in warnings)
+
+    def test_detailed_variant_also_skips_regex_fields(self) -> None:
+        detailed = sanitize_all_values_detailed(
+            {
+                "pat": r"^\d+$",
+                "shell": "echo $HOME",
+            },
+            labels={"pat": "Pattern", "shell": "Shell"},
+            regex_ids={"pat"},
+        )
+        fids = [fid for _w, fid in detailed]
+        assert "pat" not in fids
+        # The shell field's ``$`` should still trigger a warning.
+        assert "shell" in fids
+
+    def test_regex_ids_unset_keeps_old_behaviour(self) -> None:
+        """When ``regex_ids`` is not passed (older call-sites), the
+        sanitizer behaves exactly as before -- nothing gets
+        silently skipped."""
+        warnings_without_skip = sanitize_all_values(
+            {"pattern": r"(foo|bar)"},
+            labels={"pattern": "Pattern"},
+        )
+        # ``(`` and ``)`` and ``|`` are all in _SHELL_META, so
+        # without the regex exemption we MUST see warnings.
+        assert len(warnings_without_skip) > 0

@@ -73,9 +73,17 @@ def isolated_settings(monkeypatch, tmp_path: Path):
 
 class TestStorageLayer:
 
-    def test_global_mute_default_false(self) -> None:
+    def test_global_mute_default_true_after_a49(self) -> None:
+        """v0.8.0a49 flipped the unset default from False to True --
+        on a fresh install the sanitization warning dialog is OFF.
+
+        Users who explicitly chose either way before a49 keep
+        their stored value; only the never-touched fallback
+        changed.  See ``sanitize_suppression.is_globally_muted``
+        docstring for the rationale.
+        """
         from scriptree.core import sanitize_suppression as supp
-        assert supp.is_globally_muted() is False
+        assert supp.is_globally_muted() is True
 
     def test_global_mute_set_get(self) -> None:
         from scriptree.core import sanitize_suppression as supp
@@ -155,6 +163,11 @@ class TestFilterPredicates:
         self, tmp_path: Path,
     ) -> None:
         from scriptree.core import sanitize_suppression as supp
+        # v0.8.0a49+ flipped the unset global default to True; that
+        # makes ``should_skip_dialog`` return True for every path
+        # by default.  Pin globally-muted=False so this test
+        # exercises the per-tool dimension specifically.
+        supp.set_globally_muted(False)
         p = tmp_path / "x.scriptree"
         p.write_text("{}", encoding="utf-8")
         supp.mute_tool(str(p))
@@ -327,6 +340,11 @@ class TestDialogCapabilityGate:
                     break
             return QDialog.DialogCode.Accepted
 
+        # v0.8.0a49+ flipped the unset default to True; explicitly
+        # set False so this precondition is independent of the
+        # module-level default and the test exercises the dialog
+        # path proper.
+        supp.set_globally_muted(False)
         assert supp.is_globally_muted() is False
         with self._mock_perms(suppress_sanitization_warnings=True), \
                 patch.object(QDialog, "exec", fake_exec):
@@ -400,6 +418,12 @@ class TestDialogCapabilityGate:
     def test_cancel_does_not_persist(self, tmp_path: Path) -> None:
         from scriptree.core import sanitize_suppression as supp
         from scriptree.core.permissions import PermissionSet
+        # v0.8.0a49+ flipped the unset global default to True; pin
+        # globally-muted=False explicitly so this test verifies that
+        # the cancel path doesn't WRITE a True from the dialog -- the
+        # original semantic intent is "no persistence change", which
+        # now needs an explicit pre-state to detect.
+        supp.set_globally_muted(False)
         runner = self._build_runner()
         runner._file_path = str(tmp_path / "demo.scriptree")
 
@@ -487,8 +511,22 @@ class TestReenableDialog:
         supp.mute_fields_for_tool(str(p), {"x"})
 
         dlg = SanitizationSuppressionDialog()
-        # QMessageBox.question is auto-Yes (module-level patch).
-        dlg._on_clear_all()
+        # The session-scoped ``_silence_qt_modals`` autouse fixture
+        # in conftest.py sets ``QMessageBox.question`` to default-No;
+        # re-patch to Yes per-test so the dialog's confirm prompt
+        # answers "continue" and ``clear_all`` actually runs.  The
+        # module-level Yes patch at the top of this file is shadowed
+        # by the conftest fixture (session-scope = runs after module
+        # import); we have to override per-test.
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        _orig_q = _QMB.question
+        _QMB.question = staticmethod(  # type: ignore[assignment]
+            lambda *a, **kw: _QMB.StandardButton.Yes,
+        )
+        try:
+            dlg._on_clear_all()
+        finally:
+            _QMB.question = _orig_q  # type: ignore[assignment]
         assert supp.is_globally_muted() is False
         assert supp.muted_tools() == []
         assert supp.muted_fields_for_tool(str(p)) == []

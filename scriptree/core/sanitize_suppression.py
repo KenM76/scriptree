@@ -132,7 +132,32 @@ def _resolve(path: str | Path) -> str:
 # ---------------------------------------------------------------------------
 
 def is_globally_muted() -> bool:
-    return bool(_settings().value(_KEY_GLOBAL, False, type=bool))
+    """Return True when the per-run sanitization warning dialog is
+    globally suppressed.
+
+    The unset default flipped from False to True in v0.8.0a49 -- on
+    a fresh install the dialog is now OFF.  The actual injection
+    defence is ``subprocess.Popen(shell=False)`` in the runner
+    (which neuters every meta-character the sanitizer flags); the
+    dialog itself was advisory UX and turned into noise once a
+    handful of regex-using tools were added to the catalog, because
+    regex patterns naturally contain ``|``, ``(``, ``)``, ``{``,
+    ``}`` etc. -- ALL of which match ``_SHELL_META`` and produce
+    false-positive warnings.
+
+    Users who deliberately want the warnings can re-enable via the
+    Edit -> Sanitization warnings dialog (it calls
+    ``clear_all()`` which writes the explicit ``False`` value and
+    overrides the new default).  Users who explicitly chose either
+    way before a49 keep their stored value; only the never-touched
+    default flipped.
+
+    NOTE: regex-widget fields also get an unconditional bypass at
+    the call site (see ``sanitize_all_values_detailed``'s
+    ``regex_ids`` parameter); that exemption is independent of this
+    global flag.
+    """
+    return bool(_settings().value(_KEY_GLOBAL, True, type=bool))
 
 
 def set_globally_muted(muted: bool) -> None:

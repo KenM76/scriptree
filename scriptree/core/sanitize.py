@@ -238,6 +238,7 @@ def sanitize_all_values_detailed(
     *,
     allow_traversal: bool = False,
     allow_sensitive: bool = False,
+    regex_ids: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Like ``sanitize_all_values`` but returns parallel
     ``(warning_text, field_id)`` tuples (V3 v0.3.4+).
@@ -246,13 +247,30 @@ def sanitize_all_values_detailed(
     per-field "Don't warn again" checkbox: knowing which param
     each warning came from lets us mute future warnings about that
     specific field without silencing the whole tool.
+
+    ``regex_ids`` (v0.8.0a49+) — set of param IDs whose widget is
+    ``Widget.REGEX``.  Those fields are skipped ENTIRELY because
+    regex patterns naturally contain ``|`` ``(`` ``)`` ``{`` ``}``
+    ``<`` ``>`` ``$`` ``!``-- every character in ``_SHELL_META`` --
+    and producing a warning for each one was 100% false-positive
+    noise.  The bypass is independent of the global mute flag in
+    ``sanitize_suppression``; even when a user explicitly re-
+    enables warnings for everything else, regex fields stay quiet.
     """
     out: list[tuple[str, str]] = []
     path_ids = path_fields or set()
     label_map = labels or {}
+    regex_pids = regex_ids or set()
 
     for pid, val in values.items():
         if not isinstance(val, str):
+            continue
+        if pid in regex_pids:
+            # Regex pattern field -- shell-meta and traversal
+            # warnings are noise here by design.  Skip the whole
+            # field; the live validation badge on the widget
+            # itself is the right surface for "is this regex
+            # well-formed?" feedback.
             continue
         result = sanitize_value(
             val,
@@ -273,6 +291,7 @@ def sanitize_all_values(
     *,
     allow_traversal: bool = False,
     allow_sensitive: bool = False,
+    regex_ids: set[str] | None = None,
 ) -> list[str]:
     """Sanitize all form values and return a flat list of warnings.
 
@@ -289,13 +308,20 @@ def sanitize_all_values(
         the corresponding warnings when the matching capabilities
         (``allow_path_traversal`` / ``access_sensitive_paths``)
         are granted by the caller's permission set.
+    regex_ids:
+        v0.8.0a49+ — set of param IDs whose widget is
+        ``Widget.REGEX``.  Those fields are skipped entirely;
+        see the matching note on ``sanitize_all_values_detailed``.
     """
     all_warnings: list[str] = []
     path_ids = path_fields or set()
     label_map = labels or {}
+    regex_pids = regex_ids or set()
 
     for pid, val in values.items():
         if not isinstance(val, str):
+            continue
+        if pid in regex_pids:
             continue
         result = sanitize_value(
             val,

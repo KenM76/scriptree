@@ -3024,6 +3024,19 @@ class ToolRunnerView(QWidget):
             p.id for p in self._tool.params
             if p.type is ParamType.PATH
         }
+        # v0.8.0a49+ -- regex-widget fields are exempt from the
+        # injection sanitizer because their VALID content is full
+        # of ``_SHELL_META`` characters (``|`` ``(`` ``)`` ``{``
+        # ``}`` etc.) and warning about each one is 100% false-
+        # positive noise.  The live validation badge on the
+        # widget itself is the right surface for regex feedback;
+        # the runner's job is shell=False (already done) and
+        # path checks (still active for other field types).
+        from ..core.model import Widget as _Widget
+        regex_ids = {
+            p.id for p in self._tool.params
+            if p.widget is _Widget.REGEX
+        }
         labels = {p.id: p.label for p in self._tool.params}
         # Capability lookup BEFORE sanitization so the path-security
         # trio (allow_path_traversal / access_sensitive_paths /
@@ -3043,6 +3056,7 @@ class ToolRunnerView(QWidget):
             labels=labels,
             allow_traversal=perms.can("allow_path_traversal"),
             allow_sensitive=perms.can("access_sensitive_paths"),
+            regex_ids=regex_ids,
         )
         warnings = [w for w, _fid in detailed_warnings]
 

@@ -134,6 +134,33 @@ button can copy the library to a folder next to a
 `.scriptreeforest` if a user wants it to follow a synced workspace,
 but that's one-way; future edits still go back to `%APPDATA%`.
 
+## Sanitizer exemption
+
+`regex`-widget fields are **always** skipped by the runner's
+injection-warning sanitizer (`scriptree/core/sanitize.py`), even
+when the user has explicitly re-enabled warnings for everything
+else via the Edit ▸ Sanitization warnings dialog. The bypass is
+hardcoded in `tool_runner._start_run`: every param whose widget is
+`Widget.REGEX` is added to a `regex_ids` set passed to
+`sanitize_all_values_detailed(..., regex_ids=...)` and the
+sanitizer drops those param IDs before it scans them.
+
+Why: a regex pattern naturally contains `|`, `(`, `)`, `{`, `}`,
+`<`, `>`, `$`, `!` — every character in the sanitizer's
+`_SHELL_META` set — so checking regex fields produced 100%
+false-positive shell-metacharacter warnings. The actual injection
+defence is `subprocess.Popen(shell=False)` in the runner; the
+sanitizer is advisory UX, not a sandbox. Exempting regex fields
+restores signal-to-noise without weakening security.
+
+(In v0.8.0a49 the global default for the sanitizer was also
+flipped from "show warnings" to "skip dialog" for fresh installs,
+acknowledging that the warning fatigue outweighed the benefit
+once regex-using tools became common. Users who want the
+warnings back can re-enable via the Edit ▸ Sanitization warnings
+dialog — that path calls `clear_all()` which writes an explicit
+`False` to QSettings and overrides the new default.)
+
 ## Validation contract
 
 Patterns are validated via Qt's `QRegularExpression`. This is
