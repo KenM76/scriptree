@@ -470,6 +470,21 @@ class ToolEditorView(QWidget):
         )
         self._prop_provider_btn.clicked.connect(self._on_edit_provider)
 
+        # v0.8.0a50 — emit mode + select-all master.  Only meaningful
+        # on multiselect rendered as checkbox_list or dropdown.  Hidden
+        # via ``_set_prop_row_visible`` for any other type/widget combo
+        # in ``_populate_property_panel``.
+        self._prop_emit = QComboBox()
+        self._prop_emit.addItem("Send the SELECTED items (default)", "selected")
+        self._prop_emit.addItem("Send the UNSELECTED items (complement)", "unselected")
+        self._prop_emit.currentIndexChanged.connect(
+            self._on_prop_emit_changed
+        )
+        self._prop_select_all = QCheckBox()
+        self._prop_select_all.toggled.connect(
+            self._on_prop_select_all_changed
+        )
+
         # v0.4.0 — every property row gets a hover tooltip on BOTH
         # the label and the input.  Previously the only tooltips on
         # the property panel were the ones manually wired above
@@ -586,6 +601,26 @@ class ToolEditorView(QWidget):
             "external command at form-open time to populate this "
             "field — live dropdowns, dependent checkbox lists, "
             "auto-detected paths.  Click to configure.",
+        )
+        self._add_prop_row(
+            "Emit:", self._prop_emit,
+            "v0.8.0a50+.  Which half of the user's selection "
+            "reaches the runner.  <b>Send the SELECTED items "
+            "(default)</b> is the historical behaviour.  <b>Send "
+            "the UNSELECTED items</b> is for deselect-to-act "
+            "forms — e.g. \"here's everything currently enabled, "
+            "untick what you want to turn off, then Run.\"  Only "
+            "meaningful for multiselect rendered as checkbox_list "
+            "or dropdown.",
+        )
+        self._add_prop_row(
+            "Select-all master:", self._prop_select_all,
+            "When checked, the checkbox_list shows a tri-state "
+            "\"Select all\" master at the top so the user can "
+            "tick or untick every row at once.  Highly recommended "
+            "for any list with more than a handful of items, and "
+            "especially for emit:unselected forms where the master "
+            "becomes \"un-toggle everything.\"",
         )
         middle.addWidget(right_box)
         middle.setStretchFactor(0, 1)
@@ -957,6 +992,21 @@ class ToolEditorView(QWidget):
                 ParamType.NUMBER,
             ),
         )
+        # v0.8.0a50+ -- emit + select_all rows are only meaningful
+        # for multiselect rendered as checkbox_list or dropdown.
+        # ``Select-all master`` further restricts to checkbox_list
+        # (the master checkbox UX is checkbox_list-specific; a
+        # dropdown-multi has its own affordances).
+        is_multi_emit = (
+            param.type is ParamType.MULTISELECT
+            and param.widget in (W.CHECKBOX_LIST, W.DROPDOWN)
+        )
+        self._set_prop_row_visible(self._prop_emit, is_multi_emit)
+        self._set_prop_row_visible(
+            self._prop_select_all,
+            param.type is ParamType.MULTISELECT
+            and param.widget is W.CHECKBOX_LIST,
+        )
 
     # --- param list ------------------------------------------------------
 
@@ -1090,6 +1140,15 @@ class ToolEditorView(QWidget):
                 self._prop_provider_btn.setText("Provider ✓")
             else:
                 self._prop_provider_btn.setText("Provider…")
+            # v0.8.0a50+ — emit + select_all panel values.
+            emit_idx = self._prop_emit.findData(
+                getattr(param, "emit", "selected"),
+            )
+            if emit_idx >= 0:
+                self._prop_emit.setCurrentIndex(emit_idx)
+            self._prop_select_all.setChecked(
+                bool(getattr(param, "select_all", False)),
+            )
             # v0.4.0 — hide rows that don't apply to this param's
             # type / widget combo to keep the panel uncluttered.
             self._refresh_prop_visibility()
@@ -1185,6 +1244,39 @@ class ToolEditorView(QWidget):
         if param:
             param.no_persist = bool(checked)
             self._update_preview()
+
+    def _on_prop_emit_changed(self, _idx: int) -> None:
+        """v0.8.0a50+ -- the multiselect emit-mode dropdown.
+
+        Persists into ``param.emit`` ("selected" | "unselected").
+        ParamDef.__post_init__ guards against illegal combinations
+        at save / reload time; the editor UI also hides this row
+        for non-applicable widgets via ``_refresh_prop_visibility``,
+        so this handler doesn't need to re-validate.
+        """
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param is None:
+            return
+        new_emit = self._prop_emit.currentData()
+        if new_emit in ("selected", "unselected"):
+            param.emit = str(new_emit)
+            self._update_preview()
+
+    def _on_prop_select_all_changed(self, checked: bool) -> None:
+        """v0.8.0a50+ -- the ``Select all`` master-checkbox toggle.
+
+        Only legal on ``checkbox_list``; ParamDef.__post_init__
+        enforces.  The editor hides this row for other widgets.
+        """
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param is None:
+            return
+        param.select_all = bool(checked)
+        self._update_preview()
 
     def _on_prop_no_split_changed(self, checked: bool) -> None:
         if self._building_panel:

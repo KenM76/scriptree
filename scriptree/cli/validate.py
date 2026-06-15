@@ -228,9 +228,32 @@ def validate_tree(root: Path) -> tuple[int, int, int]:
         # keeps ``validate_one``'s public 2-tuple contract intact.
         if p.suffix.lower() == ".scriptree":
             try:
-                from scriptree.core.io import load_tool
+                from scriptree.core.io import load_tool, param_load_warnings
                 tool = load_tool(p)
                 lints = _lint_tool(tool)
+                # v0.8.0a50+ -- per-param load warnings (e.g.
+                # MISSING_EXPLICIT_DEFAULT on checkbox_list /
+                # dropdown-multi params).  Re-parse the file JSON
+                # to pair each raw param dict with its resolved
+                # ParamDef -- ``load_tool``'s public API doesn't
+                # expose raw provenance, so the lint pass uses the
+                # raw JSON for the per-param check.
+                try:
+                    import json
+                    with p.open("r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                    raw_params = raw.get("params") or []
+                    by_id = {
+                        (rp.get("id") or ""): rp for rp in raw_params
+                        if isinstance(rp, dict)
+                    }
+                    for resolved in tool.params:
+                        rp = by_id.get(resolved.id)
+                        if rp is None:
+                            continue
+                        lints.extend(param_load_warnings(rp, resolved))
+                except Exception:  # noqa: BLE001 -- lint never fatal
+                    pass
             except Exception:  # noqa: BLE001
                 lints = []
             for w in lints:

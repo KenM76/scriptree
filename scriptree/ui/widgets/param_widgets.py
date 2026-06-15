@@ -456,6 +456,18 @@ class DropdownWidget(ParamWidget):
         if idx >= 0:
             self._combo.setCurrentIndex(idx)
 
+    def current_choices(self) -> list[str]:
+        """Return the choice values currently visible in the combo,
+        in display order.  Used by the runner's emit:unselected
+        complement transformation (v0.8.0a50+).  Mirrors
+        ``CheckboxListWidget.current_choices``.
+        """
+        out: list[str] = []
+        for i in range(self._combo.count()):
+            data = self._combo.itemData(i)
+            out.append(self._combo.itemText(i) if data is None else str(data))
+        return out
+
     def set_choices(
         self,
         choices: list[str],
@@ -691,6 +703,22 @@ class CheckboxListWidget(ParamWidget):
             box.setChecked(v in wanted)
             box.blockSignals(False)
         self._sync_master()
+
+    def current_choices(self) -> list[str]:
+        """Return the choice values currently visible to the user,
+        in display order.
+
+        v0.8.0a50+ — needed by the runner's ``emit: "unselected"``
+        complement transformation (see
+        ``tool_runner._collect_values``): the COMPLEMENT must be
+        computed against the choices the user actually saw at click
+        time, not against ``param.choices`` (which may be empty when
+        a ``choices_provider`` is in use and supplies the runtime
+        list).  ``self._boxes`` is keyed by the raw value in
+        insertion order, so ``list(self._boxes)`` gives the live
+        choice set the user just interacted with.
+        """
+        return list(self._boxes.keys())
 
 
 class RadioWidget(ParamWidget):

@@ -136,6 +136,84 @@ from loading.
 
 ## Widget-specific fields
 
+### `checkbox_list`, `dropdown` multiselect — `emit` mode + `select_all` master + explicit-default rule (v0.8.0a50+)
+
+`checkbox_list` (and `dropdown` when `type` is `multiselect`) gains
+two opt-in fields and one new validation rule.
+
+| field         | type   | default | meaning |
+|---------------|--------|---------|---------|
+| `emit`        | `"selected"` / `"unselected"` | `"selected"` | Which half of the user's selection reaches the runner. `"selected"` (default) is unchanged historical behaviour. `"unselected"` emits the **complement** — every value in the live choice set that the user did NOT tick, in choice order. Used for deselect-to-act forms ("here are N items currently enabled; UNTICK what you want to turn off"). |
+| `select_all`  | `bool` | `false` | `checkbox_list` only — show a tri-state master "Select all" checkbox at the top so the user can tick / untick every row in one click. Recommended for any list with more than a handful of items, and almost mandatory for `emit: "unselected"` forms (so the user can flip the whole set with one click). |
+
+**Explicit-default rule** — when `widget` is `checkbox_list` OR
+`dropdown` AND `type` is `multiselect` AND there is NO
+`choices_provider`, the `default` key MUST be present in the JSON.
+Empty list (`[]`) is fine, full list is fine, partial is fine — but
+the field has to be there, on screen, written down. `scriptree
+validate` emits a `[WARN]` line when it isn't.
+
+Why: a future ScripTree version could change the implicit-default
+behaviour and silently change what gets ACTED ON in a deployed
+catalog. Forcing the author to declare it makes the initial state a
+deliberate choice and immune to default drift. (This is the same
+class of safety property `no_persist` provides for sensitive
+fields — explicit > implicit when the default's value affects
+correctness.) See the worked example in
+[`checkbox_list_emit.md`](checkbox_list_emit.md).
+
+When `choices_provider` is set the provider's response carries the
+initial selection (its own `default` key in the JSON it emits), so
+the static `default` field is irrelevant and the rule does not
+apply.
+
+Composition with existing primitives:
+
+- `emit: "unselected"` works unchanged with `select_all`, with
+  static `choices`, with dynamic `choices_provider`, with token-
+  group fan-out, and with `required`.
+- `required: true` on an `emit: "unselected"` param means the
+  EMITTED list must be non-empty — i.e. "the user must untick at
+  least one item before Run is enabled."
+- `visible_when` predicates see the SELECTED list (raw form
+  state), not the EMITTED complement.
+- Saved configurations store the SELECTED list (not the
+  complement). On reload the form opens with the saved selection;
+  the complement is recomputed at Run.
+
+Example — SWBomExcluded pattern, all items pre-checked, user
+unticks the ones to act on:
+
+```jsonc
+{
+  "id": "excluded_items",
+  "label": "Items currently excluded from BOM (untick to put back)",
+  "type": "multiselect",
+  "widget": "checkbox_list",
+  "select_all": true,
+  "emit": "unselected",
+  "default": [],
+  "choices_provider": {
+    "command": ["combridge.exe", "solidworks", "bom-excluded-scan"],
+    "refresh": "on_open"
+  }
+}
+```
+
+```jsonc
+"argument_template": [
+  ["--unexclude", "{excluded_items}"]   // fans out per element
+]
+```
+
+Limitations:
+
+- **Headless / CLI runs with `emit: "unselected"` + a dynamic
+  `choices_provider` are not supported in v0.8.0a50.** The
+  complement requires the widget's live choice set, which only
+  exists in the UI path. Static-choice catalogs are fine
+  headlessly; dynamic-provider catalogs need the UI.
+
 ### `folder_list`, `file_list` (v0.6.28+)
 
 Both render the same shell: a `QListWidget` of paths with an

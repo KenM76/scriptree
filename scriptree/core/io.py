@@ -577,6 +577,12 @@ def _param_to_dict(p: ParamDef) -> dict[str, Any]:
         d["depends_on"] = list(p.depends_on)
     if p.select_all:
         d["select_all"] = True
+    # v0.8.0a50 — emit field.  Same omitted-at-default policy: only
+    # write when the author chose 'unselected' so legacy v3 files
+    # round-trip byte-identical without an 'emit: selected' key
+    # cluttering every multiselect.
+    if p.emit and p.emit != "selected":
+        d["emit"] = p.emit
     # v0.6.28 — folder_list / file_list options.  Emit only when
     # non-default so legacy params round-trip byte-identical.
     if p.must_exist:
@@ -706,7 +712,7 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         d.get("choice_labels", []),
     )
     param_id = d.get("id", "<unknown>")
-    return ParamDef(
+    p = ParamDef(
         id=d["id"],
         label=d.get("label", ""),
         description=d.get("description", ""),
@@ -733,6 +739,7 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
         ),
         depends_on=[str(x) for x in (d.get("depends_on") or [])],
         select_all=bool(d.get("select_all", False)),
+        emit=str(d.get("emit", "selected") or "selected"),
         must_exist=bool(d.get("must_exist", False)),
         min_items=int(d.get("min_items", 0) or 0),
         max_items=(
@@ -740,6 +747,55 @@ def _param_from_dict(d: dict[str, Any]) -> ParamDef:
             if d.get("max_items") is not None else None
         ),
     )
+    # v0.8.0a50+ — stash whether the JSON had an explicit ``default``
+    # key.  Used by ``param_load_warnings`` (called from
+    # ``scriptree validate``) to flag checkbox_list / dropdown-
+    # multi params whose initial state was implicit -- a future
+    # ScripTree update could change the implicit default and
+    # silently change what gets acted on.  Forcing the author to
+    # declare the default explicitly closes that hole.  The
+    # attribute is NOT a real dataclass field on purpose: it's
+    # load-time provenance, not part of the in-memory contract,
+    # and the runtime path never reads it.
+    p._default_was_explicit = "default" in d  # type: ignore[attr-defined]
+    return p
+
+
+def param_load_warnings(raw: dict[str, Any], p: ParamDef) -> list[str]:
+    """Return human-readable warnings for a param dict that loaded
+    cleanly but should be flagged for the author.
+
+    v0.8.0a50+ — when ``widget`` is ``checkbox_list`` or
+    ``dropdown``-multiselect AND there is no ``choices_provider``
+    (i.e. the choice set is static + author-controlled), the
+    ``default`` key MUST be explicitly present in the JSON.  An
+    implicit empty default means a future ScripTree update could
+    silently change behaviour by changing the implicit default --
+    which is exactly the class of bug the author was protecting
+    against.  Forcing the field to be present, even when the
+    chosen value is ``[]``, makes the choice deliberate.
+
+    Returns an empty list for clean params.  Called from
+    ``scriptree validate``; runtime ``load_tool`` / ``load_tree``
+    do not consume these warnings (the runtime tolerates implicit
+    defaults so existing tools keep working until they're touched).
+    """
+    out: list[str] = []
+    needs_explicit = (
+        p.widget in (Widget.CHECKBOX_LIST, Widget.DROPDOWN)
+        and p.type is ParamType.MULTISELECT
+        and p.choices_provider is None
+    )
+    if needs_explicit and not getattr(p, "_default_was_explicit", True):
+        out.append(
+            f"ParamDef {p.id!r} (widget={p.widget.value!r}, "
+            f"type={p.type.value!r}): 'default' is implicit.  "
+            f"Set it explicitly -- '[]' (none selected), the full "
+            f"choices list (all selected), or a partial list -- so "
+            f"the form's initial state isn't governed by a default "
+            f"value that could change between ScripTree versions."
+        )
+    return out
 
 
 # --- TreeDef (.scriptreetree) ----------------------------------------------

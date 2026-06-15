@@ -2576,6 +2576,36 @@ class ToolRunnerView(QWidget):
                 for pid in hidden:
                     if pid not in values and pid in cfg.values:
                         values[pid] = cfg.values[pid]
+        # v0.8.0a50+ — apply ``emit: "unselected"`` complement.
+        # For each multiselect param flagged ``emit: "unselected"``,
+        # replace the selected list with its COMPLEMENT against the
+        # widget's currently-visible choice set (which includes
+        # provider-supplied dynamic choices, not just static
+        # ``param.choices``).  The complement preserves choice order
+        # so token-group fan-out is deterministic.  See the SWBomExcluded
+        # worked example in docs/LLM/checkbox_list_emit.md for why
+        # this is computed against the LIVE choices and not the
+        # static catalog field.
+        for p in self._tool.params:
+            if getattr(p, "emit", "selected") != "unselected":
+                continue
+            widget = self._widgets.get(p.id)
+            if widget is None:
+                continue
+            selected = values.get(p.id) or []
+            if not isinstance(selected, (list, tuple)):
+                continue
+            sel_set = {str(s) for s in selected}
+            # Prefer widget-supplied current choices (covers dynamic
+            # providers); fall back to static param.choices for
+            # widgets that don't expose the method.
+            if hasattr(widget, "current_choices"):
+                all_choices = widget.current_choices()
+            else:
+                all_choices = list(p.choices)
+            values[p.id] = [
+                c for c in all_choices if str(c) not in sel_set
+            ]
         # Drop visible_when-hidden params for argv assembly.  See
         # ``_visible_when_hidden_ids`` for the source of truth.
         for pid in self._visible_when_hidden_ids():

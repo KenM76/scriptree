@@ -371,6 +371,34 @@ class ParamDef:
     depends_on: list[str] = field(default_factory=list)
     select_all: bool = False
 
+    # v0.8.0a50+ — ``emit`` controls which half of a multiselect's
+    # state reaches the runner's argv assembly:
+    #
+    #   ``"selected"``   (default, == today's behaviour) — emit the
+    #       values the user TICKED.  A form opens with N items
+    #       checked → argv gets those N values.
+    #
+    #   ``"unselected"`` — emit the COMPLEMENT: every value in
+    #       ``choices`` that the user did NOT tick, in choices order.
+    #       Used for deselect-to-act forms ("here are N items
+    #       currently enabled; UNTICK the ones to turn off").  A
+    #       form opened with everything pre-checked (via the
+    #       provider's ``default`` returning all choices) emits ``[]``
+    #       when nothing's been touched, so Run is a clean no-op
+    #       until the user unticks something.
+    #
+    # The complement is computed against the CURRENT (post-provider)
+    # choice set at argv-assembly time, so dynamic providers Just
+    # Work.  Legal only on ``multiselect`` rendered as
+    # ``checkbox_list`` or ``dropdown``; ``__post_init__`` enforces.
+    # Omitted-at-default: a v3 file without ``emit`` round-trips
+    # byte-identical to today.
+    #
+    # See docs/LLM/checkbox_list_emit.md for the worked SWBomExcluded
+    # example + the safety rationale for the explicit-default rule
+    # this feature also introduces.
+    emit: str = "selected"
+
     # v0.6.28 — folder_list / file_list options.  All three are
     # additive and ignored by widgets that don't use them, so any
     # legacy param round-trips byte-identical when they sit at their
@@ -438,6 +466,31 @@ class ParamDef:
                 f"with widget 'checkbox_list' (got "
                 f"{self.widget.value!r})."
             )
+        # v0.8.0a50+ — ``emit`` is two-valued and only meaningful on
+        # multiselect rendered as checkbox_list or dropdown.  Reject
+        # at construction so a malformed catalog doesn't survive to
+        # the runner where the wrong half would be emitted.
+        if self.emit not in ("selected", "unselected"):
+            raise ValueError(
+                f"ParamDef {self.id!r}: 'emit' must be "
+                f"'selected' or 'unselected' (got "
+                f"{self.emit!r})."
+            )
+        if self.emit == "unselected":
+            if self.type is not ParamType.MULTISELECT:
+                raise ValueError(
+                    f"ParamDef {self.id!r}: 'emit: unselected' is "
+                    f"only valid on type 'multiselect' (got "
+                    f"{self.type.value!r})."
+                )
+            if self.widget not in (
+                Widget.CHECKBOX_LIST, Widget.DROPDOWN,
+            ):
+                raise ValueError(
+                    f"ParamDef {self.id!r}: 'emit: unselected' is "
+                    f"only valid with widget 'checkbox_list' or "
+                    f"'dropdown' (got {self.widget.value!r})."
+                )
         if self.id in self.depends_on:
             raise ValueError(
                 f"ParamDef {self.id!r}: 'depends_on' must not list "

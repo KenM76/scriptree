@@ -163,3 +163,18 @@ same fallback as `interactive`).
 6. Trace one real run by hand: open the form, confirm the provider
    populates, pick values, confirm the emitted argv is what the
    underlying tool expects.
+
+## Composing with `emit: "unselected"` (v0.8.0a50+)
+
+A provider's response carries `{"choices": [...], "default": [...]}`.
+When the response sets `default` equal to `choices` (every box
+pre-checked), pairing with `emit: "unselected"` gives you a
+deselect-to-act form for free: open all-checked → emit is `[]` →
+Run is a no-op until the user unticks something.
+
+Static-choice catalogs honour `emit: "unselected"` in both the UI
+AND headless / CLI runs. Provider-backed catalogs honour it in
+the UI only (v0.8.0a50 limitation — the complement requires the
+widget's live choice set, which only exists in the UI path).
+Worked example with full SWBomExcluded walkthrough:
+[`checkbox_list_emit.md`](checkbox_list_emit.md).
