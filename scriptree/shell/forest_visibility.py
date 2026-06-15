@@ -287,6 +287,14 @@ class _FocusWatcher(QObject):
     ``QApplication.focusWindowChanged`` and debounces by 80ms
     to avoid flicker when focus bounces through a transient
     popup or modal dialog.
+
+    v0.8.0a53: also exposes a ``suppress_for(ms)`` window for
+    programmatic show_hub() calls (taskbar host click,
+    in particular).  When the taskbar host triggers a "show",
+    the host's own bounce-back-to-minimized fires
+    focusWindowChanged with a transient non-forest active
+    window; without suppression the 80ms debounce would race
+    the show_hub() and hide the hub right back.
     """
 
     def __init__(
@@ -304,6 +312,12 @@ class _FocusWatcher(QObject):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(80)
         self._debounce.timeout.connect(self._fire)
+        self._suppress_until_timer = QTimer(self)
+        self._suppress_until_timer.setSingleShot(True)
+        self._suppress_until_timer.timeout.connect(
+            lambda: setattr(self, "_suppressed", False)
+        )
+        self._suppressed: bool = False
         app = QApplication.instance()
         if app is not None:
             app.focusWindowChanged.connect(self._on_focus_changed)
@@ -313,8 +327,23 @@ class _FocusWatcher(QObject):
         if not self._enabled:
             self._debounce.stop()
 
+    def suppress_for(self, ms: int) -> None:
+        """Ignore focusWindowChanged events for the next ``ms``
+        milliseconds.
+
+        Used around programmatic show_hub() calls so the
+        taskbar host's minimize bounce-back doesn't race the
+        show and immediately re-hide the hub.  The tray path
+        doesn't strictly need this (the tray click never
+        activates a window), but calling it on every entry
+        point keeps the behaviour symmetrical.
+        """
+        self._suppressed = True
+        self._debounce.stop()
+        self._suppress_until_timer.start(int(ms))
+
     def _on_focus_changed(self, _new_window: Any) -> None:
-        if not self._enabled:
+        if not self._enabled or self._suppressed:
             return
         # Debounce -- focus often flickers between widgets during
         # a single user click, especially when modal dialogs or
@@ -323,7 +352,7 @@ class _FocusWatcher(QObject):
         self._debounce.start()
 
     def _fire(self) -> None:
-        if not self._enabled:
+        if not self._enabled or self._suppressed:
             return
         app = QApplication.instance()
         if app is None:
@@ -423,6 +452,13 @@ class ForestVisibilityManager(QObject):
         # Saved position of the hub so hide()/show() round-trips
         # don't lose placement.
         self._last_hub_position: QPoint | None = None
+        # IDs of cells we hid in the last hide_hub() call.  Only
+        # these get re-shown by show_hub() -- if the user had
+        # other cells collapsed / explicitly hidden before we
+        # ran, leave them alone.  Strong refs via id only so a
+        # cell that gets destroyed while the hub is hidden
+        # doesn't keep the manager alive.
+        self._hidden_descendant_ids: list[str] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -467,13 +503,28 @@ class ForestVisibilityManager(QObject):
                 _log(f"apply: hide_hub after flag flip raised {exc!r}")
 
     def show_hub(self) -> None:
-        """Bring the forest hub to the front.
+        """Bring the forest hub AND every forest descendant
+        (rings + their cells + standalone forest items) to the
+        front.
 
-        Used by the taskbar host and tray icon when the user
-        clicks them, and by any external code that wants to
-        guarantee the hub is visible (e.g. drop-on-tray scenarios
-        the controller may add later).
+        v0.8.0a53: also restores the descendants so the user
+        sees the whole forest reappear, not just the hub.  Cells
+        the user explicitly closed are already absent from the
+        registry, so we only un-hide what was hidden by us.
+        Suppresses the focus watcher for 300ms so the taskbar
+        host's minimize bounce-back doesn't race us and hide
+        the hub right back.
         """
+        # Suppress BEFORE any window state change so the
+        # focusWindowChanged transients during show / raise /
+        # activate don't queue a hide.  300ms covers the host
+        # minimize bounce-back AND the typical Win11 focus-shuffle
+        # window after a taskbar click.
+        try:
+            self._watcher.suppress_for(300)
+        except Exception:  # noqa: BLE001
+            pass
+
         w = self._forest_window
         if w is None:
             return
@@ -481,15 +532,33 @@ class ForestVisibilityManager(QObject):
             if self._last_hub_position is not None and not w.isVisible():
                 w.move(self._last_hub_position)
             w.show()
+            # Only restore cells WE hid -- leave alone any that
+            # the user had already collapsed / closed before
+            # hide_hub() ran.
+            for cell_id in self._hidden_descendant_ids:
+                cell = self._registry.get(cell_id)
+                if cell is None:
+                    continue
+                try:
+                    cell.show()
+                except Exception:  # noqa: BLE001
+                    continue
+            self._hidden_descendant_ids = []
             w.raise_()
             w.activateWindow()
         except Exception as exc:  # noqa: BLE001
             _log(f"show_hub: {exc!r}")
 
     def hide_hub(self) -> None:
-        """Hide the forest hub.
+        """Hide the forest hub AND every forest descendant.
 
-        Captures the current position so a later ``show_hub``
+        v0.8.0a53: when the user clicks outside the forest, the
+        rings and cells belong to the forest conceptually and
+        should disappear with it.  Pre-a53 only the hub hid,
+        leaving cells floating on the desktop -- the user
+        reported this as a bug.
+
+        Captures the hub's position so a later ``show_hub``
         restores it exactly where the user last placed it.  Safe
         to call when already hidden.
         """
@@ -499,9 +568,66 @@ class ForestVisibilityManager(QObject):
         try:
             if w.isVisible():
                 self._last_hub_position = QPoint(w.pos())
+            # Hide descendants BEFORE the hub so the visual order
+            # reads "everything goes away together".  Hiding the
+            # hub first would briefly leave the cells without
+            # their anchor visible, which looks like a glitch on
+            # slower paint paths.  Track which we hid so
+            # show_hub() restores only those (cells the user had
+            # already collapsed / closed before us stay that
+            # way).
+            self._hidden_descendant_ids = []
+            for descendant in self._forest_descendants():
+                try:
+                    if descendant.isVisible():
+                        descendant.hide()
+                        cell_id = getattr(descendant, "_id", None)
+                        if cell_id:
+                            self._hidden_descendant_ids.append(cell_id)
+                except Exception:  # noqa: BLE001
+                    continue
             w.hide()
         except Exception as exc:  # noqa: BLE001
             _log(f"hide_hub: {exc!r}")
+
+    def _forest_descendants(self) -> list[Any]:
+        """Return the flat list of every CellWindow that
+        conceptually belongs to the forest hub.
+
+        Walks the hub's ``_members`` (direct forest members --
+        rings + standalone forest items), then for each member
+        that's a master (a ring) walks ITS ``_members``
+        recursively.  Order: depth-first, hub-children first.
+
+        Missing-from-registry entries are skipped silently
+        (stale member ids from a closed cell aren't fatal to
+        the show / hide cycle).
+        """
+        w = self._forest_window
+        if w is None:
+            return []
+        out: list[Any] = []
+        seen: set[str] = set()
+
+        def _walk(parent: Any) -> None:
+            members = getattr(parent, "_members", None) or {}
+            for member_id in list(members):
+                if member_id in seen:
+                    continue
+                seen.add(member_id)
+                cell = self._registry.get(member_id)
+                if cell is None:
+                    continue
+                out.append(cell)
+                # Recurse into ring members.
+                if getattr(cell, "role", None) == "master":
+                    _walk(cell)
+
+        try:
+            _walk(w)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_forest_descendants: walk raised {exc!r}")
+        return out
 
     def teardown(self) -> None:
         """Release the taskbar host and tray icon.

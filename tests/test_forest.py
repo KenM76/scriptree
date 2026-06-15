@@ -394,6 +394,31 @@ class TestDiff:
 
 class TestForestCell:
 
+    @pytest.fixture(autouse=True)
+    def _isolate_prefs_from_user_appdata(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """v0.8.0a53: redirect ``default_preferences_path`` to an
+        empty tmp dir so ``load_preferences`` returns factory
+        defaults regardless of what the dev's actual
+        ``%APPDATA%/ScripTree/forest_preferences.json`` says.
+
+        Pre-a52, prefs only carried two fields and the failure
+        mode of reading dev-machine prefs was harmless.  a52
+        introduced visibility flags that gate whether the forest
+        hub gets ``forest_window.show()`` called at startup -- so
+        a dev whose live prefs have ``show_always_on_top=False``
+        (because they tested the new feature) would see this
+        whole test class fail.  The fixture is autouse so it
+        applies to every test in the class without modifying
+        each one.
+        """
+        from scriptree.shell import forest_io as io_mod
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: tmp_path / "forest_preferences.json",
+        )
+
     def test_forest_cell_is_master_with_flag(self) -> None:
         from scriptree.shell.forest_controller import ForestController
         from scriptree.shell.cell_window import CellWindow
