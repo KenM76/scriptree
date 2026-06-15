@@ -5,83 +5,87 @@ forest_visibility.py — three-mode visibility for the forest hub.
 
 The forest hub historically had ONE way to reach it: it floated above
 the desktop as a frameless, always-on-top hex (``Qt.Tool`` +
-``Qt.WindowStaysOnTopHint``).  v0.8.0a52 introduces two additional
-surfaces so the user can pick whichever fits how they actually use
-ScripTree:
+``Qt.WindowStaysOnTopHint``).  v0.8.0a52 added two more surfaces
+(taskbar + system tray); v0.8.0a54 rewrote the taskbar plumbing to
+fix a Qt-on-Windows transient-parent quirk (see below).
 
-  1. **Always-on-top over the desktop** (factory default, the
-     pre-a52 behaviour).  The hub floats above every other app.
-  2. **Show on taskbar** (PortableApps-style).  A persistent
-     Windows taskbar entry titled "ScripTree Forest".  Click →
-     forest hub appears at its saved position.  The entry survives
-     the hub being hidden.
-  3. **Show in system tray** (PortableApps-style).  A tray icon
-     with the forest glyph.  Left-click → forest hub appears.
-     Right-click → small menu (Show / Quit).
+The three modes the user can pick:
 
-At least one of the three MUST be enabled — the UI refuses to
-uncheck the last one, and the persisted preferences are repaired
-on load if a hand-edited file ended up with all three False (see
-``ForestPreferences.normalised`` in ``forest_io.py``).
+  1. **Always-on-top over the desktop** (factory default).  The hub
+     floats above every other app, ``Qt.Tool`` + AOT.
+  2. **Show on taskbar** (PortableApps-style).  The hub itself
+     carries ``Qt.Window`` so Windows gives it a taskbar entry.
+     "Hidden" becomes ``showMinimized`` -- the taskbar button
+     stays, the hex is off-screen.
+  3. **Show in system tray** (PortableApps-style).  Left-click ->
+     show, right-click -> Show / Quit menu.
 
-When ``show_always_on_top`` is OFF the forest hub starts HIDDEN.
-The user reveals it by clicking the taskbar entry or the tray
-icon.  Once visible, it AUTO-HIDES on:
+At least one MUST be enabled.  When ``show_always_on_top`` is OFF
+the hub starts MINIMISED (taskbar mode) or HIDDEN (tray-only).
+Clicking the taskbar / tray reveals the hub plus every cell that
+belongs to it; auto-hide fires when focus moves outside the forest
+hierarchy.
 
-  * A tool launch (any spawned tool runner / standalone editor
-    pulls focus away from the forest hierarchy).
-  * The user clicking outside the forest hierarchy (any
-    top-level window that isn't the forest hub itself OR a
-    ``CellWindow`` registered in ``CellRegistry``).
+## a54 architecture: no more proxy host
 
-The auto-hide rule fires only when always-on-top is OFF.  When
-always-on-top is ON, focus loss is irrelevant — the hub stays
-visible.
+Pre-a54 the taskbar entry came from a separate ``ForestTaskbarHost``
+``QMainWindow`` proxy: minimised-off-screen, its ``changeEvent``
+caught taskbar-restore clicks and called ``show_hub`` then
+re-minimised itself.
+
+That hit a Qt-on-Windows quirk: ``Qt.Tool`` windows shown right after
+another window was active become *transient children* of that other
+window in Windows' internal Z-order book-keeping.  When the proxy
+host then bounced back to minimised, Windows pulled the freshly-shown
+forest hub (a Tool) DOWN with it.  Result: forest pops up briefly,
+then disappears; cells (which weren't transient children) stay behind.
+
+a54 fix: ditch the proxy.  When ``show_on_taskbar`` is on, swap
+the forest hub's flag from ``Qt.Tool`` to ``Qt.Window`` so the
+hub IS the taskbar entry.  Click the taskbar -> Windows restores
+the hub directly, no proxy, no transient parent, no race.
+"Hidden" in that mode is ``showMinimized`` -- the hub minimises
+to the taskbar without leaving the desktop.
 
 ## For maintainers / LLMs
 
 - ``ForestVisibilityManager.apply(prefs)`` is the single entry
-  point for the controller.  It:
-    1. Sets the hub's window flags to match
-       ``show_always_on_top`` + ``show_on_taskbar``.
-    2. Spawns / tears down ``ForestTaskbarHost`` per
-       ``show_on_taskbar``.
-    3. Spawns / tears down ``ForestTrayIcon`` per
+  point for the controller.  It re-derives everything:
+    1. ``_apply_taskbar_flag`` on the hub (``Qt.Tool`` <->
+       ``Qt.Window``) per ``show_on_taskbar``.
+    2. ``_apply_always_on_top_flag`` on the hub per
+       ``show_always_on_top``.
+    3. Spawn / tear down ``ForestTrayIcon`` per
        ``show_in_system_tray``.
-    4. Hooks / unhooks the focus-watch when always-on-top
-       changes.
-- The flag swap on the hub uses ``Qt.Tool`` ↔ ``Qt.Window`` for
-  taskbar visibility.  Qt requires ``hide() + setWindowFlags() +
-  show()`` to take effect on Win11; we follow the cell_window
-  pattern in ``_apply_always_on_top_flag``.  Position is restored
-  after the re-show.
-- ``ForestTaskbarHost`` is a tiny ``QMainWindow`` with a 1×1
-  central widget.  We *minimise* it on first show so it sits in
-  the taskbar without taking screen space; ``changeEvent`` then
-  intercepts user "restore" clicks to instead reveal the real
-  forest hub and re-minimise ourselves.  Closing the host quits
-  the app (parity with PortableApps where dismissing the taskbar
-  entry terminates the menu).
-- ``ForestTrayIcon`` uses the bundled forest PNG (lifted from
-  ``icon_assets.bundled_icon_b64('forest')``).  Activation reasons
-  ``Trigger`` (single-click) and ``DoubleClick`` both reveal the
-  hub; ``Context`` is handled by Qt's built-in menu mechanism.
-- ``_FocusWatcher`` wraps ``QApplication.focusWindowChanged``.
-  We compare the new focus QWindow to the QWindow of every
-  registered ``CellWindow`` plus the forest hub itself.  When the
-  new focus is None OR belongs to anything else, we hide the hub
-  (only when always-on-top is OFF).
-- Auto-hide is debounced by 80ms to avoid flicker when focus
-  bounces between the hub and a transient popup or settings
-  dialog during the same user action.
+    4. Watcher enabled / disabled per ``auto_hide``.
+    5. Apply the initial hidden state if ``auto_hide`` is on
+       (called when the hub is currently visible: minimise or
+       hide and hide descendants).
+- ``hide_hub`` minimises the hub when it carries ``Qt.Window``
+  (taskbar mode); otherwise it calls ``hide()``.  Either way, it
+  also hides every currently-visible cell that belongs to the
+  forest hierarchy and remembers which it hid so ``show_hub``
+  restores only those (user-collapsed cells stay collapsed).
+- ``show_hub`` calls ``showNormal()`` so a minimised hub
+  un-minimises and a hidden hub appears at its last position.
+  Then raise + activate, then restore tracked descendants.
+- An event filter on the hub catches its ``WindowStateChange``
+  transition out of "minimised".  This is how we detect the
+  user clicked the taskbar entry: we make the descendants
+  reappear automatically.  The filter only acts when
+  ``auto_hide`` is enabled, otherwise normal user-driven
+  minimise / restore is left alone.
+- ``ForestTaskbarHost`` survives as a deprecated class so any
+  external code that imported it still resolves, but the manager
+  no longer instantiates it.
 
 Public API
 ----------
     ForestVisibilityManager(forest_window, registry, quit_callback=None)
-        .apply(prefs: ForestPreferences) → None
-        .show_hub() → None
-        .hide_hub() → None
-        .teardown() → None
+        .apply(prefs: ForestPreferences) -> None
+        .show_hub() -> None
+        .hide_hub() -> None
+        .teardown() -> None
 """
 from __future__ import annotations
 
@@ -89,7 +93,7 @@ import sys
 from typing import Any, Callable
 
 from PySide6.QtCore import (
-    QObject, QPoint, QTimer, Qt,
+    QEvent, QObject, QPoint, QTimer, Qt,
 )
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -106,12 +110,15 @@ def _log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _forest_icon() -> QIcon:
-    """Resolve the forest glyph for the taskbar host + tray icon.
+    """Resolve the forest glyph for the tray icon (and any other
+    surface that wants the bundled fractal-tree icon).
 
-    Prefers the bundled ``forest`` icon (the fractal-tree glyph
-    introduced in v0.8.0a4+) and falls back to a Qt-standard
-    desktop icon if the asset is missing (e.g. on a dev tree
-    where ``icons/forest.png`` hasn't been generated yet).
+    Prefers the bundled ``forest`` icon (a54+ uses this same icon
+    for the hub's own ``setWindowIcon`` so the taskbar entry shows
+    the right glyph).  Falls back to a 1x1 transparent pixmap if
+    the asset isn't on disk (a Qt-on-Windows quirk: passing
+    ``QIcon()`` to ``QSystemTrayIcon`` can cause it to silently
+    refuse to render).
     """
     try:
         from scriptree.shell.icon_assets import bundled_icon_png_path
@@ -122,31 +129,33 @@ def _forest_icon() -> QIcon:
                 return ic
     except Exception as exc:  # noqa: BLE001
         _log(f"_forest_icon: bundled lookup failed: {exc!r}")
-    # Fallback: build a 1×1 transparent pixmap so the tray API
-    # has something concrete; better than QIcon() (which some
-    # Windows builds reject and refuse to show in the tray).
     pm = QPixmap(16, 16)
     pm.fill(Qt.transparent)
     return QIcon(pm)
 
 
 # ---------------------------------------------------------------------------
-# ForestTaskbarHost
+# ForestTaskbarHost (DEPRECATED in a54)
 # ---------------------------------------------------------------------------
 
 class ForestTaskbarHost(QMainWindow):
-    """A persistent Windows taskbar entry for the forest.
+    """[DEPRECATED in a54] Proxy taskbar entry for the forest hub.
 
-    The host is a tiny ``QMainWindow`` (no central content) shown
-    minimised so the taskbar displays its title + icon but it
-    never appears on the desktop itself.  Clicking the taskbar
-    entry asks Windows to restore the host -- we intercept the
-    state-change, hide ourselves back into the taskbar, and
-    instead reveal the real forest hub.
+    Pre-a54 the manager spawned this as a minimised ``QMainWindow``
+    so Windows had something to show on the taskbar; its
+    ``changeEvent`` intercepted taskbar restore clicks and called
+    ``show_hub`` while immediately re-minimising itself.
 
-    Closing the host via the (hidden but reachable via right-click
-    taskbar) Close menu calls ``quit_callback`` so dismissing the
-    taskbar entry terminates ScripTree.
+    The proxy turned out to be the source of the "forest pops up
+    briefly then hides" bug -- the hub was ``Qt.Tool`` and Windows
+    made it a transient child of whichever window was most recently
+    active.  When the proxy bounced back to minimised, the hub
+    (transient child) got dragged down too.
+
+    a54 ditches the proxy entirely.  ``ForestVisibilityManager``
+    no longer instantiates this class.  It is kept here only so
+    external code that imported the symbol still resolves; new
+    callers should not use it.
     """
 
     def __init__(
@@ -154,67 +163,16 @@ class ForestTaskbarHost(QMainWindow):
         on_activate: Callable[[], None],
         on_close: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(
-            None,
-            Qt.Window | Qt.MSWindowsFixedSizeDialogHint,
-        )
+        super().__init__(None, Qt.Window | Qt.MSWindowsFixedSizeDialogHint)
         self._on_activate = on_activate
         self._on_close = on_close
         self.setWindowTitle("ScripTree Forest")
         self.setWindowIcon(_forest_icon())
-        # Resize to ridiculously small -- the host should never
-        # be visible on the desktop, only in the taskbar.  We
-        # ALSO move it off-screen as a belt-and-suspenders against
-        # platforms (or future Qt versions) that briefly show the
-        # window before our showMinimized() takes effect.
         self.resize(1, 1)
         self.move(-32000, -32000)
-        # A 1x1 widget as central so QMainWindow doesn't paint
-        # the default greyish backdrop.
         central = QWidget(self)
         central.setFixedSize(1, 1)
         self.setCentralWidget(central)
-
-    def show_in_taskbar(self) -> None:
-        """Make the host visible in the taskbar without showing
-        it on the desktop.  Idempotent -- safe to call repeatedly
-        when the manager reapplies preferences."""
-        self.showMinimized()
-
-    def changeEvent(self, event: Any) -> None:  # noqa: D401, ANN001
-        """Intercept user clicks on the taskbar entry.
-
-        When Windows tells us we've been restored (the user
-        clicked the taskbar entry), we re-minimise ourselves so
-        the host never paints on screen, and we call
-        ``on_activate`` to reveal the real forest hub.
-        """
-        from PySide6.QtCore import QEvent
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
-            if not self.isMinimized() and self.isVisible():
-                # User restored us -- bounce back to minimised
-                # and reveal the hub instead.  Schedule via
-                # singleShot so Qt finishes processing the state
-                # change before we mess with it again.
-                QTimer.singleShot(0, self.showMinimized)
-                try:
-                    self._on_activate()
-                except Exception as exc:  # noqa: BLE001
-                    _log(f"taskbar host: on_activate raised {exc!r}")
-
-    def closeEvent(self, event: Any) -> None:  # noqa: D401, ANN001
-        """Closing the taskbar entry quits ScripTree.
-
-        Matches the PortableApps convention: dismissing the
-        persistent entry terminates the launcher.
-        """
-        if self._on_close is not None:
-            try:
-                self._on_close()
-            except Exception as exc:  # noqa: BLE001
-                _log(f"taskbar host: on_close raised {exc!r}")
-        super().closeEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +182,8 @@ class ForestTaskbarHost(QMainWindow):
 class ForestTrayIcon(QSystemTrayIcon):
     """System tray icon with Show / Quit menu.
 
-    Left-click → ``on_activate``.  Right-click → menu offering
-    Show (same as left-click) and Quit (terminates the app).
+    Left-click (Trigger) and double-click both call ``on_activate``.
+    Right-click pops the standard QSystemTrayIcon context menu.
     """
 
     def __init__(
@@ -251,9 +209,6 @@ class ForestTrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        # Trigger == single-click; DoubleClick == double-click.
-        # Both should reveal the hub.  Context is handled by the
-        # menu mechanism Qt sets up via setContextMenu.
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,
@@ -283,18 +238,20 @@ class _FocusWatcher(QObject):
     """Hide the forest hub when focus moves outside the forest
     hierarchy.
 
-    Active only when ``show_always_on_top`` is False.  Wraps
-    ``QApplication.focusWindowChanged`` and debounces by 80ms
-    to avoid flicker when focus bounces through a transient
-    popup or modal dialog.
+    Active only when ``auto_hide`` is True (i.e. always-on-top is
+    OFF and at least one of taskbar / tray is ON).  Wraps
+    ``QApplication.focusWindowChanged`` and debounces by 80ms so
+    transient focus flickers (popups, modal dialogs) don't trigger
+    a spurious hide.
 
-    v0.8.0a53: also exposes a ``suppress_for(ms)`` window for
-    programmatic show_hub() calls (taskbar host click,
-    in particular).  When the taskbar host triggers a "show",
-    the host's own bounce-back-to-minimized fires
-    focusWindowChanged with a transient non-forest active
-    window; without suppression the 80ms debounce would race
-    the show_hub() and hide the hub right back.
+    a54: the taskbar proxy is gone, so the post-show suppression
+    window has been simplified -- the hub itself is now the
+    taskbar entry, so a click on the entry activates the hub
+    directly and the watcher sees ``activeWindow == forest_window``
+    on the very next event.  No race to suppress.  We still expose
+    ``suppress_for`` because the tray path (and any external
+    programmatic show) benefits from a short suppression to ride
+    out the platform's focus shuffle.
     """
 
     def __init__(
@@ -312,11 +269,9 @@ class _FocusWatcher(QObject):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(80)
         self._debounce.timeout.connect(self._fire)
-        self._suppress_until_timer = QTimer(self)
-        self._suppress_until_timer.setSingleShot(True)
-        self._suppress_until_timer.timeout.connect(
-            lambda: setattr(self, "_suppressed", False)
-        )
+        self._suppress_timer = QTimer(self)
+        self._suppress_timer.setSingleShot(True)
+        self._suppress_timer.timeout.connect(self._clear_suppression)
         self._suppressed: bool = False
         app = QApplication.instance()
         if app is not None:
@@ -328,27 +283,22 @@ class _FocusWatcher(QObject):
             self._debounce.stop()
 
     def suppress_for(self, ms: int) -> None:
-        """Ignore focusWindowChanged events for the next ``ms``
-        milliseconds.
+        """Ignore focusWindowChanged for the next ``ms`` ms.
 
-        Used around programmatic show_hub() calls so the
-        taskbar host's minimize bounce-back doesn't race the
-        show and immediately re-hide the hub.  The tray path
-        doesn't strictly need this (the tray click never
-        activates a window), but calling it on every entry
-        point keeps the behaviour symmetrical.
+        Used around programmatic show calls (tray click, in
+        particular) so platform focus shuffle during the show /
+        raise / activate sequence doesn't queue a phantom hide.
         """
         self._suppressed = True
         self._debounce.stop()
-        self._suppress_until_timer.start(int(ms))
+        self._suppress_timer.start(int(ms))
+
+    def _clear_suppression(self) -> None:
+        self._suppressed = False
 
     def _on_focus_changed(self, _new_window: Any) -> None:
         if not self._enabled or self._suppressed:
             return
-        # Debounce -- focus often flickers between widgets during
-        # a single user click, especially when modal dialogs or
-        # popups open.  80ms is enough to coalesce the transients
-        # without making the hide feel laggy.
         self._debounce.start()
 
     def _fire(self) -> None:
@@ -357,9 +307,6 @@ class _FocusWatcher(QObject):
         app = QApplication.instance()
         if app is None:
             return
-        # Active window at the moment the timer fires -- this is
-        # what the user is currently looking at, not whatever was
-        # transiently focused mid-click.
         active = app.activeWindow()
         if self._is_inside_forest(active):
             return
@@ -371,8 +318,7 @@ class _FocusWatcher(QObject):
     def _is_inside_forest(self, widget: Any) -> bool:
         """Return True if ``widget`` is the forest hub itself OR
         a registered CellWindow (any cell, ring member, or
-        standalone -- per the strict-scope rule, only cells count
-        as 'inside the forest').
+        standalone -- per the strict-scope rule).
 
         ``widget`` of None means "no app window has focus" --
         treated as outside.
@@ -381,29 +327,20 @@ class _FocusWatcher(QObject):
             return False
         if widget is self._forest_window:
             return True
-        # Walk up to the top-level (popups, settings dialogs,
-        # transient menus all live UNDER one of these as their
-        # parent / window owner).
         try:
             top = widget.window()
         except Exception:  # noqa: BLE001
             top = widget
         if top is self._forest_window:
             return True
-        # Settings dialogs of the forest hub itself parent to
-        # forest_window -- catch them via the window() walk above.
-        # CellWindows are top-level so the comparison is direct.
         try:
             from scriptree.shell.cell_window import CellWindow
             if isinstance(top, CellWindow):
                 return True
         except Exception:  # noqa: BLE001
             pass
-        # The forest hub's modal dialogs (settings, excluded
-        # items, first-run welcome, diff dialog, uninstall dialog)
-        # are parented to forest_window -- their window() is the
-        # dialog itself; walk parents until we hit forest_window
-        # or run out.
+        # Walk parents for modal dialogs / popups parented to the
+        # forest hub or to any cell.
         try:
             owner = top.parent() if top is not None else None
             while owner is not None:
@@ -427,8 +364,7 @@ class ForestVisibilityManager(QObject):
 
     The controller calls ``apply(prefs)`` once at startup and
     again whenever the user changes any of the three flags.
-    Internal state is fully derived from ``prefs`` -- the manager
-    spawns and tears down the taskbar host / tray icon as needed.
+    Internal state is fully derived from ``prefs``.
     """
 
     def __init__(
@@ -441,24 +377,31 @@ class ForestVisibilityManager(QObject):
         self._forest_window = forest_window
         self._registry = registry
         self._quit_callback = quit_callback
-        self._taskbar_host: ForestTaskbarHost | None = None
         self._tray_icon: ForestTrayIcon | None = None
         self._watcher = _FocusWatcher(
             forest_window, registry, self.hide_hub,
         )
-        # Track the current always-on-top state so we know what to
-        # restore the hub to when the user toggles flags live.
+        # Current visibility state derived from the last apply().
+        self._taskbar_on: bool = False
         self._always_on_top: bool = True
-        # Saved position of the hub so hide()/show() round-trips
-        # don't lose placement.
+        self._auto_hide: bool = False
+        # Saved position of the hub so hide/show round-trips
+        # don't lose placement.  Only used in tray-only (no
+        # taskbar) mode -- in taskbar mode "hide" means minimise,
+        # which preserves position natively.
         self._last_hub_position: QPoint | None = None
         # IDs of cells we hid in the last hide_hub() call.  Only
         # these get re-shown by show_hub() -- if the user had
-        # other cells collapsed / explicitly hidden before we
-        # ran, leave them alone.  Strong refs via id only so a
-        # cell that gets destroyed while the hub is hidden
-        # doesn't keep the manager alive.
+        # other cells collapsed / explicitly closed before we
+        # ran, leave them alone.
         self._hidden_descendant_ids: list[str] = []
+        # Install the event filter on the hub so we can detect
+        # the user clicking its taskbar entry (restore from
+        # minimised).  See eventFilter() below.
+        try:
+            forest_window.installEventFilter(self)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"__init__: installEventFilter failed: {exc!r}")
 
     # ------------------------------------------------------------------
     # Public API
@@ -467,61 +410,65 @@ class ForestVisibilityManager(QObject):
     def apply(self, prefs: Any) -> None:
         """Re-derive everything from the prefs object.
 
-        ``prefs`` is a ``ForestPreferences`` (we duck-type the
-        three flags we need so the import stays local to the
-        caller).  Idempotent: calling twice with the same prefs
-        is a no-op.
+        Idempotent: same prefs in -> same state out.  ``prefs`` is
+        a ``ForestPreferences`` (we duck-type the three flags).
         """
         prefs = prefs.normalised()
         aot = bool(prefs.show_always_on_top)
         tb = bool(prefs.show_on_taskbar)
         tr = bool(prefs.show_in_system_tray)
 
+        # Order matters: swap Qt.Tool / Qt.Window BEFORE adjusting
+        # always-on-top, since the latter's hide+show ritual
+        # picks up whatever flag combination is current at the
+        # moment of show().
+        self._apply_taskbar_flag(tb)
         self._apply_always_on_top(aot)
-        self._apply_taskbar(tb)
+        # If the hub is now in Qt.Window mode AND show_always_on_top
+        # is False, set the icon + title so the taskbar entry
+        # displays something useful.  Cheap to do every time --
+        # setWindowIcon / setWindowTitle on an unchanged value is
+        # a no-op.
+        try:
+            self._forest_window.setWindowIcon(_forest_icon())
+            self._forest_window.setWindowTitle("ScripTree Forest")
+        except Exception:  # noqa: BLE001
+            pass
+
         self._apply_tray(tr)
 
-        # Auto-hide is active only when always-on-top is off AND
-        # the user has at least one other entry point (otherwise
-        # hiding the hub strands the user, which the normalised()
-        # invariant prevents but defence-in-depth here is cheap).
-        auto_hide = (not aot) and (tb or tr)
-        self._watcher.set_enabled(auto_hide)
+        self._auto_hide = (not aot) and (tb or tr)
+        self._watcher.set_enabled(self._auto_hide)
 
-        # When always-on-top flips OFF and we have a tray/taskbar
-        # entry point, the hub should START hidden on subsequent
-        # calls.  But the FIRST apply() (during start()) is run
-        # before the hub has been shown, so the hub naturally
-        # stays hidden if the controller skips show().  Live flag
-        # changes after the hub is on-screen: hide it now so the
-        # user sees the rule kick in immediately.
-        if auto_hide and self._forest_window is not None:
+        # If auto-hide is on AND the hub is currently visible /
+        # not-minimised, transition into the hidden / minimised
+        # state immediately so the user sees the rule take
+        # effect.  On the first apply() (during start()) the hub
+        # hasn't been shown yet -- this branch becomes a no-op
+        # and the controller leaves the hub in its hidden state.
+        if self._auto_hide and self._forest_window is not None:
             try:
-                if self._forest_window.isVisible():
+                w = self._forest_window
+                if w.isVisible() and not w.isMinimized():
                     self.hide_hub()
             except Exception as exc:  # noqa: BLE001
-                _log(f"apply: hide_hub after flag flip raised {exc!r}")
+                _log(f"apply: post-flip auto-hide raised {exc!r}")
 
     def show_hub(self) -> None:
-        """Bring the forest hub AND every forest descendant
-        (rings + their cells + standalone forest items) to the
-        front.
+        """Bring the forest hub AND its descendants back into view.
 
-        v0.8.0a53: also restores the descendants so the user
-        sees the whole forest reappear, not just the hub.  Cells
-        the user explicitly closed are already absent from the
-        registry, so we only un-hide what was hidden by us.
-        Suppresses the focus watcher for 300ms so the taskbar
-        host's minimize bounce-back doesn't race us and hide
-        the hub right back.
+        Used by the tray icon, by the taskbar restore detector
+        (eventFilter below), and by external code that wants to
+        guarantee everything is visible.
+
+        Briefly suppresses the focus watcher (200ms) so the
+        platform focus shuffle during show + raise + activate
+        doesn't trigger a spurious hide.  In a54 the suppression
+        is much shorter than a53's 300ms because the taskbar
+        proxy bounce-back is gone.
         """
-        # Suppress BEFORE any window state change so the
-        # focusWindowChanged transients during show / raise /
-        # activate don't queue a hide.  300ms covers the host
-        # minimize bounce-back AND the typical Win11 focus-shuffle
-        # window after a taskbar click.
         try:
-            self._watcher.suppress_for(300)
+            self._watcher.suppress_for(200)
         except Exception:  # noqa: BLE001
             pass
 
@@ -529,12 +476,22 @@ class ForestVisibilityManager(QObject):
         if w is None:
             return
         try:
-            if self._last_hub_position is not None and not w.isVisible():
-                w.move(self._last_hub_position)
-            w.show()
-            # Only restore cells WE hid -- leave alone any that
-            # the user had already collapsed / closed before
-            # hide_hub() ran.
+            # showNormal() handles both cases: a minimised hub
+            # un-minimises, a hidden hub appears.  Also restores
+            # geometry from the OS-native saved state.
+            if self._taskbar_on:
+                w.showNormal()
+                # Restore the position we saved when we last hid
+                # if showNormal landed us somewhere else.  Qt's
+                # OS-native restore can miss our tracked position
+                # when the hub started life hidden (never
+                # minimised at all, so OS has no restore state).
+                if self._last_hub_position is not None:
+                    w.move(self._last_hub_position)
+            else:
+                if self._last_hub_position is not None and not w.isVisible():
+                    w.move(self._last_hub_position)
+                w.show()
             for cell_id in self._hidden_descendant_ids:
                 cell = self._registry.get(cell_id)
                 if cell is None:
@@ -550,32 +507,22 @@ class ForestVisibilityManager(QObject):
             _log(f"show_hub: {exc!r}")
 
     def hide_hub(self) -> None:
-        """Hide the forest hub AND every forest descendant.
+        """Hide the forest hub AND every visible forest descendant.
 
-        v0.8.0a53: when the user clicks outside the forest, the
-        rings and cells belong to the forest conceptually and
-        should disappear with it.  Pre-a53 only the hub hid,
-        leaving cells floating on the desktop -- the user
-        reported this as a bug.
+        Behaviour depends on whether the hub carries ``Qt.Window``
+        (taskbar mode):
+          * Taskbar mode: ``showMinimized()`` so the taskbar entry
+            stays visible.
+          * Otherwise: ``hide()`` so the window is removed
+            entirely (tray-only or always-on-top toggles).
 
-        Captures the hub's position so a later ``show_hub``
-        restores it exactly where the user last placed it.  Safe
-        to call when already hidden.
+        Tracks which descendants we hid so ``show_hub`` restores
+        only those (user-collapsed cells stay collapsed).
         """
         w = self._forest_window
         if w is None:
             return
         try:
-            if w.isVisible():
-                self._last_hub_position = QPoint(w.pos())
-            # Hide descendants BEFORE the hub so the visual order
-            # reads "everything goes away together".  Hiding the
-            # hub first would briefly leave the cells without
-            # their anchor visible, which looks like a glitch on
-            # slower paint paths.  Track which we hid so
-            # show_hub() restores only those (cells the user had
-            # already collapsed / closed before us stay that
-            # way).
             self._hidden_descendant_ids = []
             for descendant in self._forest_descendants():
                 try:
@@ -586,22 +533,185 @@ class ForestVisibilityManager(QObject):
                             self._hidden_descendant_ids.append(cell_id)
                 except Exception:  # noqa: BLE001
                     continue
-            w.hide()
+            if self._taskbar_on:
+                # Capture position before minimising so showNormal
+                # can put it back exactly where the user had it.
+                if w.isVisible() and not w.isMinimized():
+                    self._last_hub_position = QPoint(w.pos())
+                w.showMinimized()
+            else:
+                if w.isVisible():
+                    self._last_hub_position = QPoint(w.pos())
+                w.hide()
         except Exception as exc:  # noqa: BLE001
             _log(f"hide_hub: {exc!r}")
 
+    def hide_descendants_only(self) -> None:
+        """Hide every visible forest descendant WITHOUT touching
+        the hub itself.
+
+        Used by ``ForestController.start`` after the spawn pass
+        in auto-hide mode -- the hub is already in its initial
+        hidden state (minimised for taskbar mode, hidden for
+        tray-only) but the spawn pass shows each cell as it
+        loads.  This call folds those cells away to match the
+        invariant and seeds ``_hidden_descendant_ids`` so the
+        first ``show_hub`` reveals them again.
+        """
+        self._hidden_descendant_ids = []
+        for descendant in self._forest_descendants():
+            try:
+                if descendant.isVisible():
+                    descendant.hide()
+                    cell_id = getattr(descendant, "_id", None)
+                    if cell_id:
+                        self._hidden_descendant_ids.append(cell_id)
+            except Exception:  # noqa: BLE001
+                continue
+
+    def teardown(self) -> None:
+        """Release the tray icon at app shutdown."""
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.hide()
+            except Exception:  # noqa: BLE001
+                pass
+            self._tray_icon = None
+        self._watcher.set_enabled(False)
+
+    # ------------------------------------------------------------------
+    # Event filter on the hub -- detect taskbar-click restores
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj: Any, event: Any) -> bool:  # noqa: N802
+        """Hook ``WindowStateChange`` on the hub so the user
+        clicking its taskbar entry triggers a full show_hub
+        (which also reveals the descendants).
+
+        Without this, a taskbar click would un-minimise the hub
+        but leave the cells hidden -- the visible inverse of the
+        a52 / a53 bug.
+
+        Only acts when auto-hide is on (i.e. always-on-top is
+        OFF).  In always-on-top mode the user can minimise /
+        restore the hub normally without us interfering.
+        """
+        if obj is self._forest_window and event.type() == QEvent.Type.WindowStateChange:
+            if self._auto_hide and self._taskbar_on:
+                try:
+                    w = self._forest_window
+                    if w is not None and not w.isMinimized() and w.isVisible():
+                        # User restored us from the taskbar.
+                        # Reveal the descendants too.  Schedule on
+                        # the next event-loop tick so the OS
+                        # finishes processing the state change
+                        # first.
+                        QTimer.singleShot(0, self._restore_descendants)
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"eventFilter: taskbar restore raised {exc!r}")
+        return super().eventFilter(obj, event)
+
+    def _restore_descendants(self) -> None:
+        """Helper used by the event filter to show only the
+        descendants WE hid, without touching the hub (it's
+        already restored by the user's click)."""
+        # Suppress the watcher so the platform focus shuffle
+        # during the cell shows doesn't queue a hide.
+        try:
+            self._watcher.suppress_for(200)
+        except Exception:  # noqa: BLE001
+            pass
+        for cell_id in self._hidden_descendant_ids:
+            cell = self._registry.get(cell_id)
+            if cell is None:
+                continue
+            try:
+                cell.show()
+            except Exception:  # noqa: BLE001
+                continue
+        self._hidden_descendant_ids = []
+        # Bring the hub itself to the foreground in case the
+        # restore from taskbar didn't activate it properly.
+        try:
+            self._forest_window.raise_()
+            self._forest_window.activateWindow()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------
+    # Internals -- always-on-top
+    # ------------------------------------------------------------------
+
+    def _apply_always_on_top(self, on: bool) -> None:
+        """Toggle ``WindowStaysOnTopHint`` on the hub."""
+        w = self._forest_window
+        if w is None:
+            return
+        try:
+            w._apply_always_on_top_flag(on)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_always_on_top: helper raised {exc!r}")
+        self._always_on_top = on
+
+    # ------------------------------------------------------------------
+    # Internals -- taskbar
+    # ------------------------------------------------------------------
+
+    def _apply_taskbar_flag(self, on: bool) -> None:
+        """Swap the hub's ``Qt.Tool`` <-> ``Qt.Window`` flag.
+
+        a54: replaces the a52 / a53 proxy-host approach.  The
+        flag swap puts the hub itself on the taskbar -- no proxy,
+        no transient-parent quirk, no race when the user clicks
+        the taskbar entry.
+        """
+        w = self._forest_window
+        if w is None:
+            return
+        try:
+            w._apply_taskbar_flag(on)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_taskbar_flag: helper raised {exc!r}")
+        self._taskbar_on = on
+
+    # ------------------------------------------------------------------
+    # Internals -- tray
+    # ------------------------------------------------------------------
+
+    def _apply_tray(self, on: bool) -> None:
+        """Spawn or tear down the system tray icon."""
+        if on and self._tray_icon is None:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                _log(
+                    "_apply_tray: system tray not available; "
+                    "tray flag ignored"
+                )
+                return
+            tray = ForestTrayIcon(
+                on_activate=self.show_hub,
+                on_quit=self._quit_callback,
+                parent=self,
+            )
+            tray.show()
+            self._tray_icon = tray
+        elif not on and self._tray_icon is not None:
+            try:
+                self._tray_icon.hide()
+            except Exception:  # noqa: BLE001
+                pass
+            self._tray_icon = None
+
+    # ------------------------------------------------------------------
+    # Internals -- descendant walk
+    # ------------------------------------------------------------------
+
     def _forest_descendants(self) -> list[Any]:
-        """Return the flat list of every CellWindow that
-        conceptually belongs to the forest hub.
+        """Return the flat list of every CellWindow that belongs
+        to the forest hub.
 
         Walks the hub's ``_members`` (direct forest members --
         rings + standalone forest items), then for each member
-        that's a master (a ring) walks ITS ``_members``
-        recursively.  Order: depth-first, hub-children first.
-
-        Missing-from-registry entries are skipped silently
-        (stale member ids from a closed cell aren't fatal to
-        the show / hide cycle).
+        that's a master walks ITS ``_members`` recursively.
         """
         w = self._forest_window
         if w is None:
@@ -619,7 +729,6 @@ class ForestVisibilityManager(QObject):
                 if cell is None:
                     continue
                 out.append(cell)
-                # Recurse into ring members.
                 if getattr(cell, "role", None) == "master":
                     _walk(cell)
 
@@ -628,110 +737,3 @@ class ForestVisibilityManager(QObject):
         except Exception as exc:  # noqa: BLE001
             _log(f"_forest_descendants: walk raised {exc!r}")
         return out
-
-    def teardown(self) -> None:
-        """Release the taskbar host and tray icon.
-
-        Called at app shutdown so Qt doesn't grumble about a tray
-        icon outliving its QApplication.
-        """
-        if self._tray_icon is not None:
-            try:
-                self._tray_icon.hide()
-            except Exception:  # noqa: BLE001
-                pass
-            self._tray_icon = None
-        if self._taskbar_host is not None:
-            try:
-                self._taskbar_host.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._taskbar_host = None
-        self._watcher.set_enabled(False)
-
-    # ------------------------------------------------------------------
-    # Internals -- always-on-top
-    # ------------------------------------------------------------------
-
-    def _apply_always_on_top(self, on: bool) -> None:
-        """Toggle ``WindowStaysOnTopHint`` AND swap ``Qt.Tool``
-        with ``Qt.Window`` on the hub so the flag combination is
-        coherent.
-
-        Note: the ``Qt.Tool`` ↔ ``Qt.Window`` swap is gated by
-        ``show_on_taskbar`` since ``Qt.Tool`` excludes the window
-        from the taskbar.  ``_apply_taskbar`` handles that flag;
-        here we only touch always-on-top.
-        """
-        w = self._forest_window
-        if w is None:
-            return
-        # Use the existing helper on CellWindow so the hide/show
-        # ritual stays consistent with the cell-settings path.
-        try:
-            w._apply_always_on_top_flag(on)
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_apply_always_on_top: helper raised {exc!r}")
-        self._always_on_top = on
-
-    # ------------------------------------------------------------------
-    # Internals -- taskbar
-    # ------------------------------------------------------------------
-
-    def _apply_taskbar(self, on: bool) -> None:
-        """Spawn or tear down the taskbar host.
-
-        Also swaps the hub's ``Qt.Tool`` ↔ ``Qt.Window`` flag --
-        with ``Qt.Tool`` the hub itself isn't on the taskbar (the
-        host is the entry); with ``Qt.Window`` the hub IS on the
-        taskbar AND the host would be redundant.
-
-        We always use the host approach: the host is the
-        persistent entry, the hub keeps ``Qt.Tool`` (frameless +
-        hex-shape friendly).  This means the hub's window flags
-        don't depend on this setting at all -- only the host's
-        presence / absence does.
-        """
-        if on and self._taskbar_host is None:
-            host = ForestTaskbarHost(
-                on_activate=self.show_hub,
-                on_close=self._quit_callback,
-            )
-            host.show_in_taskbar()
-            self._taskbar_host = host
-        elif not on and self._taskbar_host is not None:
-            try:
-                self._taskbar_host.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._taskbar_host = None
-
-    # ------------------------------------------------------------------
-    # Internals -- tray
-    # ------------------------------------------------------------------
-
-    def _apply_tray(self, on: bool) -> None:
-        """Spawn or tear down the system tray icon."""
-        if on and self._tray_icon is None:
-            # Some environments report system tray unavailable
-            # (server VMs, certain WSL setups).  Bail gracefully
-            # if so -- the user's other entry points still work.
-            if not QSystemTrayIcon.isSystemTrayAvailable():
-                _log(
-                    "_apply_tray: system tray not available on this "
-                    "platform; tray flag ignored"
-                )
-                return
-            tray = ForestTrayIcon(
-                on_activate=self.show_hub,
-                on_quit=self._quit_callback,
-                parent=self,
-            )
-            tray.show()
-            self._tray_icon = tray
-        elif not on and self._tray_icon is not None:
-            try:
-                self._tray_icon.hide()
-            except Exception:  # noqa: BLE001
-                pass
-            self._tray_icon = None

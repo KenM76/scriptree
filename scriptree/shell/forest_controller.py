@@ -489,9 +489,28 @@ class ForestController(QObject):
             _log(f"start: could not wire window-position capture: {exc!r}")
         # v0.8.0a52 -- construct the visibility manager BEFORE the
         # first show() so its ``apply()`` call sets the correct
-        # window flags and (when ``show_always_on_top`` is OFF +
-        # taskbar/tray is ON) leaves the hub hidden from the
-        # start instead of briefly flashing on screen.
+        # window flags (Qt.Tool / Qt.Window swap for taskbar mode,
+        # WindowStaysOnTopHint for AOT) before Qt commits the
+        # native window.
+        #
+        # v0.8.0a54 -- the taskbar surface is now the hub itself
+        # (not a proxy), so the initial visibility decision is
+        # three-way:
+        #   show_always_on_top ON  -> show normally (current
+        #                             behaviour).
+        #   AOT off, taskbar ON    -> showMinimized() so the
+        #                             taskbar entry appears at
+        #                             startup; the hex stays
+        #                             off-screen.  Cells get
+        #                             hidden after spawn (the
+        #                             "Decide initial visibility"
+        #                             tail at the bottom of
+        #                             start()).
+        #   AOT off, tray-only     -> leave hidden; the tray
+        #                             icon brings everything back.
+        # In all auto-hide combos the descendants spawned below
+        # also need to fold away -- handled at the tail of
+        # start() once spawn + repack have settled.
         from scriptree.shell.forest_visibility import (
             ForestVisibilityManager,
         )
@@ -505,16 +524,9 @@ class ForestController(QObject):
         except Exception as exc:  # noqa: BLE001
             _log(f"start: visibility.apply failed: {exc!r}")
 
-        # Decide whether to show the hub now or leave it hidden
-        # (taskbar / tray will reveal it on demand).  The rule:
-        # ``show_always_on_top`` ON  → show now (current behaviour).
-        # ``show_always_on_top`` OFF + at least one of
-        #   taskbar/tray ON         → start hidden; user clicks
-        #                              taskbar/tray to reveal.
-        # ``show_always_on_top`` OFF + neither other flag ON →
-        #                              normalised() repairs this
-        #                              to always-on-top=True, so
-        #                              we still show.
+        # Initial show.  Always-on-top wins; otherwise taskbar
+        # gets a minimised hex; otherwise the hub stays hidden
+        # (tray-only mode -- user clicks the tray icon).
         if self._preferences.show_always_on_top:
             self.forest_window.show()
             # v0.6.10 macify: soft fade-in for the forest hub.
@@ -522,6 +534,13 @@ class ForestController(QObject):
                 self.forest_window._fade_in()
             except Exception:  # noqa: BLE001
                 pass
+        elif self._preferences.show_on_taskbar:
+            # showMinimized() is what creates the taskbar entry
+            # on Win11 for a ``Qt.Window``-flagged hub.  Without
+            # this, a hidden Qt.Window has no taskbar button --
+            # the user would have no surface to click and the
+            # forest would be unreachable until they restarted.
+            self.forest_window.showMinimized()
         # v0.6.12 — settle: the hub may overlap a standalone cell that
         # was loaded from QSettings before us; slide whichever side
         # is movable until clear.
@@ -601,6 +620,29 @@ class ForestController(QObject):
         if not suppress_first_run and not self.forest.items:
             from PySide6.QtCore import QTimer
             QTimer.singleShot(50, self._show_first_run_dialog)
+
+        # v0.8.0a54: in auto-hide mode (always-on-top OFF +
+        # taskbar / tray ON) the spawn pass above showed every
+        # cell.  Fold them away so the startup state matches the
+        # invariant "only what the taskbar / tray reveals is
+        # visible".  hide_descendants_only() also seeds the
+        # manager's _hidden_descendant_ids list so a subsequent
+        # show_hub restores ONLY the cells we just hid (not
+        # ones the user collapsed before).
+        if (
+            not self._preferences.show_always_on_top
+            and (
+                self._preferences.show_on_taskbar
+                or self._preferences.show_in_system_tray
+            )
+        ):
+            try:
+                self._visibility.hide_descendants_only()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"start: post-spawn hide_descendants_only "
+                    f"raised {exc!r}"
+                )
 
     # ------------------------------------------------------------------
     # Menu hook

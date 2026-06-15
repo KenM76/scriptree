@@ -5291,6 +5291,43 @@ class CellWindow(QMainWindow):
         if self.isVisible():
             self.show()
 
+    def _apply_taskbar_flag(self, on: bool) -> None:
+        """v0.8.0a54: swap ``Qt.Tool`` <-> ``Qt.Window`` so this cell
+        appears (or doesn't) on the Windows taskbar / Alt+Tab.
+
+        ONLY the forest hub should ever call this -- normal cells
+        stay ``Qt.Tool`` (excluded from taskbar) by design.
+
+        Why the swap matters: pre-a54 the forest hub kept ``Qt.Tool``
+        in all visibility modes, and a separate ``ForestTaskbarHost``
+        proxy held the taskbar entry.  That introduced a well-known
+        Qt-on-Windows quirk -- ``Qt.Tool`` windows shown right after
+        another window was active become Windows-transient children
+        of that other window.  When the host then minimised itself
+        (the proxy's bounce-back pattern), Windows dragged the
+        freshly-shown forest down with it.  Symptom: forest pops up
+        briefly then disappears, cells left behind.
+
+        a54 fix: when ``show_on_taskbar`` is on, the forest hub
+        itself gets ``Qt.Window`` -- it IS the taskbar entry, no
+        proxy involved.  No transient-parent confusion, no race.
+        When ``show_on_taskbar`` is off the hub reverts to
+        ``Qt.Tool`` so it doesn't crowd Alt+Tab.
+
+        Mirrors ``_apply_always_on_top_flag``'s hide-and-reshow
+        ritual (Win11 only picks up flag changes on the next show).
+        """
+        flags = self.windowFlags()
+        if on:
+            flags &= ~Qt.Tool
+            flags |= Qt.Window
+        else:
+            flags &= ~Qt.Window
+            flags |= Qt.Tool
+        self.setWindowFlags(flags)
+        if self.isVisible():
+            self.show()
+
     # ------------------------------------------------------------------
     # Paint
     # ------------------------------------------------------------------
