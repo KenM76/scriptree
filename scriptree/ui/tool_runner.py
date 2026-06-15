@@ -2576,41 +2576,54 @@ class ToolRunnerView(QWidget):
                 for pid in hidden:
                     if pid not in values and pid in cfg.values:
                         values[pid] = cfg.values[pid]
-        # v0.8.0a50+ — apply ``emit: "unselected"`` complement.
-        # For each multiselect param flagged ``emit: "unselected"``,
-        # replace the selected list with its COMPLEMENT against the
-        # widget's currently-visible choice set (which includes
-        # provider-supplied dynamic choices, not just static
-        # ``param.choices``).  The complement preserves choice order
-        # so token-group fan-out is deterministic.  See the SWBomExcluded
-        # worked example in docs/LLM/checkbox_list_emit.md for why
-        # this is computed against the LIVE choices and not the
-        # static catalog field.
-        for p in self._tool.params:
-            if getattr(p, "emit", "selected") != "unselected":
-                continue
-            widget = self._widgets.get(p.id)
-            if widget is None:
-                continue
-            selected = values.get(p.id) or []
-            if not isinstance(selected, (list, tuple)):
-                continue
-            sel_set = {str(s) for s in selected}
-            # Prefer widget-supplied current choices (covers dynamic
-            # providers); fall back to static param.choices for
-            # widgets that don't expose the method.
-            if hasattr(widget, "current_choices"):
-                all_choices = widget.current_choices()
-            else:
-                all_choices = list(p.choices)
-            values[p.id] = [
-                c for c in all_choices if str(c) not in sel_set
-            ]
+        # NOTE (v0.8.0a51+): the ``emit: "unselected"`` complement
+        # transformation USED to live here (v0.8.0a50).  It moved to
+        # ``core/runner.apply_emit_complement`` in a51 so the
+        # transformation runs in ONE place -- the same path the
+        # headless CLI takes -- and so dynamic-provider catalogs
+        # work without a UI.  The UI's contribution is now to BUILD
+        # the ``live_choices`` dict from widgets that expose
+        # ``current_choices()`` (see ``_build_live_choices``) and
+        # pass it to ``build_full_argv``.  The core does the
+        # complement using live_choices when present, falls back to
+        # invoking the provider headlessly, then to
+        # ``param.choices`` for static catalogs.
         # Drop visible_when-hidden params for argv assembly.  See
         # ``_visible_when_hidden_ids`` for the source of truth.
         for pid in self._visible_when_hidden_ids():
             values.pop(pid, None)
         return values
+
+    def _build_live_choices(self) -> dict[str, list[str]]:
+        """v0.8.0a51+ -- snapshot the live choice set of each widget
+        that exposes one.
+
+        Used to feed ``build_full_argv``'s ``live_choices`` parameter
+        so the runner's ``emit: "unselected"`` complement is
+        computed against the choices the user actually saw at
+        click time -- including provider-supplied dynamic choices,
+        not just the static ``param.choices`` field on the catalog.
+
+        Returns a ``{param_id: [choice_value, ...]}`` dict containing
+        only the params whose widget exposes ``current_choices()``
+        (today: ``CheckboxListWidget`` and ``DropdownWidget``).  The
+        core runner treats absent entries as "no live snapshot
+        available; fall back to the provider re-run or static
+        ``param.choices``."
+        """
+        out: dict[str, list[str]] = {}
+        for pid, widget in self._widgets.items():
+            getter = getattr(widget, "current_choices", None)
+            if callable(getter):
+                try:
+                    out[pid] = list(getter())
+                except Exception:  # noqa: BLE001
+                    # Defensive: a misbehaving widget shouldn't
+                    # block the whole run.  Skip it; the core
+                    # runner will fall back to a provider re-run
+                    # or static choices.
+                    continue
+        return out
 
     def _visible_when_hidden_ids(self) -> set[str]:
         """Return the set of param IDs currently hidden by
@@ -2660,6 +2673,7 @@ class ToolRunnerView(QWidget):
                 self._collect_values(),
                 self._extras,
                 ignore_required=True,
+                live_choices=self._build_live_choices(),
             )
         except RunnerError as e:
             self._status.setText(f"<span style='color:red'>{e}</span>")
@@ -2726,6 +2740,7 @@ class ToolRunnerView(QWidget):
                 self._collect_values(),
                 self._extras,
                 ignore_required=True,
+                live_choices=self._build_live_choices(),
             )
         except RunnerError as e:
             self._updating = True
@@ -3201,6 +3216,7 @@ class ToolRunnerView(QWidget):
                 global_path_prepend=_g_path or None,
                 global_path_overrides=_g_path_override,
                 tree_path_prepend=self._tree_path_prepend or None,
+                live_choices=self._build_live_choices(),
             )
         except RunnerError as e:
             QMessageBox.warning(self, "Validation error", str(e))

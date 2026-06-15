@@ -172,9 +172,14 @@ pre-checked), pairing with `emit: "unselected"` gives you a
 deselect-to-act form for free: open all-checked → emit is `[]` →
 Run is a no-op until the user unticks something.
 
-Static-choice catalogs honour `emit: "unselected"` in both the UI
-AND headless / CLI runs. Provider-backed catalogs honour it in
-the UI only (v0.8.0a50 limitation — the complement requires the
-widget's live choice set, which only exists in the UI path).
-Worked example with full SWBomExcluded walkthrough:
+**v0.8.0a51+:** the complement transformation moved from the UI
+into `core/runner.apply_emit_complement`, with a three-tier
+choice-set resolution (UI-supplied `live_choices` → provider
+re-run headlessly → static `param.choices`).  Provider-backed
+catalogs now honour `emit: "unselected"` in BOTH the UI AND
+headless / CLI runs — the runner re-invokes the provider at
+argv-assembly time when no live snapshot was passed in.  A
+`.scriptree` configuration saved through the UI runs identically
+under `scriptree run … --configuration …`.  Worked example with
+full SWBomExcluded walkthrough:
 [`checkbox_list_emit.md`](checkbox_list_emit.md).

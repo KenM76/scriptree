@@ -144,24 +144,79 @@ the default.
   nothing should be a no-op.
 - A partial list — pre-tick the common case; the user can adjust.
 
-## Limitations / not in v0.8.0a50
+## Limitations / not in scope
 
-- **Headless / CLI runs with `emit: "unselected"` + a dynamic
-  `choices_provider` aren't supported.** The complement needs
-  the widget's live choice set; headless mode doesn't
-  materialise the widget. Static-choice catalogs work
-  headlessly; dynamic catalogs need the UI. (Workaround: provide
-  the choice list inline in `choices`, not via the provider.)
+(The original v0.8.0a50 ship documented two further limitations
+— headless dynamic-provider runs and the missing editor radio
+picker — which were lifted in **v0.8.0a51**.  See "What v0.8.0a51
+added" below for the now-shipped pieces.)
+
 - **No "emit both halves" mode.** Some tools might want both the
-  selected and unselected lists at once; the v0.8.0a50 primitive
-  is one or the other. `"selected"` and `"unselected"` are
-  composable across multiple params if the back-end needs both.
-- **No editor-side "Default master state" radio picker.** The
-  author edits `default` directly in the property panel today.
-  An explicit picker that surfaces "All selected / All
-  deselected / Custom" is queued for a future release; the
-  validation rule already protects against the silent-default
-  hazard.
+  selected and unselected lists at once; the primitive is one or
+  the other.  `"selected"` and `"unselected"` are composable
+  across multiple params if the back-end needs both.
+
+## What v0.8.0a51 added
+
+### Headless / CLI `emit: "unselected"` (any choice source)
+
+The complement transformation moved from
+`ui/tool_runner._collect_values` to
+`core/runner.apply_emit_complement`, which runs inside
+`build_full_argv`.  Now BOTH the UI and the headless / CLI
+argv-assembly paths apply the complement against the live
+choice set, with a three-tier resolution:
+
+1. **`live_choices` param** to `build_full_argv` — the UI
+   populates this from each widget's `current_choices()` so
+   provider-supplied dynamic lists are honoured pixel-for-pixel.
+2. **Provider re-run** via `resolve_provider` — headless paths
+   with a `choices_provider` re-invoke the provider at argv-
+   assembly time to get the current choice list.  Same provider
+   that ran at form-open in the UI; same answer (modulo
+   intentional time-varying providers).
+3. **Static `param.choices`** — non-provider catalogs land here.
+
+This means:
+
+- A `.scriptree` configuration saved through the UI runs
+  identically when re-executed headlessly (`scriptree run
+  path/to/tool.scriptree --configuration foo`) — same argv, same
+  back-end action.
+- Tool authors don't have to choose between "use a provider"
+  and "support headless `emit: "unselected"`."
+- The complement is computed exactly once per argv assembly.
+  `build_full_argv` operates on a shallow copy of `values`, so
+  callers (the UI's live preview in particular) can re-call it
+  with the same dict and never see a double-complement.
+
+### Editor "Default master state" radio picker
+
+When a `checkbox_list` / `dropdown`-multi param has no
+`choices_provider`, the property panel now shows a three-radio
+picker next to the `Default:` field:
+
+| Radio          | What it does on click                      |
+|----------------|--------------------------------------------|
+| All selected   | `param.default = list(param.choices)`      |
+| All deselected | `param.default = []`                       |
+| Custom         | No-op (preserves whatever's in the field) |
+
+The picker auto-syncs on load: opens with the radio that
+matches the current `default` vs `choices` (matching set →
+*All selected*, empty → *All deselected*, partial → *Custom*).
+The author can still edit `default` directly in the text field
+above the picker — the picker just snaps to *Custom* on the
+next load.
+
+Why it's still safety-load-bearing for explicit defaults:
+without the picker, an author who picks `checkbox_list` in the
+editor had to know that the implicit-default fallback path
+would silently set `default = []` and that the validate WARN
+would flag it later.  With the picker, the first save of a
+fresh `checkbox_list` param surfaces the choice in front of
+the author — they pick a radio, the `default` field updates,
+no implicit-default exposure.
 
 ## Files
 

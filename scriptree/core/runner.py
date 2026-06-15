@@ -309,6 +309,99 @@ def resolve_tool_path(
     return path
 
 
+# ---------------------------------------------------------------------------
+# emit:unselected complement (v0.8.0a51+)
+# ---------------------------------------------------------------------------
+#
+# The transformation that turns ``selected = [A, C]`` into
+# ``complement = [B, D, E]`` for a multiselect param flagged
+# ``emit: "unselected"`` lives HERE -- in the single core
+# argv-assembly path -- so both the UI and the headless / CLI run
+# emit the same argv from the same configuration.
+#
+# v0.8.0a50 had this in the UI's ``_collect_values`` only; that
+# left headless emit:unselected runs emitting the SELECTED list
+# (wrong half).  Moved to core in a51.
+#
+# The choice set used for the complement is sourced (in order):
+#
+#   1. ``live_choices[param_id]`` if the caller passed it -- the
+#      UI populates this from each widget's ``current_choices()``
+#      so a provider-supplied dynamic list is honoured pixel-
+#      for-pixel.
+#   2. The provider re-run via ``resolve_provider`` -- headless /
+#      CLI catalogs with no live UI hit this branch.
+#   3. ``param.choices`` -- static-choice catalogs land here.
+#
+# Order is preserved (matches ``choices`` / live list order) so
+# token-group fan-out is deterministic.
+
+def apply_emit_complement(
+    tool: ToolDef,
+    values: dict[str, Any],
+    live_choices: dict[str, list[str]] | None = None,
+) -> None:
+    """In-place transform ``values`` so that every param with
+    ``emit == "unselected"`` carries the COMPLEMENT of its
+    selection against the live choice set.
+
+    See the block comment above for the three-tier choice-set
+    resolution order.  Idempotency: this function MUST NOT run
+    twice on the same values dict -- the second pass would
+    complement the complement back to the selected list.
+    Callers ensure single-application by routing all argv
+    assembly through ``build_full_argv``.
+    """
+    live = live_choices or {}
+    for p in tool.params:
+        if getattr(p, "emit", "selected") != "unselected":
+            continue
+        selected = values.get(p.id) or []
+        if not isinstance(selected, (list, tuple)):
+            # Robustness: a non-list value here is a catalog or
+            # config bug, but we don't want to crash argv assembly
+            # over it.  Skip the complement and let the downstream
+            # ``_value_to_str`` coerce as it would for any list-
+            # shaped param.
+            continue
+        sel_set = {str(s) for s in selected}
+
+        # Tier 1: UI-supplied snapshot.
+        choices = live.get(p.id)
+
+        # Tier 2: headless provider re-run.
+        if choices is None and getattr(p, "choices_provider", None) is not None:
+            try:
+                from scriptree.core.providers import resolve_provider
+                upstream = {
+                    str(uid): str(values.get(uid, ""))
+                    for uid in (getattr(p, "depends_on", None) or [])
+                }
+                pr = resolve_provider(
+                    p.choices_provider,
+                    param_id=p.id,
+                    param_type=p.type,
+                    upstream_values=upstream,
+                    tool_file=tool.loaded_from,
+                )
+                if pr.ok:
+                    choices = list(pr.choices)
+            except Exception:  # noqa: BLE001
+                # Provider failures fall through to static choices;
+                # an emit:unselected param with no live source and
+                # an empty static choices list will emit [], which
+                # is the safe drop-on-empty path.
+                choices = None
+
+        # Tier 3: static catalog choices.
+        if choices is None:
+            choices = list(p.choices)
+
+        values[p.id] = [
+            c for c in choices if str(c) not in sel_set
+        ]
+
+
 def resolve(
     tool: ToolDef,
     values: dict[str, Any],
@@ -1719,6 +1812,7 @@ def build_full_argv(
     global_path_prepend: list[str] | None = None,
     global_path_overrides: bool = False,
     tree_path_prepend: list[str] | None = None,
+    live_choices: dict[str, list[str]] | None = None,
 ) -> ResolvedCommand:
     """Resolve ``tool`` and append user-added extras.
 
@@ -1754,6 +1848,15 @@ def build_full_argv(
     # the full merge contract.
     from .platform import resolve_for_host
     tool = resolve_for_host(tool)
+
+    # v0.8.0a51+ -- apply the ``emit: "unselected"`` complement
+    # in-place on a SHALLOW COPY of values (so callers don't see
+    # their input mutated).  See ``apply_emit_complement`` above
+    # for the three-tier choice-set resolution
+    # (live_choices > provider re-run > static param.choices).
+    # Done exactly once, here, regardless of UI vs headless.
+    values = dict(values)
+    apply_emit_complement(tool, values, live_choices=live_choices)
 
     cmd = resolve(tool, values, ignore_required=ignore_required)
     env = build_env(

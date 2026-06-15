@@ -83,6 +83,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QButtonGroup,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTabWidget,
@@ -485,6 +487,37 @@ class ToolEditorView(QWidget):
             self._on_prop_select_all_changed
         )
 
+        # v0.8.0a51 — Default master-state picker.  Three radios in
+        # a horizontal row: "All selected" / "All deselected" /
+        # "Custom selection."  Clicking a radio mutates
+        # ``param.default`` immediately (sets the full choice list,
+        # the empty list, or leaves it alone respectively).  The
+        # radios' displayed state is derived from the CURRENT
+        # ``param.default`` vs ``param.choices`` at each
+        # ``_load_param_into_panel`` so the picker stays honest
+        # when the author edits choices.  Shown only for
+        # checkbox_list / dropdown-multi without a provider --
+        # provider-backed catalogs source their default from the
+        # provider response, not from the static field.
+        self._prop_default_state = QWidget()
+        _ds_layout = QHBoxLayout(self._prop_default_state)
+        _ds_layout.setContentsMargins(0, 0, 0, 0)
+        _ds_layout.setSpacing(8)
+        self._prop_default_state_group = QButtonGroup(self)
+        self._prop_default_state_all = QRadioButton("All selected")
+        self._prop_default_state_none = QRadioButton("All deselected")
+        self._prop_default_state_custom = QRadioButton("Custom")
+        self._prop_default_state_group.addButton(self._prop_default_state_all, 0)
+        self._prop_default_state_group.addButton(self._prop_default_state_none, 1)
+        self._prop_default_state_group.addButton(self._prop_default_state_custom, 2)
+        _ds_layout.addWidget(self._prop_default_state_all)
+        _ds_layout.addWidget(self._prop_default_state_none)
+        _ds_layout.addWidget(self._prop_default_state_custom)
+        _ds_layout.addStretch(1)
+        self._prop_default_state_group.buttonClicked.connect(
+            self._on_prop_default_state_picked
+        )
+
         # v0.4.0 — every property row gets a hover tooltip on BOTH
         # the label and the input.  Previously the only tooltips on
         # the property panel were the ones manually wired above
@@ -568,6 +601,17 @@ class ToolEditorView(QWidget):
             "<code>bool</code> use <code>true</code> / "
             "<code>false</code>; for <code>enum</code> use one of "
             "the declared choices.",
+        )
+        self._add_prop_row(
+            "Default state:", self._prop_default_state,
+            "v0.8.0a51+.  Quick-picker for checkbox_list / "
+            "dropdown-multi initial state.  <b>All selected</b> "
+            "fills the Default field with every choice (form opens "
+            "all-ticked).  <b>All deselected</b> empties it (form "
+            "opens with nothing ticked).  <b>Custom</b> leaves the "
+            "Default field alone -- edit it directly above to pick "
+            "a partial selection.  The picker auto-syncs with the "
+            "Default field when you edit choices.",
         )
         self._add_prop_row(
             "Choices:", self._prop_choices,
@@ -1007,6 +1051,16 @@ class ToolEditorView(QWidget):
             param.type is ParamType.MULTISELECT
             and param.widget is W.CHECKBOX_LIST,
         )
+        # v0.8.0a51+ -- the default-state radio picker is shown
+        # ONLY when the param is a static-choice multiselect
+        # rendered as checkbox_list / dropdown.  Provider-backed
+        # catalogs source the initial selection from the provider
+        # response (its ``default`` key in the JSON it emits),
+        # so the static-default picker would be misleading.
+        self._set_prop_row_visible(
+            self._prop_default_state,
+            is_multi_emit and param.choices_provider is None,
+        )
 
     # --- param list ------------------------------------------------------
 
@@ -1149,6 +1203,12 @@ class ToolEditorView(QWidget):
             self._prop_select_all.setChecked(
                 bool(getattr(param, "select_all", False)),
             )
+            # v0.8.0a51+ — recompute the default-state radio's
+            # displayed selection from the current default vs
+            # choices.  The radios block signals during this set
+            # so we don't trigger ``_on_prop_default_state_picked``
+            # in response to our own programmatic update.
+            self._sync_default_state_radios(param)
             # v0.4.0 — hide rows that don't apply to this param's
             # type / widget combo to keep the panel uncluttered.
             self._refresh_prop_visibility()
@@ -1276,6 +1336,82 @@ class ToolEditorView(QWidget):
         if param is None:
             return
         param.select_all = bool(checked)
+        self._update_preview()
+
+    def _sync_default_state_radios(self, param: ParamDef) -> None:
+        """v0.8.0a51+ -- reflect the current ``param.default`` vs
+        ``param.choices`` as a radio selection.
+
+        ``All selected``  is shown when ``set(default) == set(choices)``
+                          AND choices is non-empty.
+        ``All deselected`` is shown when ``default`` is the empty list.
+        ``Custom``        otherwise -- including the case where
+                          ``default`` is some non-empty proper subset
+                          AND the case where ``default`` is set but
+                          ``choices`` is empty (rare; left to author).
+
+        Signals are blocked during this set so the programmatic
+        update doesn't fire ``_on_prop_default_state_picked``.
+        """
+        choices_set = {str(c) for c in (param.choices or [])}
+        default_raw = param.default if isinstance(param.default, list) else []
+        default_set = {str(c) for c in default_raw}
+        if choices_set and default_set == choices_set:
+            target = self._prop_default_state_all
+        elif not default_set:
+            target = self._prop_default_state_none
+        else:
+            target = self._prop_default_state_custom
+        # Block while we set so the click signal stays quiet.
+        for btn in (
+            self._prop_default_state_all,
+            self._prop_default_state_none,
+            self._prop_default_state_custom,
+        ):
+            btn.blockSignals(True)
+        try:
+            self._prop_default_state_group.setExclusive(False)
+            self._prop_default_state_all.setChecked(False)
+            self._prop_default_state_none.setChecked(False)
+            self._prop_default_state_custom.setChecked(False)
+            self._prop_default_state_group.setExclusive(True)
+            target.setChecked(True)
+        finally:
+            for btn in (
+                self._prop_default_state_all,
+                self._prop_default_state_none,
+                self._prop_default_state_custom,
+            ):
+                btn.blockSignals(False)
+
+    def _on_prop_default_state_picked(self, button) -> None:  # noqa: ANN001
+        """v0.8.0a51+ -- handle a click on one of the three radios.
+
+        Acts immediately on ``param.default``:
+          * All selected    -> default = list(param.choices)
+          * All deselected  -> default = []
+          * Custom          -> leave ``default`` alone
+
+        After mutating ``default``, the ``Default:`` text field
+        gets re-rendered through the standard
+        ``_load_param_into_panel`` path so the picker + the raw
+        field stay in lock-step.
+        """
+        if self._building_panel:
+            return
+        param = self._current_param()
+        if param is None:
+            return
+        if button is self._prop_default_state_all:
+            param.default = list(param.choices)
+        elif button is self._prop_default_state_none:
+            param.default = []
+        else:
+            return  # "Custom" -- leave default alone
+        # Re-render so the Default text field reflects the new
+        # value; _sync_default_state_radios will re-check the
+        # same radio (idempotent).
+        self._load_param_into_panel(param)
         self._update_preview()
 
     def _on_prop_no_split_changed(self, checked: bool) -> None:

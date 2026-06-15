@@ -206,13 +206,14 @@ unticks the ones to act on:
 ]
 ```
 
-Limitations:
-
-- **Headless / CLI runs with `emit: "unselected"` + a dynamic
-  `choices_provider` are not supported in v0.8.0a50.** The
-  complement requires the widget's live choice set, which only
-  exists in the UI path. Static-choice catalogs are fine
-  headlessly; dynamic-provider catalogs need the UI.
+v0.8.0a51+ note: the headless-with-provider limitation that
+v0.8.0a50 documented is **lifted**. The complement moved into
+`core/runner.apply_emit_complement` and runs inside
+`build_full_argv`, with a three-tier choice-set resolution
+(`live_choices` from UI → provider re-run → static
+`param.choices`). Both UI and headless / CLI paths emit
+identical argv from identical configurations now. See
+[`checkbox_list_emit.md`](checkbox_list_emit.md#what-v080a51-added).
 
 ### `folder_list`, `file_list` (v0.6.28+)
 
