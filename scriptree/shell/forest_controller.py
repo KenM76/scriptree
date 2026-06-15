@@ -257,6 +257,12 @@ class ForestController(QObject):
         except Exception as exc:  # noqa: BLE001
             _log(f"__init__: hexagonClosed hook failed: {exc!r}")
 
+        # v0.8.0a52 -- visibility manager.  None until ``start()``
+        # constructs the forest_window; the manager needs that
+        # reference to flip flags / hide / show on prefs change.
+        # Wiring happens at the bottom of ``start()``.
+        self._visibility: Any = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -481,12 +487,41 @@ class ForestController(QObject):
             self._forest_pos_slot = _on_hex_moved
         except Exception as exc:  # noqa: BLE001
             _log(f"start: could not wire window-position capture: {exc!r}")
-        self.forest_window.show()
-        # v0.6.10 macify: soft fade-in for the forest hub.
+        # v0.8.0a52 -- construct the visibility manager BEFORE the
+        # first show() so its ``apply()`` call sets the correct
+        # window flags and (when ``show_always_on_top`` is OFF +
+        # taskbar/tray is ON) leaves the hub hidden from the
+        # start instead of briefly flashing on screen.
+        from scriptree.shell.forest_visibility import (
+            ForestVisibilityManager,
+        )
+        self._visibility = ForestVisibilityManager(
+            self.forest_window,
+            self._registry,
+            quit_callback=self._on_visibility_quit,
+        )
         try:
-            self.forest_window._fade_in()
-        except Exception:  # noqa: BLE001
-            pass
+            self._visibility.apply(self._preferences)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: visibility.apply failed: {exc!r}")
+
+        # Decide whether to show the hub now or leave it hidden
+        # (taskbar / tray will reveal it on demand).  The rule:
+        # ``show_always_on_top`` ON  → show now (current behaviour).
+        # ``show_always_on_top`` OFF + at least one of
+        #   taskbar/tray ON         → start hidden; user clicks
+        #                              taskbar/tray to reveal.
+        # ``show_always_on_top`` OFF + neither other flag ON →
+        #                              normalised() repairs this
+        #                              to always-on-top=True, so
+        #                              we still show.
+        if self._preferences.show_always_on_top:
+            self.forest_window.show()
+            # v0.6.10 macify: soft fade-in for the forest hub.
+            try:
+                self.forest_window._fade_in()
+            except Exception:  # noqa: BLE001
+                pass
         # v0.6.12 — settle: the hub may overlap a standalone cell that
         # was loaded from QSettings before us; slide whichever side
         # is movable until clear.
@@ -645,6 +680,99 @@ class ForestController(QObject):
             "Bring all cells back on-screen",
         )
         forest_menu.addSeparator()
+
+        # v0.8.0a52 -- Visibility sub-submenu with three checkable
+        # actions.  Each toggle persists via ``update_preferences``
+        # and re-applies live through the visibility manager.  The
+        # toggle handler refuses to uncheck the LAST checked
+        # action so the user can't accidentally make the hub
+        # unreachable.
+        vis_menu = QMenu("Visibility", forest_menu)
+        vis_menu.setIcon(_bundled("forest"))
+        prefs_now = self.get_preferences()
+
+        a_aot = vis_menu.addAction("Show always on top (over desktop)")
+        a_aot.setCheckable(True)
+        a_aot.setChecked(prefs_now.show_always_on_top)
+        a_aot.setToolTip(
+            "Float the forest hub above the desktop, the way "
+            "it has worked since ScripTree v0.3.  Default ON."
+        )
+
+        a_tb = vis_menu.addAction("Show on taskbar")
+        a_tb.setCheckable(True)
+        a_tb.setChecked(prefs_now.show_on_taskbar)
+        a_tb.setToolTip(
+            "Add a persistent ScripTree Forest entry to the "
+            "Windows taskbar.  Click the entry to bring the "
+            "forest hub to the front.  Works the same way "
+            "PortableApps does."
+        )
+
+        a_tr = vis_menu.addAction("Show in system tray")
+        a_tr.setCheckable(True)
+        a_tr.setChecked(prefs_now.show_in_system_tray)
+        a_tr.setToolTip(
+            "Add a forest icon to the system tray.  Left-click "
+            "to bring the forest hub to the front; right-click "
+            "for Show / Quit.  Works the same way PortableApps "
+            "does."
+        )
+
+        # Toggle handler: every change goes through here so we
+        # can enforce "at least one stays checked" + persist +
+        # apply live.  Captured ``_actions`` lets us re-check the
+        # last action and surface a brief warning when the user
+        # tries to uncheck it.
+        _actions = [
+            (a_aot, "show_always_on_top"),
+            (a_tb, "show_on_taskbar"),
+            (a_tr, "show_in_system_tray"),
+        ]
+
+        def _on_visibility_toggle(_checked: bool) -> None:
+            # Read the candidate new state off the actions.
+            new_aot = a_aot.isChecked()
+            new_tb = a_tb.isChecked()
+            new_tr = a_tr.isChecked()
+            if not (new_aot or new_tb or new_tr):
+                # User tried to uncheck the last one -- refuse
+                # the change.  Re-check the action that just
+                # fired (it's whichever is currently unchecked
+                # and was the last one standing) and bail.
+                for action, _attr in _actions:
+                    if not action.isChecked():
+                        action.setChecked(True)
+                try:
+                    from PySide6.QtWidgets import QToolTip
+                    from PySide6.QtGui import QCursor
+                    QToolTip.showText(
+                        QCursor.pos(),
+                        "At least one visibility option must stay "
+                        "enabled — otherwise the forest hub would "
+                        "become unreachable.",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            new_prefs = ForestPreferences(
+                fallback_to_default=prefs_now.fallback_to_default,
+                default_forest_path=prefs_now.default_forest_path,
+                show_always_on_top=new_aot,
+                show_on_taskbar=new_tb,
+                show_in_system_tray=new_tr,
+            )
+            try:
+                self.update_preferences(new_prefs)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"Visibility toggle: update_preferences failed: {exc!r}")
+
+        for action, _attr in _actions:
+            action.toggled.connect(_on_visibility_toggle)
+
+        forest_menu.addMenu(vis_menu)
+        forest_menu.addSeparator()
+
         a_settings = forest_menu.addAction(
             _bundled("settings"), "Forest settings…",
         )
@@ -1796,24 +1924,77 @@ class ForestController(QObject):
             _log(f"_save_as_default: preference persist failed: {exc!r}")
 
     def get_preferences(self) -> ForestPreferences:
-        """Return a snapshot of the user's launch preferences."""
+        """Return a snapshot of the user's launch preferences.
+
+        v0.8.0a52+ -- the snapshot now carries the three
+        visibility flags (``show_always_on_top``,
+        ``show_on_taskbar``, ``show_in_system_tray``) so the
+        settings dialog and Visibility submenu can edit them
+        without having to read prefs from disk again.
+        """
         if getattr(self, "_preferences", None) is None:
             self._preferences = load_preferences(self._branding)
         # Return a copy so callers can mutate without aliasing.
         return ForestPreferences(
             fallback_to_default=self._preferences.fallback_to_default,
             default_forest_path=self._preferences.default_forest_path,
+            show_always_on_top=self._preferences.show_always_on_top,
+            show_on_taskbar=self._preferences.show_on_taskbar,
+            show_in_system_tray=self._preferences.show_in_system_tray,
         )
 
     def update_preferences(self, prefs: ForestPreferences) -> None:
-        """Persist ``prefs`` to disk and update the controller's
-        cached copy.  Doesn't change the currently-loaded forest —
-        the new settings apply at the next launch."""
+        """Persist ``prefs`` to disk, update the cached copy, AND
+        re-apply visibility live.
+
+        Launch defaults (``fallback_to_default``,
+        ``default_forest_path``) only kick in at the next launch.
+        Visibility flags, however, apply immediately via the
+        attached ``ForestVisibilityManager`` -- toggling
+        ``show_in_system_tray`` from the settings dialog spawns
+        / tears down the tray icon right away rather than
+        forcing a restart.
+        """
+        # Repair degenerate "all three visibility flags False"
+        # before we write -- the UI should already prevent this
+        # but defence in depth is cheap.
+        prefs = prefs.normalised()
         save_preferences(prefs, self._branding)
         self._preferences = ForestPreferences(
             fallback_to_default=prefs.fallback_to_default,
             default_forest_path=prefs.default_forest_path,
+            show_always_on_top=prefs.show_always_on_top,
+            show_on_taskbar=prefs.show_on_taskbar,
+            show_in_system_tray=prefs.show_in_system_tray,
         )
+        # Apply visibility live so the user sees the result of
+        # their toggle without restarting ScripTree.
+        if self._visibility is not None:
+            try:
+                self._visibility.apply(self._preferences)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"update_preferences: visibility.apply failed: {exc!r}")
+
+    def _on_visibility_quit(self) -> None:
+        """Terminate ScripTree when the user dismisses the taskbar
+        host or picks Quit from the tray menu.
+
+        Flushes any pending autosave first so we don't lose the
+        last sub-debounce change.  Then asks the QApplication to
+        quit, which cascades through the normal shutdown
+        machinery (cell windows close, settings persist, etc.).
+        """
+        try:
+            self.flush_if_dirty()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_visibility_quit: flush_if_dirty raised {exc!r}")
+        try:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_visibility_quit: app.quit failed: {exc!r}")
 
     def set_autosave_enabled(self, enabled: bool) -> None:
         """Toggle auto-save at runtime.  Disabling stops the

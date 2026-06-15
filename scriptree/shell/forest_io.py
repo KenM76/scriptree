@@ -743,6 +743,50 @@ class ForestPreferences:
     user-typed string verbatim; the controller resolves at load
     time."""
 
+    # ------------------------------------------------------------------
+    # Visibility modes (v0.8.0a52+)
+    # ------------------------------------------------------------------
+    #
+    # The forest hub can be made reachable through up to three
+    # surfaces simultaneously.  At least one MUST be True; the UI
+    # enforces this, and ``normalised()`` repairs a hand-edited
+    # disk file that violated the invariant.
+    #
+    # ``show_always_on_top`` is the historical behaviour: the hex
+    # floats above the desktop with ``Qt.WindowStaysOnTopHint`` and
+    # carries ``Qt.Tool`` (so it does NOT appear on the taskbar /
+    # Alt+Tab).  Factory default ON to preserve the pre-a52
+    # experience.
+    #
+    # ``show_on_taskbar`` adds a Windows taskbar entry that brings
+    # the forest hub to the front when clicked.  Implemented via a
+    # separate dedicated ``ForestTaskbarHost`` window so the taskbar
+    # entry survives the forest being hidden (a hidden window
+    # doesn't show on the taskbar by itself).
+    #
+    # ``show_in_system_tray`` adds a system tray icon with the
+    # forest glyph.  Left-click → show the forest hub; right-click
+    # → small menu with Show / Quit.
+    #
+    # When ``show_always_on_top`` is OFF the forest hub starts
+    # hidden and only appears via taskbar / tray.  It auto-hides
+    # when focus moves to a window OUTSIDE the forest hierarchy
+    # (hub, rings, cells), or when a tool launch fires.
+
+    show_always_on_top: bool = True
+    """Float the forest hub above the desktop.  Factory default
+    ON.  When OFF and at least one of the other two flags is ON,
+    the hub starts hidden and the taskbar / tray act as the
+    user's entry point."""
+
+    show_on_taskbar: bool = False
+    """Add a Windows taskbar entry for the forest.  Click brings
+    the hub to the front.  Survives the hub being hidden."""
+
+    show_in_system_tray: bool = False
+    """Add a system tray icon.  Left-click brings the hub to the
+    front; right-click menu offers Show / Quit."""
+
     def resolved_default_path(self, branding: dict) -> Path:
         """Return the actual file path the launcher should fall
         back to.  Folds the "empty means canonical" rule so callers
@@ -750,6 +794,38 @@ class ForestPreferences:
         if self.default_forest_path.strip():
             return Path(self.default_forest_path).expanduser()
         return default_autoload_path(branding)
+
+    def normalised(self) -> "ForestPreferences":
+        """Return a copy with the visibility invariant enforced.
+
+        At least one of the three visibility flags MUST be True or
+        the forest hub becomes unreachable.  Hand-edited disk
+        files could put us in that state; ``load_preferences``
+        runs every loaded prefs through this so the runtime never
+        sees an unreachable forest.
+
+        Repair rule: if all three flags are False, force
+        ``show_always_on_top`` back ON (the historical default).
+        Other invariant violations are left alone.
+        """
+        if not (
+            self.show_always_on_top
+            or self.show_on_taskbar
+            or self.show_in_system_tray
+        ):
+            _log(
+                "normalised: all three visibility flags were False; "
+                "forcing show_always_on_top=True so the hub is "
+                "reachable"
+            )
+            return ForestPreferences(
+                fallback_to_default=self.fallback_to_default,
+                default_forest_path=self.default_forest_path,
+                show_always_on_top=True,
+                show_on_taskbar=self.show_on_taskbar,
+                show_in_system_tray=self.show_in_system_tray,
+            )
+        return self
 
 
 def default_preferences_path(branding: dict) -> Path:
@@ -778,10 +854,18 @@ def load_preferences(branding: dict) -> ForestPreferences:
     if fmt != _PREFS_FORMAT:
         _log(f"load_preferences: unexpected format {fmt!r}; using defaults")
         return ForestPreferences()
-    return ForestPreferences(
+    prefs = ForestPreferences(
         fallback_to_default=bool(raw.get("fallback_to_default", True)),
         default_forest_path=str(raw.get("default_forest_path", "") or ""),
+        show_always_on_top=bool(raw.get("show_always_on_top", True)),
+        show_on_taskbar=bool(raw.get("show_on_taskbar", False)),
+        show_in_system_tray=bool(raw.get("show_in_system_tray", False)),
     )
+    # Hand-edited / older prefs files may not carry the visibility
+    # keys at all (older format) -- defaults restore the historical
+    # ``always-on-top only`` behaviour.  ``normalised()`` repairs the
+    # degenerate case where all three flags ended up False.
+    return prefs.normalised()
 
 
 def save_preferences(prefs: ForestPreferences, branding: dict) -> None:
@@ -790,11 +874,19 @@ def save_preferences(prefs: ForestPreferences, branding: dict) -> None:
     output."""
     p = default_preferences_path(branding)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Repair any all-False visibility set before we write -- the
+    # in-memory copy may be in transit (e.g. the UI hasn't yet
+    # rejected an unchecked-all-three attempt) but disk must never
+    # carry the degenerate state.
+    prefs = prefs.normalised()
     blob = {
         "format": _PREFS_FORMAT,
         "version": _PREFS_VERSION,
         "fallback_to_default": bool(prefs.fallback_to_default),
         "default_forest_path": str(prefs.default_forest_path or ""),
+        "show_always_on_top": bool(prefs.show_always_on_top),
+        "show_on_taskbar": bool(prefs.show_on_taskbar),
+        "show_in_system_tray": bool(prefs.show_in_system_tray),
     }
     p.write_text(json.dumps(blob, indent=2), encoding="utf-8")
     _log(f"save_preferences: wrote {p}")

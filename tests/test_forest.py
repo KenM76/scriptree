@@ -898,6 +898,188 @@ class TestForestPreferences:
         assert not canonical.is_file()
 
 
+class TestForestVisibilityPreferences:
+    """v0.8.0a52: three visibility flags on ForestPreferences
+    (``show_always_on_top``, ``show_on_taskbar``,
+    ``show_in_system_tray``) control how the forest hub is
+    reachable.  At least one MUST stay True or the hub becomes
+    unreachable; ``normalised()`` repairs the degenerate state.
+    """
+
+    def _make_branding(self) -> dict:
+        return load_branding()
+
+    def test_factory_defaults_visibility(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """First-run user (no prefs file): only ``show_always_on_top``
+        is True.  Matches the pre-a52 behaviour verbatim."""
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import load_preferences
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: tmp_path / "forest_preferences.json",
+        )
+        prefs = load_preferences(self._make_branding())
+        assert prefs.show_always_on_top is True
+        assert prefs.show_on_taskbar is False
+        assert prefs.show_in_system_tray is False
+
+    def test_round_trip_all_three_flags(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import (
+            ForestPreferences, load_preferences, save_preferences,
+        )
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        br = self._make_branding()
+        save_preferences(
+            ForestPreferences(
+                show_always_on_top=False,
+                show_on_taskbar=True,
+                show_in_system_tray=True,
+            ),
+            br,
+        )
+        loaded = load_preferences(br)
+        assert loaded.show_always_on_top is False
+        assert loaded.show_on_taskbar is True
+        assert loaded.show_in_system_tray is True
+
+    def test_normalised_repairs_all_false(self) -> None:
+        """``normalised()`` must force ``show_always_on_top`` ON
+        when the user (or a hand-edited disk file) would leave
+        all three flags False -- otherwise the hub is
+        unreachable."""
+        from scriptree.shell.forest_io import ForestPreferences
+
+        prefs = ForestPreferences(
+            show_always_on_top=False,
+            show_on_taskbar=False,
+            show_in_system_tray=False,
+        )
+        repaired = prefs.normalised()
+        assert repaired.show_always_on_top is True
+        # The other two flags are left alone (the user's
+        # explicit intent for taskbar/tray, if any, is
+        # preserved).
+        assert repaired.show_on_taskbar is False
+        assert repaired.show_in_system_tray is False
+
+    def test_normalised_passthrough_when_at_least_one_true(
+        self,
+    ) -> None:
+        """Any combination with ≥1 True passes through unchanged."""
+        from scriptree.shell.forest_io import ForestPreferences
+
+        for aot, tb, tr in [
+            (True, False, False),
+            (False, True, False),
+            (False, False, True),
+            (True, True, True),
+            (False, True, True),
+        ]:
+            prefs = ForestPreferences(
+                show_always_on_top=aot,
+                show_on_taskbar=tb,
+                show_in_system_tray=tr,
+            )
+            out = prefs.normalised()
+            assert out.show_always_on_top is aot
+            assert out.show_on_taskbar is tb
+            assert out.show_in_system_tray is tr
+
+    def test_load_repairs_disk_file_with_all_false(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """A hand-edited prefs file with all three flags False
+        must be repaired by ``load_preferences`` -- the runtime
+        should never see the degenerate state."""
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import load_preferences
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        # Hand-craft a degenerate prefs file.
+        prefs_file.write_text(
+            '{"format": "scriptreeforest_prefs", "version": 1, '
+            '"fallback_to_default": true, '
+            '"default_forest_path": "", '
+            '"show_always_on_top": false, '
+            '"show_on_taskbar": false, '
+            '"show_in_system_tray": false}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+        loaded = load_preferences(self._make_branding())
+        assert loaded.show_always_on_top is True
+
+    def test_save_repairs_all_false_before_write(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """``save_preferences`` must call ``normalised()`` so a
+        degenerate in-memory object never reaches disk."""
+        import json
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import (
+            ForestPreferences, save_preferences,
+        )
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+
+        save_preferences(
+            ForestPreferences(
+                show_always_on_top=False,
+                show_on_taskbar=False,
+                show_in_system_tray=False,
+            ),
+            self._make_branding(),
+        )
+        on_disk = json.loads(prefs_file.read_text(encoding="utf-8"))
+        assert on_disk["show_always_on_top"] is True
+
+    def test_legacy_prefs_file_gets_defaults(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """Prefs files written BEFORE a52 don't carry the three
+        visibility keys.  Loading them must yield the factory
+        defaults so the user's existing always-on-top experience
+        is preserved verbatim."""
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_io import load_preferences
+
+        prefs_file = tmp_path / "forest_preferences.json"
+        # Pre-a52 format -- only the two original keys.
+        prefs_file.write_text(
+            '{"format": "scriptreeforest_prefs", "version": 1, '
+            '"fallback_to_default": true, '
+            '"default_forest_path": ""}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: prefs_file,
+        )
+        loaded = load_preferences(self._make_branding())
+        assert loaded.show_always_on_top is True
+        assert loaded.show_on_taskbar is False
+        assert loaded.show_in_system_tray is False
+
+
 class TestAutosaveAndDefaultFile:
     """v0.3.20: starting the forest with no autoload file present
     creates a default ``.scriptreeforest`` at the canonical autoload

@@ -596,6 +596,71 @@ class ForestSettingsDialog(QDialog):
         ml.addWidget(self._mode)
         layout.addWidget(mode_box)
 
+        # ── Visibility (v0.8.0a52+) ──────────────────────────────
+        # Three checkboxes controlling how the forest hub is
+        # reachable.  At least one MUST stay checked -- the
+        # ``_on_visibility_changed`` handler refuses to clear the
+        # last one.  Changes apply LIVE (the controller's
+        # ``update_preferences`` re-runs the visibility manager).
+        # Mirrors the Visibility sub-submenu in the right-click
+        # Forest menu so users can find the toggles wherever they
+        # look.
+        prefs_visibility = controller.get_preferences()
+        vis_box = QGroupBox("Forest visibility")
+        vis_layout = QVBoxLayout(vis_box)
+        vis_help = QLabel(
+            "Choose how the forest hub is reachable.  At least "
+            "one option must stay enabled.  When 'always on top' "
+            "is OFF the hub starts hidden and appears when you "
+            "click the taskbar entry or system tray icon."
+        )
+        vis_help.setWordWrap(True)
+        vis_layout.addWidget(vis_help)
+        self._vis_aot_cb = QCheckBox(
+            "Show always on top (over desktop)"
+        )
+        self._vis_aot_cb.setChecked(prefs_visibility.show_always_on_top)
+        vis_layout.addWidget(self._vis_aot_cb)
+        self._vis_taskbar_cb = QCheckBox("Show on taskbar")
+        self._vis_taskbar_cb.setChecked(prefs_visibility.show_on_taskbar)
+        vis_layout.addWidget(self._vis_taskbar_cb)
+        self._vis_tray_cb = QCheckBox("Show in system tray")
+        self._vis_tray_cb.setChecked(prefs_visibility.show_in_system_tray)
+        vis_layout.addWidget(self._vis_tray_cb)
+        layout.addWidget(vis_box)
+
+        def _on_visibility_changed(_checked: bool) -> None:
+            # Reject the change if it would clear all three.
+            if not (
+                self._vis_aot_cb.isChecked()
+                or self._vis_taskbar_cb.isChecked()
+                or self._vis_tray_cb.isChecked()
+            ):
+                # Re-check whichever box just fired (the sender
+                # is the only one currently False).
+                for cb in (
+                    self._vis_aot_cb,
+                    self._vis_taskbar_cb,
+                    self._vis_tray_cb,
+                ):
+                    if not cb.isChecked():
+                        cb.blockSignals(True)
+                        cb.setChecked(True)
+                        cb.blockSignals(False)
+                # Inform the user briefly so they understand why
+                # the click "didn't take".
+                from PySide6.QtWidgets import QToolTip
+                from PySide6.QtGui import QCursor
+                QToolTip.showText(
+                    QCursor.pos(),
+                    "At least one visibility option must stay "
+                    "enabled — otherwise the forest hub would "
+                    "become unreachable.",
+                )
+        self._vis_aot_cb.toggled.connect(_on_visibility_changed)
+        self._vis_taskbar_cb.toggled.connect(_on_visibility_changed)
+        self._vis_tray_cb.toggled.connect(_on_visibility_changed)
+
         # ── Launch preferences (v0.3.21+) ─────────────────────────
         # Persistent across forests — controls what the launcher
         # does when nothing is specified on the command line.  These
@@ -688,10 +753,18 @@ class ForestSettingsDialog(QDialog):
         # rationale.
         # Persist launch preferences (v0.3.21+).  These don't change
         # the currently-loaded forest; they apply at the next launch.
+        # v0.8.0a52+: visibility flags travel through the same
+        # prefs object and DO apply live -- the controller's
+        # ``update_preferences`` invokes the visibility manager
+        # to spawn / tear down the taskbar entry and tray icon
+        # immediately.
         from scriptree.shell.forest_io import ForestPreferences
         new_prefs = ForestPreferences(
             fallback_to_default=self._prefs_fallback_cb.isChecked(),
             default_forest_path=self._prefs_path_edit.text().strip(),
+            show_always_on_top=self._vis_aot_cb.isChecked(),
+            show_on_taskbar=self._vis_taskbar_cb.isChecked(),
+            show_in_system_tray=self._vis_tray_cb.isChecked(),
         )
         try:
             self._controller.update_preferences(new_prefs)
