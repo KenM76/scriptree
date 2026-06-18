@@ -93,16 +93,32 @@ _DEBUG = bool(_os.environ.get("SCRIPTREE_VDM_DEBUG"))
 
 
 def _dlog(msg: str) -> None:
-    """Verbose log, gated on the ``SCRIPTREE_VDM_DEBUG`` env var.
+    """Verbose log, gated on the env var OR the runtime
+    ``debug_logging.is_enabled()`` toggle.
 
     Set ``SCRIPTREE_VDM_DEBUG=1`` before launching ScripTree to
-    see every COM call's HRESULT.  Useful when the
-    follow-the-user logic doesn't appear to be working -- the
-    log tells you whether ``MoveWindowToDesktop`` actually got
-    called and what it returned.
+    see every COM call's HRESULT, OR turn on
+    Forest -> Debug -> Enable verbose logging from the menu and
+    the same lines stream to ``%APPDATA%/ScripTree/logs/``.
+
+    Useful when the follow-the-user logic doesn't appear to be
+    working -- the log tells you whether ``MoveWindowToDesktop``
+    actually got called and what it returned.
     """
-    if _DEBUG:
+    if _DEBUG or _runtime_debug_enabled():
         print(f"[win_virtual_desktops:debug] {msg}", file=sys.stderr)
+
+
+def _runtime_debug_enabled() -> bool:
+    """Check the runtime toggle without making this module depend
+    on ``debug_logging`` at import time (debug_logging is a leaf
+    module too -- avoid the import cycle).
+    """
+    try:
+        from scriptree.shell import debug_logging
+        return debug_logging.is_enabled()
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------

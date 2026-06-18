@@ -205,8 +205,40 @@ class ForestTrayIcon(QSystemTrayIcon):
             a_quit = QAction("Quit", self._menu)
             a_quit.triggered.connect(self._on_quit_clicked)
             self._menu.addAction(a_quit)
+        # v0.8.0a57: same Debug submenu as the Forest right-click
+        # so the user can flip verbose logging on / open the log
+        # folder without having to first reach the (potentially
+        # hidden) forest hub.
+        try:
+            from scriptree.shell import debug_logging as _dbg
+            self._menu.addSeparator()
+            debug_sub = self._menu.addMenu("Debug")
+            self._tray_verbose_action = debug_sub.addAction(
+                "Enable verbose logging"
+            )
+            self._tray_verbose_action.setCheckable(True)
+            self._tray_verbose_action.setChecked(_dbg.is_enabled())
+            self._tray_verbose_action.toggled.connect(
+                self._on_tray_verbose_toggled
+            )
+            tray_open_log = debug_sub.addAction("Open debug folder")
+            tray_open_log.triggered.connect(_dbg.open_log_folder)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"ForestTrayIcon: debug submenu wiring failed: {exc!r}")
+
         self.setContextMenu(self._menu)
         self.activated.connect(self._on_activated)
+
+    def _on_tray_verbose_toggled(self, checked: bool) -> None:
+        try:
+            from scriptree.shell import debug_logging as _dbg
+            actual = _dbg.set_enabled_and_persist(checked)
+            if actual != checked:
+                self._tray_verbose_action.blockSignals(True)
+                self._tray_verbose_action.setChecked(actual)
+                self._tray_verbose_action.blockSignals(False)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_tray_verbose_toggled: {exc!r}")
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (

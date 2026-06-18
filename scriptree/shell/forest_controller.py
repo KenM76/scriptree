@@ -279,6 +279,20 @@ class ForestController(QObject):
         ``forest=None`` means "autoload from the per-user last
         forest, or empty default if none exists".
         """
+        # v0.8.0a57: re-apply the persisted debug-logging toggle
+        # on every launch so a user who flipped it ON from the
+        # menu, then exited, still has the tee active for the
+        # NEXT run -- which is the one that captures the bug
+        # they're trying to reproduce.  Cheap: a single
+        # QSettings read + (only if True) an open() on a log
+        # file.  No-op when the user never toggled it on.
+        try:
+            from scriptree.shell import debug_logging
+            if debug_logging.load_persisted_state():
+                debug_logging.set_enabled(True)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: debug_logging restore failed: {exc!r}")
+
         # V3 v0.3.21+ — honour ``forest_preferences.json``.
         #
         # When the caller didn't pass an explicit ``forest`` argument
@@ -813,6 +827,47 @@ class ForestController(QObject):
             action.toggled.connect(_on_visibility_toggle)
 
         forest_menu.addMenu(vis_menu)
+        forest_menu.addSeparator()
+
+        # v0.8.0a57 -- Debug sub-submenu.  Two items:
+        #   * "Enable verbose logging" -- checkable toggle that
+        #     tees stderr to %APPDATA%/ScripTree/logs/ AND flips
+        #     win_virtual_desktops verbose output on.  Persisted
+        #     in QSettings so it survives the restart that's
+        #     usually needed to reproduce a startup-only bug.
+        #   * "Open debug folder" -- pops Explorer at the log
+        #     directory so the user can grab the file to send.
+        from scriptree.shell import debug_logging as _dbg
+        debug_menu = QMenu("Debug", forest_menu)
+        debug_menu.setIcon(_bundled("bug"))
+        a_verbose = debug_menu.addAction("Enable verbose logging")
+        a_verbose.setCheckable(True)
+        a_verbose.setChecked(_dbg.is_enabled())
+        a_verbose.setToolTip(
+            "Capture stderr (including virtual-desktop COM calls) "
+            "to a daily log file under %APPDATA%/ScripTree/logs/.  "
+            "Persists across restarts so a bug you can only "
+            "reproduce on launch is still captured.  Use the "
+            "'Open debug folder' item below to find the log."
+        )
+
+        def _on_verbose_toggled(checked: bool) -> None:
+            actual = _dbg.set_enabled_and_persist(checked)
+            # Sync the checkbox state with reality (set_enabled
+            # can return False if opening the log file failed).
+            if actual != checked:
+                a_verbose.blockSignals(True)
+                a_verbose.setChecked(actual)
+                a_verbose.blockSignals(False)
+        a_verbose.toggled.connect(_on_verbose_toggled)
+
+        a_open_log = debug_menu.addAction("Open debug folder")
+        a_open_log.setToolTip(
+            "Open %APPDATA%/ScripTree/logs/ in Explorer."
+        )
+        a_open_log.triggered.connect(_dbg.open_log_folder)
+
+        forest_menu.addMenu(debug_menu)
         forest_menu.addSeparator()
 
         a_settings = forest_menu.addAction(
