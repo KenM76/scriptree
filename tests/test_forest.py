@@ -516,6 +516,22 @@ class TestForestCell:
 
 class TestForestController:
 
+    @pytest.fixture(autouse=True)
+    def _isolate_prefs_from_user_appdata(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        """Mirrors TestForestCell's fixture -- redirect
+        ``default_preferences_path`` to a tmp dir so tests don't
+        read whatever happens to be in the dev's actual
+        ``%APPDATA%/ScripTree/forest_preferences.json`` (which
+        may have non-default visibility flags from live testing).
+        """
+        from scriptree.shell import forest_io as io_mod
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda branding: tmp_path / "forest_preferences.json",
+        )
+
     def _make(self):
         """Fresh, started controller with an empty forest.
 

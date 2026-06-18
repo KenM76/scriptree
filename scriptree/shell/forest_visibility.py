@@ -236,7 +236,7 @@ class ForestTrayIcon(QSystemTrayIcon):
 
 class _FocusWatcher(QObject):
     """Hide the forest hub when focus moves outside the forest
-    hierarchy.
+    hierarchy, AND follow the user across virtual desktops.
 
     Active only when ``auto_hide`` is True (i.e. always-on-top is
     OFF and at least one of taskbar / tray is ON).  Wraps
@@ -252,6 +252,15 @@ class _FocusWatcher(QObject):
     ``suppress_for`` because the tray path (and any external
     programmatic show) benefits from a short suppression to ride
     out the platform's focus shuffle.
+
+    a55: the focus signal ALSO triggers the virtual-desktop
+    follow-the-user logic.  When focus moves to a window on a
+    different desktop than the forest hub, we move the hub (and
+    its visible descendants) to the user's current desktop.  This
+    is independent of ``_enabled`` -- the user wants the forest
+    to follow them whether or not auto-hide is on.  Implementation:
+    ``_on_focus_changed`` always calls the follow path; the hide
+    path is gated by ``_enabled`` as before.
     """
 
     def __init__(
@@ -259,11 +268,13 @@ class _FocusWatcher(QObject):
         forest_window: Any,
         registry: Any,
         on_focus_left: Callable[[], None],
+        on_focus_changed_for_follow: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._forest_window = forest_window
         self._registry = registry
         self._on_focus_left = on_focus_left
+        self._on_focus_changed_for_follow = on_focus_changed_for_follow
         self._enabled = False
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -297,6 +308,17 @@ class _FocusWatcher(QObject):
         self._suppressed = False
 
     def _on_focus_changed(self, _new_window: Any) -> None:
+        # a55: the follow-the-user path runs UNCONDITIONALLY (it
+        # only matters when virtual desktops are in play, which is
+        # a no-op for users on a single desktop).  This is what
+        # gives the user the "forest appears on every desktop"
+        # PortableApps-style behaviour without the private-COM
+        # ``PinWindow`` fragility.
+        if self._on_focus_changed_for_follow is not None:
+            try:
+                self._on_focus_changed_for_follow()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_on_focus_changed: follow callback raised {exc!r}")
         if not self._enabled or self._suppressed:
             return
         self._debounce.start()
@@ -380,6 +402,7 @@ class ForestVisibilityManager(QObject):
         self._tray_icon: ForestTrayIcon | None = None
         self._watcher = _FocusWatcher(
             forest_window, registry, self.hide_hub,
+            on_focus_changed_for_follow=self._follow_user_across_desktops,
         )
         # Current visibility state derived from the last apply().
         self._taskbar_on: bool = False
@@ -471,6 +494,13 @@ class ForestVisibilityManager(QObject):
             self._watcher.suppress_for(200)
         except Exception:  # noqa: BLE001
             pass
+
+        # a55: ensure hub is on the user's current desktop BEFORE
+        # we show it.  This fixes the tray-click-yanks-to-other-
+        # desktop bug -- without it, ``showNormal()`` would bring
+        # the hub to the foreground on whichever desktop it last
+        # lived on, switching the user's whole desktop context.
+        self._ensure_hub_on_current_desktop()
 
         w = self._forest_window
         if w is None:
@@ -621,6 +651,12 @@ class ForestVisibilityManager(QObject):
             self._watcher.suppress_for(200)
         except Exception:  # noqa: BLE001
             pass
+        # a55: the hub is on the user's current desktop (Windows
+        # put it there when the user clicked the taskbar entry),
+        # but the cells were last shown wherever the forest used
+        # to live.  Move each one to the current desktop so the
+        # whole group appears together.
+        self._ensure_descendants_on_current_desktop()
         for cell_id in self._hidden_descendant_ids:
             cell = self._registry.get(cell_id)
             if cell is None:
@@ -703,6 +739,108 @@ class ForestVisibilityManager(QObject):
 
     # ------------------------------------------------------------------
     # Internals -- descendant walk
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Virtual-desktop follow-the-user (a55+)
+    # ------------------------------------------------------------------
+
+    def _ensure_hub_on_current_desktop(self) -> None:
+        """Move the forest hub to the user's current virtual
+        desktop if it isn't already there.
+
+        Called from ``show_hub`` and ``_restore_descendants`` so
+        any programmatic reveal (tray click, taskbar restore,
+        external code) puts the hub on whichever desktop the
+        user is actually looking at.  Without this, clicking the
+        tray icon from desktop B yanks the user back to desktop
+        A where the forest happens to live.
+
+        Cheap on systems with one desktop -- the underlying
+        ``ensure_on_current_desktop`` short-circuits to a single
+        COM call when the window is already there.
+        """
+        try:
+            from scriptree.shell import win_virtual_desktops as wvd
+            if not wvd.is_supported():
+                return
+            hwnd = int(self._forest_window.winId())
+            wvd.ensure_on_current_desktop(hwnd)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_ensure_hub_on_current_desktop: {exc!r}")
+
+    def _ensure_descendants_on_current_desktop(self) -> None:
+        """Move every visible forest descendant to the user's
+        current desktop.
+
+        Used when a show triggers descendant reveal -- without
+        this, the hub would arrive on desktop B and the cells
+        would be left behind on desktop A (where they were last
+        shown).  The user then sees a hub with no cells around
+        it on the current desktop.
+        """
+        try:
+            from scriptree.shell import win_virtual_desktops as wvd
+            if not wvd.is_supported():
+                return
+            for descendant in self._forest_descendants():
+                try:
+                    hwnd = int(descendant.winId())
+                    wvd.ensure_on_current_desktop(hwnd)
+                except Exception:  # noqa: BLE001
+                    continue
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_ensure_descendants_on_current_desktop: {exc!r}")
+
+    def _follow_user_across_desktops(self) -> None:
+        """Wire focus-changes -> move-forest-to-current-desktop.
+
+        Called by the watcher on every focusWindowChanged event,
+        regardless of auto-hide state -- the user wants the forest
+        reachable on every desktop whether or not auto-hide is on.
+
+        The heavy lifting is in ``ensure_on_current_desktop``,
+        which is idempotent.  The CHECK (is_window_on_current
+        desktop) is a single COM call; the MOVE only fires when
+        the hub is actually on a different desktop.  So the cost
+        on the common (single-desktop) case is one COM call per
+        focus event -- negligible.
+        """
+        try:
+            from scriptree.shell import win_virtual_desktops as wvd
+            if not wvd.is_supported():
+                return
+            if self._forest_window is None:
+                return
+            # Only follow when the hub HAS a native handle (i.e.
+            # has been shown at least once).  Calling winId on an
+            # un-shown widget forces window creation, which we
+            # don't want here.
+            if not self._forest_window.testAttribute(
+                Qt.WidgetAttribute.WA_WState_Created
+            ):
+                return
+            hwnd = int(self._forest_window.winId())
+            if wvd.is_window_on_current_desktop(hwnd):
+                return
+            # Hub is on a different desktop -- the user switched.
+            # Move the hub AND every currently-visible descendant.
+            desktop_id = wvd.get_current_desktop_id()
+            if desktop_id is None:
+                return
+            wvd.move_window_to_desktop(hwnd, desktop_id)
+            for descendant in self._forest_descendants():
+                try:
+                    if descendant.isVisible():
+                        d_hwnd = int(descendant.winId())
+                        wvd.move_window_to_desktop(d_hwnd, desktop_id)
+                except Exception:  # noqa: BLE001
+                    continue
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_follow_user_across_desktops: {exc!r}")
+
+    # ------------------------------------------------------------------
+    # Descendant walk
     # ------------------------------------------------------------------
 
     def _forest_descendants(self) -> list[Any]:
