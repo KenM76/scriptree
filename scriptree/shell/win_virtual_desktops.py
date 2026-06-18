@@ -87,6 +87,24 @@ def _log(msg: str) -> None:
     print(f"[win_virtual_desktops] {msg}", file=sys.stderr)
 
 
+import os as _os
+
+_DEBUG = bool(_os.environ.get("SCRIPTREE_VDM_DEBUG"))
+
+
+def _dlog(msg: str) -> None:
+    """Verbose log, gated on the ``SCRIPTREE_VDM_DEBUG`` env var.
+
+    Set ``SCRIPTREE_VDM_DEBUG=1`` before launching ScripTree to
+    see every COM call's HRESULT.  Useful when the
+    follow-the-user logic doesn't appear to be working -- the
+    log tells you whether ``MoveWindowToDesktop`` actually got
+    called and what it returned.
+    """
+    if _DEBUG:
+        print(f"[win_virtual_desktops:debug] {msg}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # COM constants and types
 # ---------------------------------------------------------------------------
@@ -345,6 +363,11 @@ def move_window_to_desktop(hwnd: int, desktop_id: _GUID) -> bool:
             _vdm, 5, HRESULT,
             [wintypes.HWND, ctypes.POINTER(_GUID)],
             wintypes.HWND(hwnd), ctypes.byref(desktop_id),
+        )
+        _dlog(
+            f"MoveWindowToDesktop(hwnd=0x{hwnd:X}) -> "
+            f"HRESULT=0x{hr & 0xFFFFFFFF:08X} "
+            f"{'OK' if hr == S_OK else 'FAIL'}"
         )
         return hr == S_OK
     except Exception as exc:  # noqa: BLE001

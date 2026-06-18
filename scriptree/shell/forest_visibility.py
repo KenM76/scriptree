@@ -491,37 +491,104 @@ class ForestVisibilityManager(QObject):
         proxy bounce-back is gone.
         """
         try:
-            self._watcher.suppress_for(200)
+            self._watcher.suppress_for(300)
         except Exception:  # noqa: BLE001
             pass
-
-        # a55: ensure hub is on the user's current desktop BEFORE
-        # we show it.  This fixes the tray-click-yanks-to-other-
-        # desktop bug -- without it, ``showNormal()`` would bring
-        # the hub to the foreground on whichever desktop it last
-        # lived on, switching the user's whole desktop context.
-        self._ensure_hub_on_current_desktop()
 
         w = self._forest_window
         if w is None:
             return
+
+        # a56: aggressive desktop-move sequence.
+        #
+        # The naive "move before show" approach (a55) didn't take:
+        # users still got yanked to the hub's origin desktop on
+        # tray-click.  Two root causes:
+        #
+        #   1. ``IsWindowOnCurrentVirtualDesktop`` can return True
+        #      for a minimised window even when it's on a different
+        #      desktop -- so our pre-show short-circuit was
+        #      skipping the move entirely.
+        #   2. Qt's ``showNormal()`` on a minimised ``Qt.Window``
+        #      uses ``SwitchToThisWindow`` internally on Win11,
+        #      which YANKS the user to wherever the OS tracked the
+        #      minimised window -- overriding any prior
+        #      ``MoveWindowToDesktop`` call.
+        #
+        # The fix is a four-step ritual:
+        #   a. Resolve the current desktop ID up front.
+        #   b. ``hide()`` first -- this clears Windows' minimised-
+        #      window desktop tracking so the upcoming move sticks.
+        #   c. ``MoveWindowToDesktop`` -- unconditional, no
+        #      pre-check (the pre-check was the original mistake).
+        #   d. ``showNormal()`` then ``MoveWindowToDesktop`` AGAIN
+        #      -- the second move defends against any
+        #      SwitchToThisWindow side-effect of the show.
+        desktop_id = None
         try:
-            # showNormal() handles both cases: a minimised hub
-            # un-minimises, a hidden hub appears.  Also restores
-            # geometry from the OS-native saved state.
+            from scriptree.shell import win_virtual_desktops as wvd
+            if wvd.is_supported():
+                desktop_id = wvd.get_current_desktop_id()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"show_hub: resolve current desktop raised {exc!r}")
+
+        try:
+            hwnd = int(w.winId()) if w is not None else 0
+
             if self._taskbar_on:
+                # Step b: hide drops the minimize-tracking that
+                # otherwise wins over our move.
+                if w.isVisible() or w.isMinimized():
+                    w.hide()
+                # Step c: pre-show move.
+                if desktop_id is not None and hwnd:
+                    try:
+                        from scriptree.shell import win_virtual_desktops as wvd
+                        wvd.move_window_to_desktop(hwnd, desktop_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"show_hub: pre-show move raised {exc!r}")
+                # Step d-i: show.
                 w.showNormal()
-                # Restore the position we saved when we last hid
-                # if showNormal landed us somewhere else.  Qt's
-                # OS-native restore can miss our tracked position
-                # when the hub started life hidden (never
-                # minimised at all, so OS has no restore state).
                 if self._last_hub_position is not None:
                     w.move(self._last_hub_position)
+                # Step d-ii: post-show move (defends against
+                # SwitchToThisWindow desktop yank).
+                if desktop_id is not None and hwnd:
+                    try:
+                        from scriptree.shell import win_virtual_desktops as wvd
+                        wvd.move_window_to_desktop(hwnd, desktop_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"show_hub: post-show move raised {exc!r}")
             else:
+                # Tray-only / hidden mode -- no minimize tracking
+                # to fight; a single move-then-show suffices.
+                if desktop_id is not None and hwnd:
+                    try:
+                        from scriptree.shell import win_virtual_desktops as wvd
+                        wvd.move_window_to_desktop(hwnd, desktop_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"show_hub: tray-mode move raised {exc!r}")
                 if self._last_hub_position is not None and not w.isVisible():
                     w.move(self._last_hub_position)
                 w.show()
+
+            # Move descendants BEFORE showing them so they appear
+            # on the right desktop straight away.
+            if desktop_id is not None:
+                try:
+                    from scriptree.shell import win_virtual_desktops as wvd
+                    for cell_id in self._hidden_descendant_ids:
+                        cell = self._registry.get(cell_id)
+                        if cell is None:
+                            continue
+                        try:
+                            d_hwnd = int(cell.winId())
+                            wvd.move_window_to_desktop(d_hwnd, desktop_id)
+                        except Exception:  # noqa: BLE001
+                            continue
+                except Exception as exc:  # noqa: BLE001
+                    _log(f"show_hub: descendant pre-move raised {exc!r}")
+
             for cell_id in self._hidden_descendant_ids:
                 cell = self._registry.get(cell_id)
                 if cell is None:
