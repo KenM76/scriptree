@@ -196,6 +196,25 @@ def _inject_vendored_libs():
     #    was compiled against a different numpy/Qt/etc, causing the
     #    classic "module compiled using NumPy 1.x cannot be run in
     #    NumPy 2.x" crash at import time.
+    #
+    # v0.8.0a58 -- CRITICAL: do NOT strip the bundled embed Python's
+    # own home directory (or any subdir of it).  For the portable
+    # Python at ``lib/python/``, ``site.getsitepackages()`` returns
+    # ``[<lib/python>, <lib/python/Lib/site-packages>]`` -- the
+    # FIRST entry is the runtime's own home, where ``_ctypes.pyd``,
+    # ``_socket.pyd``, ``libffi-8.dll`` etc. live.  Stripping it
+    # makes ``import ctypes`` fail with
+    # ``ModuleNotFoundError: No module named '_ctypes'``, which in
+    # turn makes the entire ``win_virtual_desktops`` follow-the-user
+    # logic silently no-op.  See the lesson at
+    # ``rags/lessons/embed_python_sitepackages_strip_kills_ctypes.md``.
+    bundled_home = None
+    try:
+        bundled_home = os.path.normcase(os.path.abspath(
+            str(Path(sys.executable).parent)
+        ))
+    except Exception:
+        pass
     try:
         import site
         bad = set()
@@ -203,7 +222,19 @@ def _inject_vendored_libs():
         if usersite:
             bad.add(os.path.normcase(os.path.abspath(usersite)))
         for p in getattr(site, "getsitepackages", lambda: [])():
-            bad.add(os.path.normcase(os.path.abspath(p)))
+            p_norm = os.path.normcase(os.path.abspath(p))
+            # Skip the bundled Python's home AND any path beneath it
+            # -- those are the embed runtime's own directories, NOT
+            # user/global site-packages.  Without this guard, the
+            # filter below removes lib/python/ from sys.path and the
+            # bundled .pyd binaries become unreachable.
+            if bundled_home is not None:
+                if (
+                    p_norm == bundled_home
+                    or p_norm.startswith(bundled_home + os.sep)
+                ):
+                    continue
+            bad.add(p_norm)
         sys.path[:] = [
             p for p in sys.path
             if os.path.normcase(os.path.abspath(p or ".")) not in bad
