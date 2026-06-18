@@ -531,31 +531,30 @@ class ForestVisibilityManager(QObject):
         if w is None:
             return
 
-        # a56: aggressive desktop-move sequence.
+        # a59: move BEFORE show, while window is still minimised.
         #
-        # The naive "move before show" approach (a55) didn't take:
-        # users still got yanked to the hub's origin desktop on
-        # tray-click.  Two root causes:
+        # The a56 ritual hid the window before moving, on the
+        # theory that hide() would clear Windows' minimise-state
+        # desktop tracking.  The diagnostic log (after a58 fixed
+        # ctypes) revealed the real failure mode:
         #
-        #   1. ``IsWindowOnCurrentVirtualDesktop`` can return True
-        #      for a minimised window even when it's on a different
-        #      desktop -- so our pre-show short-circuit was
-        #      skipping the move entirely.
-        #   2. Qt's ``showNormal()`` on a minimised ``Qt.Window``
-        #      uses ``SwitchToThisWindow`` internally on Win11,
-        #      which YANKS the user to wherever the OS tracked the
-        #      minimised window -- overriding any prior
-        #      ``MoveWindowToDesktop`` call.
+        #   [win_virtual_desktops:debug] MoveWindowToDesktop(...) -> HRESULT=0x8002802B FAIL
         #
-        # The fix is a four-step ritual:
-        #   a. Resolve the current desktop ID up front.
-        #   b. ``hide()`` first -- this clears Windows' minimised-
-        #      window desktop tracking so the upcoming move sticks.
-        #   c. ``MoveWindowToDesktop`` -- unconditional, no
-        #      pre-check (the pre-check was the original mistake).
-        #   d. ``showNormal()`` then ``MoveWindowToDesktop`` AGAIN
-        #      -- the second move defends against any
-        #      SwitchToThisWindow side-effect of the show.
+        # 0x8002802B is TYPE_E_ELEMENTNOTFOUND -- and it's what
+        # ``MoveWindowToDesktop`` returns when the target window
+        # is HIDDEN.  Minimised windows accept the call;
+        # ``hide()``-d ones don't.  So the a56 "hide then move"
+        # sequence was self-defeating: it disabled the very call
+        # it was trying to make work.  By the time the post-show
+        # move ran with HRESULT=OK, ``showNormal()`` had already
+        # called ``SwitchToThisWindow`` and yanked the user to
+        # the origin desktop.
+        #
+        # a59: keep the window minimised, move it (the COM call
+        # accepts minimised windows just fine), THEN restore.
+        # ``showNormal`` then restores on the desktop we just
+        # moved it to -- which IS the user's current desktop --
+        # so the SwitchToThisWindow internal becomes a no-op.
         desktop_id = None
         try:
             from scriptree.shell import win_virtual_desktops as wvd
@@ -568,44 +567,77 @@ class ForestVisibilityManager(QObject):
             hwnd = int(w.winId()) if w is not None else 0
 
             if self._taskbar_on:
-                # Step b: hide drops the minimize-tracking that
-                # otherwise wins over our move.
-                if w.isVisible() or w.isMinimized():
-                    w.hide()
-                # Step c: pre-show move.
+                # Move FIRST, while still minimised.
                 if desktop_id is not None and hwnd:
                     try:
                         from scriptree.shell import win_virtual_desktops as wvd
-                        wvd.move_window_to_desktop(hwnd, desktop_id)
+                        ok = wvd.move_window_to_desktop(hwnd, desktop_id)
+                        on_current = wvd.is_window_on_current_desktop(hwnd)
+                        _log(
+                            f"show_hub: hub move (minimised path): "
+                            f"ok={ok} on_current_after={on_current}"
+                        )
                     except Exception as exc:  # noqa: BLE001
                         _log(f"show_hub: pre-show move raised {exc!r}")
-                # Step d-i: show.
+                # Now restore -- the window is on the user's
+                # current desktop, so SwitchToThisWindow inside
+                # showNormal does nothing.
                 w.showNormal()
                 if self._last_hub_position is not None:
                     w.move(self._last_hub_position)
-                # Step d-ii: post-show move (defends against
-                # SwitchToThisWindow desktop yank).
+                # Belt-and-suspenders: re-check after show, in
+                # case some platform race put us back on the
+                # origin desktop.  Log the result so we can see
+                # whether this second call is doing real work or
+                # whether the pre-show move was sufficient.
                 if desktop_id is not None and hwnd:
                     try:
                         from scriptree.shell import win_virtual_desktops as wvd
-                        wvd.move_window_to_desktop(hwnd, desktop_id)
+                        if not wvd.is_window_on_current_desktop(hwnd):
+                            ok = wvd.move_window_to_desktop(
+                                hwnd, desktop_id,
+                            )
+                            _log(
+                                f"show_hub: hub corrective post-show "
+                                f"move: ok={ok}"
+                            )
                     except Exception as exc:  # noqa: BLE001
                         _log(f"show_hub: post-show move raised {exc!r}")
             else:
-                # Tray-only / hidden mode -- no minimize tracking
-                # to fight; a single move-then-show suffices.
-                if desktop_id is not None and hwnd:
-                    try:
-                        from scriptree.shell import win_virtual_desktops as wvd
-                        wvd.move_window_to_desktop(hwnd, desktop_id)
-                    except Exception as exc:  # noqa: BLE001
-                        _log(f"show_hub: tray-mode move raised {exc!r}")
+                # Tray-only / hidden mode -- the hub is HIDDEN
+                # (not minimised) here, so MoveWindowToDesktop
+                # would return TYPE_E_ELEMENTNOTFOUND.  We have
+                # to show first, then move.  Trade-off: brief
+                # flash on origin desktop possible.  Mitigated
+                # by suppress_for above.
                 if self._last_hub_position is not None and not w.isVisible():
                     w.move(self._last_hub_position)
                 w.show()
+                if desktop_id is not None and hwnd:
+                    try:
+                        from scriptree.shell import win_virtual_desktops as wvd
+                        ok = wvd.move_window_to_desktop(hwnd, desktop_id)
+                        _log(f"show_hub: hub move (tray-only path): ok={ok}")
+                    except Exception as exc:  # noqa: BLE001
+                        _log(f"show_hub: tray-mode move raised {exc!r}")
 
-            # Move descendants BEFORE showing them so they appear
-            # on the right desktop straight away.
+            # a59: show descendants FIRST, then move.  Hidden
+            # windows reject MoveWindowToDesktop with
+            # TYPE_E_ELEMENTNOTFOUND (the bug a59 fixed for the
+            # hub); descendants hit the same wall.  The trade-off
+            # here is a brief flash on the origin desktop before
+            # the move catches up, but the suppress_for(300)
+            # above buys enough time that the user doesn't
+            # perceive it as a desktop switch.
+            for cell_id in self._hidden_descendant_ids:
+                cell = self._registry.get(cell_id)
+                if cell is None:
+                    continue
+                try:
+                    cell.show()
+                except Exception:  # noqa: BLE001
+                    continue
+            # Now they're visible -- move them.
             if desktop_id is not None:
                 try:
                     from scriptree.shell import win_virtual_desktops as wvd
@@ -619,16 +651,7 @@ class ForestVisibilityManager(QObject):
                         except Exception:  # noqa: BLE001
                             continue
                 except Exception as exc:  # noqa: BLE001
-                    _log(f"show_hub: descendant pre-move raised {exc!r}")
-
-            for cell_id in self._hidden_descendant_ids:
-                cell = self._registry.get(cell_id)
-                if cell is None:
-                    continue
-                try:
-                    cell.show()
-                except Exception:  # noqa: BLE001
-                    continue
+                    _log(f"show_hub: descendant post-show move raised {exc!r}")
             self._hidden_descendant_ids = []
             w.raise_()
             w.activateWindow()
