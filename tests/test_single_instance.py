@@ -305,3 +305,76 @@ class TestTryHandoffProtocol:
         _patch_qlocalsocket(monkeypatch, sock)
         ok = single_instance.try_handoff([{"command": "garbage"}])
         assert ok is False
+
+
+class TestForestRevealOnRelaunch:
+    """v0.8.0a64: in forest mode, a second launch forwards a
+    ``spawn_cell`` hand-off to the running primary.  The primary must
+    REVEAL the existing forest hub (via its visibility manager)
+    instead of dropping a stray standalone cell beside it -- that
+    orphan never joins the forest, and in an auto-hide mode the user
+    would see only the orphan and assume the relaunch failed.
+    """
+
+    def test_spawn_cell_reveals_hub_in_forest_mode(self, monkeypatch) -> None:
+        from scriptree.shell import ring_main
+
+        revealed = {"show_hub": 0}
+
+        class FakeVis:
+            def show_hub(self) -> None:
+                revealed["show_hub"] += 1
+
+        class FakeFC:
+            forest_window = object()
+            _visibility = FakeVis()
+
+        class FakeRegistry:
+            def __init__(self) -> None:
+                self.consulted = 0
+
+            def hexagons(self):
+                # The bare-ring spawn path's first call -- must NOT be
+                # reached in forest mode.
+                self.consulted += 1
+                return []
+
+        reg = FakeRegistry()
+        monkeypatch.setattr(ring_main, "_FOREST_CONTROLLER", FakeFC())
+        ring_main._handle_primary_message(
+            {"command": "spawn_cell"}, branding={}, registry=reg,
+        )
+        assert revealed["show_hub"] == 1
+        assert reg.consulted == 0  # no stray cell spawned
+
+    def test_spawn_cell_without_forest_still_spawns_cell(self, monkeypatch) -> None:
+        """Bare ring mode (no active forest controller) keeps the
+        original behaviour: spawn a fresh standalone hex."""
+        from scriptree.shell import ring_main
+
+        monkeypatch.setattr(ring_main, "_FOREST_CONTROLLER", None)
+
+        built = {"n": 0}
+
+        class FakeCell:
+            _id = "fakecell-0000"
+
+            def __init__(self, branding) -> None:
+                built["n"] += 1
+
+            def move(self, *a) -> None:
+                pass
+
+            def show(self) -> None:
+                pass
+
+        class FakeRegistry:
+            def hexagons(self):
+                return []
+
+        monkeypatch.setattr(ring_main, "CellWindow", FakeCell)
+        monkeypatch.setattr(ring_main, "_wire_hex_to_snap", lambda h: None)
+        ring_main._handle_primary_message(
+            {"command": "spawn_cell"}, branding={}, registry=FakeRegistry(),
+        )
+        assert built["n"] == 1

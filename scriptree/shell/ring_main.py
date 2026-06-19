@@ -230,6 +230,12 @@ def _maybe_start_harness(app: QApplication) -> None:
 
 _SNAP_ENGINE: SnapEngine | None = None
 
+# a64: the active ForestController, set by ``main()`` when the process
+# starts in forest mode.  ``_handle_primary_message`` reads it so a
+# second launch reveals the existing forest hub instead of dropping a
+# stray standalone cell next to it.  None in bare ring mode.
+_FOREST_CONTROLLER = None  # type: ignore[var-annotated]
+
 
 def _get_snap_engine() -> SnapEngine | None:
     """Return the process-wide SnapEngine instance, or None if not yet created.
@@ -357,8 +363,36 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
     _log(f"_handle_primary_message: {msg!r}")
 
     if cmd == "spawn_cell":
-        # Position the new cell off-screen-center, slightly offset
-        # so it doesn't land on top of an existing one.
+        # a64: in FOREST mode, a second launch (the bare "double-click
+        # the shortcut again" gesture sends spawn_cell with no args)
+        # must REVEAL the existing forest hub, not drop a stray
+        # standalone cell beside it.  The forest owns population, so
+        # such a cell is an orphan -- it never joins forest.items --
+        # and worse, when the hub is hidden/minimised in an auto-hide
+        # mode the user sees ONLY the orphan and assumes the relaunch
+        # failed.  Revealing the hub is what "launch the forest again"
+        # should obviously do.
+        fc = _FOREST_CONTROLLER
+        if fc is not None and getattr(fc, "forest_window", None) is not None:
+            vis = getattr(fc, "_visibility", None)
+            try:
+                if vis is not None:
+                    vis.show_hub()
+                else:
+                    # No visibility manager (shouldn't happen post-a52,
+                    # but degrade gracefully): bring the hub forward by
+                    # hand.
+                    w = fc.forest_window
+                    w.showNormal()
+                    w.raise_()
+                    w.activateWindow()
+                _log("  spawn_cell (forest mode) → revealed existing forest hub")
+            except Exception as exc:  # noqa: BLE001
+                _log(f"  spawn_cell: reveal forest hub failed: {exc!r}")
+            return
+        # Bare ring mode: spawn a fresh standalone hex.  Position it
+        # off-center, slightly offset so it doesn't land on top of an
+        # existing one.
         n_existing = len(registry.hexagons())
         offset = 32 * n_existing
         hexagon = CellWindow(branding)
@@ -655,6 +689,11 @@ def main() -> int:
             migrate_legacy_autoload_path(branding)
             _forest_controller = ForestController(branding, registry, _SNAP_ENGINE)
             _forest_controller.start()
+            # a64: publish the active controller so the single-instance
+            # handler (_handle_primary_message) can reveal this hub on a
+            # second launch instead of spawning a stray cell.
+            global _FOREST_CONTROLLER
+            _FOREST_CONTROLLER = _forest_controller
             _log("Forest mode: ForestController started")
             # Forest mode owns the initial population — no default
             # single-hex spawn.  If the user wants a blank cell the
