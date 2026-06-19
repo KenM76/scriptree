@@ -651,12 +651,14 @@ class ForestVisibilityManager(QObject):
             # the move catches up, but the suppress_for(300)
             # above buys enough time that the user doesn't
             # perceive it as a desktop switch.
+            shown_descendants: list[Any] = []
             for cell_id in self._hidden_descendant_ids:
                 cell = self._registry.get(cell_id)
                 if cell is None:
                     continue
                 try:
                     cell.show()
+                    shown_descendants.append(cell)
                 except Exception:  # noqa: BLE001
                     continue
             # Now they're visible -- move them.
@@ -674,6 +676,11 @@ class ForestVisibilityManager(QObject):
                             continue
                 except Exception as exc:  # noqa: BLE001
                     _log(f"show_hub: descendant post-show move raised {exc!r}")
+            # a62 (user-reported): the hub may have moved while the
+            # cells were hidden, so a revealed cell's stored position
+            # can now be off-screen.  Rescue each one onto a visible
+            # screen before we clear the tracking list.
+            self._rescue_cells_on_screen(shown_descendants)
             self._hidden_descendant_ids = []
             w.raise_()
             w.activateWindow()
@@ -848,6 +855,10 @@ class ForestVisibilityManager(QObject):
                                 continue
             except Exception as exc:  # noqa: BLE001
                 _log(f"_restore_descendants: post-show move raised {exc!r}")
+        # a62 (user-reported): rescue any revealed cell whose stored
+        # position is now off-screen -- the hub may have moved while
+        # the cells were hidden, leaving them stranded.
+        self._rescue_cells_on_screen(shown)
         # Bring the hub itself to the foreground in case the
         # restore from taskbar didn't activate it properly.
         try:
@@ -855,6 +866,39 @@ class ForestVisibilityManager(QObject):
             self._forest_window.activateWindow()
         except Exception:  # noqa: BLE001
             pass
+
+    def _rescue_cells_on_screen(self, cells: list[Any]) -> None:
+        """Clamp each just-revealed cell back onto a visible screen.
+
+        Bug A (a62, user-reported): if the forest hub was relocated
+        (dragged to a new spot, moved by the follow-the-user logic,
+        or the display layout changed) WHILE its cells were hidden,
+        the cells keep their last on-screen positions -- which may
+        now be partly or wholly off every connected screen.  A bare
+        ``show()`` would leave them there, invisible and unreachable.
+
+        Mirror ``screen_watcher.rescue_all_cells``: clamp each
+        revealed cell's top-left to its containing screen's available
+        area (``CellWindow._clamp_to_screen`` falls back to the
+        primary screen for a position that maps to no screen) and
+        move it ONLY when the clamp actually changed something, so a
+        cell that's already on-screen is left exactly where it is.
+        """
+        for cell in cells:
+            try:
+                raw = cell.pos()
+                clamped = cell._clamp_to_screen(raw)
+                if clamped != raw:
+                    cell.move(clamped)
+                    _log(
+                        f"_rescue_cells_on_screen: cell "
+                        f"{getattr(cell, '_id', '?')[:8]} "
+                        f"({raw.x()},{raw.y()}) -> "
+                        f"({clamped.x()},{clamped.y()})"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_rescue_cells_on_screen: {exc!r}")
+                continue
 
     # ------------------------------------------------------------------
     # Internals -- always-on-top

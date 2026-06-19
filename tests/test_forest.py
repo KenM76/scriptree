@@ -2233,3 +2233,98 @@ class TestRestoreDescendantsDesktopOrder:
         forest_window.close()
         for w in cells.values():
             w.close()
+
+
+class TestRevealRescuesOffscreenCells:
+    """v0.8.0a62 (user-reported): when the forest hub is moved while
+    its cells are hidden, the cells keep their old positions -- which
+    may now be off-screen.  Revealing them (taskbar restore /
+    show_hub) must clamp each one back onto a visible screen, mirroring
+    ``screen_watcher.rescue_all_cells``, instead of leaving it
+    stranded where the user can't reach it.
+    """
+
+    def _fake_cell(self, cid: str, x: int, y: int):
+        from PySide6.QtCore import QPoint
+
+        class FakeCell:
+            def __init__(self) -> None:
+                self._id = cid
+                self._p = QPoint(x, y)
+                self._visible = False
+                self.clamp_calls: list[QPoint] = []
+
+            def show(self) -> None:
+                self._visible = True
+
+            def isVisible(self) -> bool:
+                return self._visible
+
+            def winId(self) -> int:
+                return abs(hash(cid)) % 100000 + 1
+
+            def pos(self) -> QPoint:
+                return self._p
+
+            def move(self, a, b=None) -> None:
+                self._p = a if b is None else QPoint(a, b)
+
+            def _clamp_to_screen(self, raw: QPoint) -> QPoint:
+                # Emulate CellWindow._clamp_to_screen: a position that
+                # maps to no screen (here: any negative coord) is
+                # pulled onto the primary screen at (50, 50); an
+                # on-screen position passes through unchanged.
+                self.clamp_calls.append(QPoint(raw))
+                if raw.x() < 0 or raw.y() < 0:
+                    return QPoint(50, 50)
+                return raw
+
+        return FakeCell()
+
+    def test_rescue_helper_clamps_only_offscreen(self) -> None:
+        from PySide6.QtWidgets import QWidget
+        from scriptree.shell.forest_visibility import (
+            ForestVisibilityManager,
+        )
+
+        off = self._fake_cell("off", -4000, -4000)
+        onscreen = self._fake_cell("on", 120, 140)
+        forest_window = QWidget()
+        mgr = ForestVisibilityManager(forest_window, object())
+
+        mgr._rescue_cells_on_screen([off, onscreen])
+
+        # Off-screen cell pulled back; on-screen cell left exactly put.
+        assert (off.pos().x(), off.pos().y()) == (50, 50)
+        assert (onscreen.pos().x(), onscreen.pos().y()) == (120, 140)
+        # The clamp was consulted for both (the no-op decision is the
+        # clamp's, not a guess by the caller).
+        assert len(off.clamp_calls) == 1 and len(onscreen.clamp_calls) == 1
+        forest_window.close()
+
+    def test_restore_descendants_rescues_offscreen(self, monkeypatch: Any) -> None:
+        from PySide6.QtWidgets import QWidget
+        from scriptree.shell import win_virtual_desktops as wvd
+        from scriptree.shell.forest_visibility import (
+            ForestVisibilityManager,
+        )
+
+        off = self._fake_cell("off", -4000, -4000)
+        cells = {"off": off}
+
+        class FakeRegistry:
+            def get(self, cid):
+                return cells.get(cid)
+
+        forest_window = QWidget()
+        mgr = ForestVisibilityManager(forest_window, FakeRegistry())
+        mgr._hidden_descendant_ids = ["off"]
+        # Virtual-desktop support off so the test exercises only the
+        # show + on-screen-rescue path.
+        monkeypatch.setattr(wvd, "is_supported", lambda: False)
+
+        mgr._restore_descendants()
+
+        assert off.isVisible()
+        assert (off.pos().x(), off.pos().y()) == (50, 50)  # rescued on-screen
+        forest_window.close()
