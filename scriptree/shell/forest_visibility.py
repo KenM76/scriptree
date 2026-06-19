@@ -361,6 +361,28 @@ class _FocusWatcher(QObject):
         app = QApplication.instance()
         if app is None:
             return
+        # v0.8.0a60 -- never auto-hide while one of OUR OWN modal
+        # dialogs or popup menus is open.  A forest-spawned dialog
+        # (Settings, About, a warning QMessageBox) or the cell
+        # right-click menu steals the active-window slot, and its
+        # parent chain doesn't always resolve back to a CellWindow
+        # (e.g. a static ``QMessageBox.warning(...)`` or an
+        # unparented dialog), so ``_is_inside_forest`` would
+        # mis-read it as "focus left the forest" and hide the hub +
+        # every cell out from under the user mid-interaction -- the
+        # a52-era "forest vanishes while I'm in a dialog" complaint.
+        # An active modal / popup belongs to THIS Qt app (the call
+        # only ever returns our own widgets), so the user is plainly
+        # still interacting with the forest; suppress the hide until
+        # the dialog / menu closes.
+        try:
+            if (
+                app.activeModalWidget() is not None
+                or app.activePopupWidget() is not None
+            ):
+                return
+        except Exception:  # noqa: BLE001
+            pass
         active = app.activeWindow()
         if self._is_inside_forest(active):
             return

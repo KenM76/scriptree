@@ -2103,3 +2103,71 @@ class TestDragCancelsMemberAnimation:
 
         master._drag_started = False
         master.close(); member.close()
+
+
+class TestForestAutoHideModalGuard:
+    """v0.8.0a60: the auto-hide focus watcher must NOT fold the
+    forest away while one of the app's OWN modal dialogs or popup
+    menus is open.
+
+    Before a60 a forest-spawned dialog (Settings, About, a warning
+    ``QMessageBox``) that wasn't parented back to a ``CellWindow``
+    became the active window; ``_is_inside_forest`` then read it as
+    "focus left the forest" and the watcher hid the hub + every
+    cell out from under the user mid-interaction.  The fix: skip the
+    hide entirely while ``activeModalWidget`` / ``activePopupWidget``
+    reports an open widget (those calls only ever return THIS app's
+    own widgets).
+    """
+
+    def _make_watcher(self, on_left):
+        from PySide6.QtWidgets import QWidget
+        from scriptree.shell.forest_visibility import _FocusWatcher
+
+        forest_window = QWidget()
+        watcher = _FocusWatcher(
+            forest_window, CellRegistry.instance(), on_left,
+        )
+        watcher.set_enabled(True)
+        return forest_window, watcher
+
+    def test_modal_open_suppresses_autohide(self, monkeypatch: Any) -> None:
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        calls: list[int] = []
+        forest_window, watcher = self._make_watcher(lambda: calls.append(1))
+        outside = QWidget()   # an unrelated top-level: focus "left" the forest
+        modal = QWidget()     # stand-in for an open modal dialog
+        monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: outside))
+        monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: modal))
+        monkeypatch.setattr(QApplication, "activePopupWidget", staticmethod(lambda: None))
+        watcher._fire()
+        assert calls == []  # hide suppressed while a modal is up
+        forest_window.close(); outside.close(); modal.close()
+
+    def test_popup_open_suppresses_autohide(self, monkeypatch: Any) -> None:
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        calls: list[int] = []
+        forest_window, watcher = self._make_watcher(lambda: calls.append(1))
+        outside = QWidget()
+        popup = QWidget()
+        monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: outside))
+        monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: None))
+        monkeypatch.setattr(QApplication, "activePopupWidget", staticmethod(lambda: popup))
+        watcher._fire()
+        assert calls == []  # hide suppressed while a popup menu is up
+        forest_window.close(); outside.close(); popup.close()
+
+    def test_no_modal_allows_autohide(self, monkeypatch: Any) -> None:
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        calls: list[int] = []
+        forest_window, watcher = self._make_watcher(lambda: calls.append(1))
+        outside = QWidget()
+        monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: outside))
+        monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: None))
+        monkeypatch.setattr(QApplication, "activePopupWidget", staticmethod(lambda: None))
+        watcher._fire()
+        assert calls == [1]  # focus left + no modal/popup -> hide fires
+        forest_window.close(); outside.close()
