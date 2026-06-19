@@ -378,3 +378,77 @@ class TestForestRevealOnRelaunch:
             {"command": "spawn_cell"}, branding={}, registry=FakeRegistry(),
         )
         assert built["n"] == 1
+
+
+class TestHandoffLoadFailureSurfaced:
+    """v0.8.0a65: a second launch that asks the live primary to open a
+    file used to fail SILENTLY -- the primary logged it, the transport
+    acked ok=true, and the secondary exited 'success', so the user saw
+    no window and no error.  The primary now surfaces the failure to
+    the user (a deferred, non-blocking warning).  The exception must
+    NOT escape _handle_primary_message either, because that would make
+    PrimaryServer ack ok=false and the secondary start a second
+    instance.
+    """
+
+    def test_load_ring_failure_notifies_user(self, monkeypatch) -> None:
+        from scriptree.shell import ring_main
+        import scriptree.shell.ring_io as ring_io
+
+        notified: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            ring_main, "_notify_handoff_error",
+            lambda title, text: notified.append((title, text)),
+        )
+
+        def _boom(*a, **k):
+            raise ValueError("corrupt ring")
+
+        monkeypatch.setattr(ring_io, "load_ring", _boom)
+
+        # Must NOT raise (a propagating exception would ack ok=false).
+        ring_main._handle_primary_message(
+            {"command": "load_ring", "path": "C:/nope.scriptreering"},
+            branding={}, registry=object(),
+        )
+        assert len(notified) == 1
+        assert "nope.scriptreering" in notified[0][1]
+
+    def test_load_catalog_failure_notifies_user(self, monkeypatch) -> None:
+        from scriptree.shell import ring_main
+
+        notified: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            ring_main, "_notify_handoff_error",
+            lambda title, text: notified.append((title, text)),
+        )
+
+        class Boom:
+            def __init__(self, *a, **k):
+                raise OSError("cannot read catalog")
+
+        monkeypatch.setattr(ring_main, "CellWindow", Boom)
+
+        class FakeRegistry:
+            def hexagons(self):
+                return []
+
+        ring_main._handle_primary_message(
+            {"command": "load_catalog", "path": "C:/bad.scriptreetree"},
+            branding={}, registry=FakeRegistry(),
+        )
+        assert len(notified) == 1
+        assert "bad.scriptreetree" in notified[0][1]
+
+    def test_missing_path_notifies_user(self, monkeypatch) -> None:
+        from scriptree.shell import ring_main
+
+        notified: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            ring_main, "_notify_handoff_error",
+            lambda title, text: notified.append((title, text)),
+        )
+        ring_main._handle_primary_message(
+            {"command": "load_ring"}, branding={}, registry=object(),
+        )
+        assert len(notified) == 1

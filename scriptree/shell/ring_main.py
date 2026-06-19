@@ -346,6 +346,43 @@ def _on_hexagon_moved(hex_id: str) -> None:
         _check_undock(hex_win)
 
 
+def _notify_handoff_error(title: str, text: str) -> None:
+    """Surface a single-instance hand-off failure to the user.
+
+    a65: a second launch that asked the live primary to open a file
+    used to fail SILENTLY -- the primary logged the error, the
+    transport acked "delivered", and the secondary exited
+    "successfully", so the user saw no window and no error.  We now
+    pop a warning in the primary (the live GUI process).
+
+    Scheduled via ``QTimer.singleShot(0, ...)`` so it appears AFTER
+    the ack round-trip completes.  A modal dialog blocking inside the
+    primary's readyRead handler would stall the ack, and a stalled
+    ack makes the secondary time out -- which would make it think no
+    primary answered and spuriously start a SECOND instance.  That is
+    also why the ack itself stays ok=true (it means "delivered to the
+    live primary", NOT "the work succeeded"): an ok=false would make
+    the secondary start a second forest.  Outcome is surfaced here,
+    GUI-side, instead.
+    """
+    def _show() -> None:
+        try:
+            from PySide6.QtWidgets import QMessageBox
+            parent = None
+            fc = _FOREST_CONTROLLER
+            if fc is not None:
+                parent = getattr(fc, "forest_window", None)
+            QMessageBox.warning(parent, title, text)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_notify_handoff_error: show failed: {exc!r}")
+
+    try:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, _show)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_notify_handoff_error: schedule failed: {exc!r}")
+
+
 def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noqa: ANN001
     """Dispatch a single-instance hand-off message inside the primary.
 
@@ -406,20 +443,37 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
         path = msg.get("path")
         if not path:
             _log("  load_catalog: missing 'path'")
+            _notify_handoff_error(
+                "Open failed", "No catalog path was provided."
+            )
             return
-        n_existing = len(registry.hexagons())
-        offset = 32 * n_existing
-        hexagon = CellWindow(branding, catalog_path=str(path))
-        hexagon.move(100 + offset, 100 + offset)
-        _wire_hex_to_snap(hexagon)
-        hexagon.show()
-        _log(f"  load_catalog → new hex {hexagon._id[:8]} bound to {path}")
+        # a65: wrap the spawn so a bad/locked/unreadable catalog can't
+        # (1) escape to PrimaryServer._on_ready_read -- which would ack
+        # ok=false and make the secondary start a second instance --
+        # nor (2) vanish silently.  On failure we tell the user.
+        try:
+            n_existing = len(registry.hexagons())
+            offset = 32 * n_existing
+            hexagon = CellWindow(branding, catalog_path=str(path))
+            hexagon.move(100 + offset, 100 + offset)
+            _wire_hex_to_snap(hexagon)
+            hexagon.show()
+            _log(f"  load_catalog → new hex {hexagon._id[:8]} bound to {path}")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"  load_catalog failed for {path}: {exc!r}")
+            _notify_handoff_error(
+                "Open failed",
+                f"ScripTree couldn't open:\n{path}\n\n{exc}",
+            )
         return
 
     if cmd == "load_ring":
         path = msg.get("path")
         if not path:
             _log("  load_ring: missing 'path'")
+            _notify_handoff_error(
+                "Open failed", "No ring path was provided."
+            )
             return
         try:
             from scriptree.shell.ring_io import load_ring
@@ -429,7 +483,15 @@ def _handle_primary_message(msg: dict, branding: dict, registry) -> None:  # noq
             master._saved_ring_path = Path(path)
             _log(f"  load_ring → master {master._id[:8]} from {path}")
         except Exception as exc:  # noqa: BLE001
+            # a65: don't drop the user's file-open silently -- the
+            # handler already caught this so it never escapes to ack
+            # ok=false (which would start a second instance), but the
+            # user must still be told their ring didn't open.
             _log(f"  load_ring failed for {path}: {exc!r}")
+            _notify_handoff_error(
+                "Open failed",
+                f"ScripTree couldn't open the ring:\n{path}\n\n{exc}",
+            )
         return
 
     _log(f"  unknown command: {cmd!r}")
