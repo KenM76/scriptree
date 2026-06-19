@@ -541,6 +541,17 @@ class ForestController(QObject):
         # Initial show.  Always-on-top wins; otherwise taskbar
         # gets a minimised hex; otherwise the hub stays hidden
         # (tray-only mode -- user clicks the tray icon).
+        #
+        # a63 (user-reported "hub won't move until I hide/show it"):
+        # capture the startup mode + post-show hub state in the debug
+        # log so a persistent movability regression can be diagnosed
+        # directly, and schedule ``_finalize_hub_interactive`` to
+        # raise + activate the hub once Qt has finished the first map.
+        _startup_mode = (
+            "always_on_top" if self._preferences.show_always_on_top
+            else "taskbar" if self._preferences.show_on_taskbar
+            else "tray_only_hidden"
+        )
         if self._preferences.show_always_on_top:
             self.forest_window.show()
             # v0.6.10 macify: soft fade-in for the forest hub.
@@ -555,6 +566,12 @@ class ForestController(QObject):
             # the user would have no surface to click and the
             # forest would be unreachable until they restarted.
             self.forest_window.showMinimized()
+        _log(f"[forest_startup] mode={_startup_mode} initial show issued")
+        try:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._finalize_hub_interactive)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: could not schedule hub finalize: {exc!r}")
         # v0.6.12 — settle: the hub may overlap a standalone cell that
         # was loaded from QSettings before us; slide whichever side
         # is movable until clear.
@@ -2071,6 +2088,63 @@ class ForestController(QObject):
                 self._visibility.apply(self._preferences)
             except Exception as exc:  # noqa: BLE001
                 _log(f"update_preferences: visibility.apply failed: {exc!r}")
+
+    def _finalize_hub_interactive(self) -> None:
+        """a63: make the freshly-shown forest hub fully interactive.
+
+        User-reported: at startup the forest hub could not be dragged
+        until the user manually hid and re-showed it.
+
+        The startup show path was the ONLY reveal path that never
+        raised / activated the hub -- every ``show_hub`` and
+        taskbar-restore reveal calls ``raise_()`` + ``activateWindow()``.
+        A frameless ``Qt.Tool`` window shown without activation can
+        fail to pick up the first drag gesture on Windows until it
+        gains activation; the hide/show the user did was, in effect,
+        that activation.  We replicate it here, scheduled one
+        event-loop tick after the initial show (via
+        ``QTimer.singleShot(0, ...)`` in ``start()``) so it runs after
+        Qt finishes the first map and the fade-in -- no visible
+        flicker.
+
+        Guarded to act ONLY when the hub is actually shown and not
+        minimised:
+          * taskbar mode starts the hub minimised -- a taskbar click
+            later restores + activates it through
+            ``_restore_descendants``;
+          * tray-only mode starts it hidden -- the tray click reveals
+            it through ``show_hub`` (which already activates).
+        So the only case this finalise touches is the always-on-top
+        hub the user sees floating at startup -- exactly the surface
+        they reported as unmovable.
+        """
+        w = self.forest_window
+        if w is None:
+            return
+        try:
+            visible = bool(w.isVisible())
+            minimized = bool(w.isMinimized())
+            if visible and not minimized:
+                w.raise_()
+                w.activateWindow()
+            # Diagnostic: a persistent movability regression can now be
+            # read straight from the debug log (Forest -> Debug ->
+            # Enable verbose logging) instead of guessed at.
+            try:
+                flags = f"0x{int(w.windowFlags()):X}"
+            except Exception:  # noqa: BLE001
+                flags = "?"
+            try:
+                active = bool(w.isActiveWindow())
+            except Exception:  # noqa: BLE001
+                active = False
+            _log(
+                "[forest_startup] hub finalize: "
+                f"visible={visible} min={minimized} active={active} "
+                f"flags={flags}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_finalize_hub_interactive: {exc!r}")
 
     def _on_visibility_quit(self) -> None:
         """Terminate ScripTree when the user dismisses the taskbar

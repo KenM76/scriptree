@@ -2328,3 +2328,71 @@ class TestRevealRescuesOffscreenCells:
         assert off.isVisible()
         assert (off.pos().x(), off.pos().y()) == (50, 50)  # rescued on-screen
         forest_window.close()
+
+
+class TestForestHubStartupFinalize:
+    """v0.8.0a63 (user-reported): the startup show path was the only
+    reveal that never raised/activated the hub, so a frameless
+    ``Qt.Tool`` hub could stay unmovable until a manual hide/show.
+    ``_finalize_hub_interactive`` replicates the activation -- but
+    ONLY for a hub that is actually shown and not minimised (taskbar
+    mode starts minimised, tray-only starts hidden; those reveal +
+    activate through their own click paths).
+    """
+
+    class _FakeHub:
+        def __init__(self, visible: bool, minimized: bool) -> None:
+            self._v = visible
+            self._m = minimized
+            self.raised = False
+            self.activated = False
+
+        def isVisible(self) -> bool:
+            return self._v
+
+        def isMinimized(self) -> bool:
+            return self._m
+
+        def isActiveWindow(self) -> bool:
+            return self.activated
+
+        def windowFlags(self) -> int:
+            return 0
+
+        def raise_(self) -> None:
+            self.raised = True
+
+        def activateWindow(self) -> None:
+            self.activated = True
+
+    def _ctrl(self):
+        from scriptree.shell.forest_controller import ForestController
+
+        _fresh_registry()
+        return ForestController(load_branding(), CellRegistry.instance(), None)
+
+    def test_visible_hub_is_activated(self) -> None:
+        ctrl = self._ctrl()
+        hub = self._FakeHub(visible=True, minimized=False)
+        ctrl.forest_window = hub
+        ctrl._finalize_hub_interactive()
+        assert hub.raised and hub.activated
+
+    def test_minimized_hub_left_alone(self) -> None:
+        ctrl = self._ctrl()
+        hub = self._FakeHub(visible=True, minimized=True)
+        ctrl.forest_window = hub
+        ctrl._finalize_hub_interactive()
+        assert not hub.raised and not hub.activated
+
+    def test_hidden_hub_left_alone(self) -> None:
+        ctrl = self._ctrl()
+        hub = self._FakeHub(visible=False, minimized=False)
+        ctrl.forest_window = hub
+        ctrl._finalize_hub_interactive()
+        assert not hub.raised and not hub.activated
+
+    def test_no_window_is_noop(self) -> None:
+        ctrl = self._ctrl()
+        ctrl.forest_window = None
+        ctrl._finalize_hub_interactive()  # must not raise
