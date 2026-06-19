@@ -803,19 +803,27 @@ class ForestController(QObject):
             (a_tr, "show_in_system_tray"),
         ]
 
-        def _on_visibility_toggle(_checked: bool) -> None:
+        def _on_visibility_toggle(fired_action, _checked: bool = False) -> None:
             # Read the candidate new state off the actions.
             new_aot = a_aot.isChecked()
             new_tb = a_tb.isChecked()
             new_tr = a_tr.isChecked()
             if not (new_aot or new_tb or new_tr):
-                # User tried to uncheck the last one -- refuse
-                # the change.  Re-check the action that just
-                # fired (it's whichever is currently unchecked
-                # and was the last one standing) and bail.
-                for action, _attr in _actions:
-                    if not action.isChecked():
-                        action.setChecked(True)
+                # a66: the user just unchecked the LAST enabled mode --
+                # refuse it, restoring ONLY the action that fired.
+                #
+                # The pre-a66 code looped over _actions re-checking
+                # EVERY unchecked action.  When you uncheck your one
+                # remaining mode, all three are momentarily unchecked,
+                # so that loop turned ON all three; and because each
+                # setChecked re-emitted ``toggled`` (no blockSignals)
+                # it re-entered this handler and persisted the bogus
+                # all-modes-on state.  Restore just the fired action,
+                # with its signals blocked so the programmatic
+                # re-check neither re-enters nor persists.
+                fired_action.blockSignals(True)
+                fired_action.setChecked(True)
+                fired_action.blockSignals(False)
                 try:
                     from PySide6.QtWidgets import QToolTip
                     from PySide6.QtGui import QCursor
@@ -841,7 +849,12 @@ class ForestController(QObject):
                 _log(f"Visibility toggle: update_preferences failed: {exc!r}")
 
         for action, _attr in _actions:
-            action.toggled.connect(_on_visibility_toggle)
+            # Pass the firing action explicitly so the "refuse to
+            # uncheck the last mode" path can restore exactly that one
+            # (self.sender() is unreliable for a plain-callable slot).
+            action.toggled.connect(
+                lambda checked, a=action: _on_visibility_toggle(a, checked)
+            )
 
         forest_menu.addMenu(vis_menu)
         forest_menu.addSeparator()

@@ -2396,3 +2396,101 @@ class TestForestHubStartupFinalize:
         ctrl = self._ctrl()
         ctrl.forest_window = None
         ctrl._finalize_hub_interactive()  # must not raise
+
+
+class TestVisibilityToggleLastModeGuard:
+    """v0.8.0a66: unchecking the LAST enabled visibility mode must
+    restore ONLY that mode, not silently turn all three on.
+
+    Pre-a66 the refuse path looped over every action re-checking the
+    unchecked ones (so unchecking your one mode enabled all three),
+    and each setChecked re-emitted ``toggled`` with no blockSignals,
+    re-entering the handler and persisting the bogus state.
+    """
+
+    _VIS_TEXT = {
+        "Show always on top (over desktop)": "aot",
+        "Show on taskbar": "tb",
+        "Show in system tray": "tr",
+    }
+
+    def _find_vis_actions(self, menu) -> dict:
+        found: dict = {}
+
+        def _walk(m) -> None:
+            for act in m.actions():
+                key = self._VIS_TEXT.get(act.text())
+                if key is not None:
+                    found[key] = act
+                sub = act.menu()
+                if sub is not None:
+                    _walk(sub)
+
+        _walk(menu)
+        return found
+
+    def _ctrl_with_prefs(self, aot: bool, tb: bool, tr: bool):
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.forest_io import ForestPreferences
+
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl._preferences = ForestPreferences(
+            show_always_on_top=aot,
+            show_on_taskbar=tb,
+            show_in_system_tray=tr,
+        )
+        return ctrl
+
+    def test_uncheck_last_mode_restores_only_that_mode(
+        self, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        ctrl = self._ctrl_with_prefs(aot=True, tb=False, tr=False)
+        calls: list = []
+        monkeypatch.setattr(
+            ctrl, "update_preferences", lambda prefs: calls.append(prefs),
+        )
+
+        menu = QMenu()
+        ctrl._populate_forest_menu(menu)
+        acts = self._find_vis_actions(menu)
+        assert set(acts) == {"aot", "tb", "tr"}
+        assert acts["aot"].isChecked()
+        assert not acts["tb"].isChecked() and not acts["tr"].isChecked()
+
+        # User unchecks the ONLY enabled mode -> refuse.
+        acts["aot"].setChecked(False)
+
+        # AOT restored; the other two stay OFF (not silently all-on).
+        assert acts["aot"].isChecked()
+        assert not acts["tb"].isChecked()
+        assert not acts["tr"].isChecked()
+        # The refuse path must not persist anything.
+        assert calls == []
+
+    def test_enabling_second_mode_persists_correct_flags(
+        self, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        ctrl = self._ctrl_with_prefs(aot=True, tb=False, tr=False)
+        calls: list = []
+        monkeypatch.setattr(
+            ctrl, "update_preferences", lambda prefs: calls.append(prefs),
+        )
+
+        menu = QMenu()
+        ctrl._populate_forest_menu(menu)
+        acts = self._find_vis_actions(menu)
+
+        # Enable taskbar while AOT is still on -> a normal, allowed
+        # change that must persist with exactly those two flags.
+        acts["tb"].setChecked(True)
+
+        assert len(calls) == 1
+        prefs = calls[0]
+        assert prefs.show_always_on_top is True
+        assert prefs.show_on_taskbar is True
+        assert prefs.show_in_system_tray is False
