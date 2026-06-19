@@ -3650,6 +3650,14 @@ class CellWindow(QMainWindow):
         self._home_positions: dict[str, QPoint] = self._members
         # Running animations keyed by hex_id — kept alive to avoid GC.
         self._collapse_animations: dict[str, QPropertyAnimation] = {}
+        # v0.8.0a67 — per-member OFFSET (member top-left minus master
+        # top-left) captured at the last collapse.  Expand restores
+        # each member to ``master.pos() + offset`` rather than a stale
+        # ABSOLUTE position, so cells follow the forest if it was
+        # dragged while collapsed (and are clamped on-screen).  See
+        # ``_expand_target_for`` + ``rags/lessons/
+        # collapse_expand_relative_offsets.md``.
+        self._collapse_offsets: dict[str, QPoint] = {}
         # v0.6.17 — opt-in: tuck this cell into its link-master when
         # the master collapses.  Default False (cells stay open).
         # ``_load_settings`` overrides for cells with persisted state;
@@ -10563,6 +10571,13 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
+            # v0.8.0a67 — ALSO record the member's offset relative to the
+            # master's CURRENT position.  Expand uses this so members
+            # re-bloom around wherever the forest is NOW, even if it was
+            # dragged across the screen while collapsed.  (The stored
+            # ABSOLUTE position above is a stale anchor the moment the
+            # forest moves; the offset is movement-invariant.)
+            self._collapse_offsets[m._id] = m.pos() - self.pos()
             # v0.6.20 — recursive cascade restored.  If this member
             # is itself a master with link-children (e.g. a ring
             # inside the forest), collapse it FIRST so its members
@@ -10588,6 +10603,49 @@ class CellWindow(QMainWindow):
             anim.start()
 
         _log(f"_start_collapse {self._id}: animating {len(members)} member(s) to master pos")
+
+    def _expand_target_for(self, m: "CellWindow") -> QPoint:
+        """Where member ``m`` should re-bloom to when this master
+        expands.
+
+        v0.8.0a67 (user-reported double bug):
+          1. Dragging the forest while collapsed, then expanding,
+             dropped cells at their stale ABSOLUTE collapse-time
+             positions -- which, after the forest moved, could be
+             OFF-SCREEN, and nothing pulled them back.
+          2. Expand → collapse → move → expand left every cell
+             stacked ON TOP of the forest, because the restore
+             positions were never re-checked against the forest's
+             new location.
+
+        Both stem from ``_start_expand`` restoring a stored ABSOLUTE
+        position.  The fix: prefer the OFFSET captured at collapse
+        (``master.pos() + offset``) so the member tracks the forest
+        wherever it moved, then ALWAYS clamp the result on-screen via
+        the member's own ``_clamp_to_screen`` (which falls back to the
+        primary screen for a point that maps to no screen).  Resolution
+        order:
+
+          * recorded collapse offset  -> ``self.pos() + offset``
+            (normal collapse/expand; movement-invariant);
+          * else stored absolute pos  -> legacy path, e.g. a forest
+            loaded already-collapsed with no offset recorded yet;
+          * else a default slot just to the master's right.
+        """
+        offset = self._collapse_offsets.get(m._id)
+        if offset is not None:
+            target = self.pos() + offset
+        else:
+            stored = self._members.get(m._id)
+            if stored is not None:
+                target = QPoint(stored)
+            else:
+                target = self.pos() + QPoint(self._size_px + 8, 0)
+        try:
+            return m._clamp_to_screen(target)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_expand_target_for: clamp raised {exc!r} for {m._id[:8]}")
+            return target
 
     def _start_expand(self) -> None:
         """Restore ALL link-children to their stored positions
@@ -10663,9 +10721,10 @@ class CellWindow(QMainWindow):
             return _on_finished
 
         for m in members:
-            restore = self._members.get(m._id)
-            if restore is None:
-                restore = self.pos() + QPoint(self._size_px + 8, 0)
+            # v0.8.0a67 — re-anchor to the forest's CURRENT position and
+            # clamp on-screen (see _expand_target_for) instead of
+            # restoring a stale absolute position.
+            restore = self._expand_target_for(m)
             # Make member visible and start from master position, then animate out.
             m.move(self.pos())
             m.setVisible(True)

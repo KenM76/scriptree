@@ -362,6 +362,13 @@ gives the per-topic slice.
   Hidden cells don't track hub movement; stale positions can be off-
   screen. Mirrors `screen_watcher.rescue_all_cells` contract.
   → `rags/lessons/rescue_cells_on_reveal.md`
+- [v3-architecture] **collapse_expand_relative_offsets**: the OTHER
+  reveal path — single-click collapse/expand (`_start_expand`) — must
+  re-anchor members to `master.pos() + offset` (captured at collapse)
+  and clamp on-screen via `_expand_target_for`, not restore stale
+  ABSOLUTE positions (which go off-screen / stack on the master when
+  the forest moved while collapsed).
+  → `rags/lessons/collapse_expand_relative_offsets.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the

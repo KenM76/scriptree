@@ -2494,3 +2494,103 @@ class TestVisibilityToggleLastModeGuard:
         assert prefs.show_always_on_top is True
         assert prefs.show_on_taskbar is True
         assert prefs.show_in_system_tray is False
+
+
+class TestCollapseExpandRelativeOffsets:
+    """v0.8.0a67 (user-reported double bug): single-click COLLAPSE of
+    the forest hex, drag the forest elsewhere, then single-click
+    EXPAND must re-bloom each cell at its offset around the forest's
+    CURRENT position AND on-screen.
+
+    Before a67 ``_start_expand`` restored a stale ABSOLUTE position,
+    so after the forest moved the cells either went off-screen
+    (bug 1) or stacked on top of the forest (bug 2).  The fix records
+    each member's offset-from-master at collapse and re-anchors +
+    clamps at expand (``_expand_target_for``).
+    """
+
+    def _forest_with_member(self, tmp_path: Path, monkeypatch: Any):
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import CellWindow
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+        m = CellWindow(load_branding())
+        m.show()
+        forest._members[m._id] = m.pos()
+        forest._positioned.add(m._id)
+        return ctrl, forest, m
+
+    def test_collapse_records_member_offset(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+
+        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
+        forest.move(400, 400)
+        m.move(480, 360)
+        fp, mp = forest.pos(), m.pos()
+
+        forest._start_collapse()
+
+        assert forest._collapse_offsets[m._id] == QPoint(
+            mp.x() - fp.x(), mp.y() - fp.y(),
+        )
+        # Quiesce the collapse so the 1 s watchdog is a no-op.
+        forest._collapse_state = "collapsed"
+        m.close()
+
+    def test_expand_target_follows_moved_forest(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+
+        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
+        forest._collapse_offsets[m._id] = QPoint(80, -40)
+        # Isolate the re-anchor logic from screen clamping.
+        monkeypatch.setattr(m, "_clamp_to_screen", lambda p: p)
+
+        forest.move(700, 600)
+        fp = forest.pos()
+        target = forest._expand_target_for(m)
+
+        # Re-bloomed at the SAME offset around the NEW forest position
+        # -> not stale, and offset away from the forest -> not stacked.
+        assert (target.x(), target.y()) == (fp.x() + 80, fp.y() - 40)
+        m.close()
+
+    def test_expand_target_is_clamped_on_screen(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+
+        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
+        forest._collapse_offsets[m._id] = QPoint(99999, 99999)  # way off-screen
+        sentinel = QPoint(50, 50)
+        clamp_calls: list = []
+
+        def _fake_clamp(p):
+            clamp_calls.append(QPoint(p))
+            return sentinel
+
+        monkeypatch.setattr(m, "_clamp_to_screen", _fake_clamp)
+
+        target = forest._expand_target_for(m)
+
+        # The clamp was consulted, and its on-screen result is used.
+        assert len(clamp_calls) == 1
+        assert (target.x(), target.y()) == (sentinel.x(), sentinel.y())
+        m.close()
