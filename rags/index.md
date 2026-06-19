@@ -342,3 +342,54 @@ gives the per-topic slice.
   regression came from guessing wrong. Consult
   `docs/LLM/glossary.md`, quote the referent, ask before editing.
   → `rags/lessons/vocabulary_disambiguation_before_editing.md`
+- [pyside6] **autohide_guard_own_modals**: `_FocusWatcher._fire`
+  must return early when `activeModalWidget()` or `activePopupWidget()`
+  is non-None — own dialogs/menus are mis-read as "focus left" by
+  the parent-walk. Fix: guard before `_is_inside_forest` call.
+  → `rags/lessons/autohide_guard_own_modals.md`
+- [pyside6] **show_before_move_desktop_api**: `MoveWindowToDesktop`
+  returns TYPE_E_ELEMENTNOTFOUND (0x8002802B) for HIDDEN windows.
+  Show first, then move. Fix sibling reveal paths too (a59 fixed hub,
+  a61 fixed _restore_descendants).
+  → `rags/lessons/show_before_move_desktop_api.md`
+- [pyside6] **qt_event_filter_never_raise**: `eventFilter` overrides
+  must use `getattr(self, "_attr", default)` for every instance attr.
+  Teardown can delete attrs before the last Qt event arrives.
+  Symptom: "Error calling Python override of eventFilter" on exit.
+  → `rags/lessons/qt_event_filter_never_raise.md`
+- [v3-architecture] **rescue_cells_on_reveal**: every reveal path
+  must call `_rescue_cells_on_screen(shown)` after `cell.show()`.
+  Hidden cells don't track hub movement; stale positions can be off-
+  screen. Mirrors `screen_watcher.rescue_all_cells` contract.
+  → `rags/lessons/rescue_cells_on_reveal.md`
+- [v3-architecture] **forest_startup_hub_not_draggable**: hub not
+  draggable at startup — tentative fix: `QTimer.singleShot(0,
+  _finalize_hub_interactive)` to raise+activate after Qt maps the
+  window. Not reproducible headless; `[forest_startup]` log tag
+  captures next live-run data.
+  → `rags/lessons/forest_startup_hub_not_draggable.md`
+- [v3-architecture] **forest_controller_module_global_handle**:
+  publish live `ForestController` as `ring_main._FOREST_CONTROLLER`
+  so `_handle_primary_message` reveals the hub on second launch
+  instead of spawning a stray cell.
+  → `rags/lessons/forest_controller_module_global_handle.md`
+- [v3-architecture] **single_instance_ack_semantics**: ack = "delivered",
+  not "succeeded". Always ok=true. Surface failures via deferred
+  `QTimer.singleShot(0, _notify_handoff_error)`. A modal inside
+  readyRead stalls the ack → secondary starts a second instance.
+  → `rags/lessons/single_instance_ack_semantics.md`
+- [pyside6] **checkable_action_invariant_restore_sender**: restore
+  ONLY the firing QAction (pass explicitly; `sender()` unreliable)
+  and blockSignals while restoring. Looping over all siblings
+  re-emits toggled and corrupts state.
+  → `rags/lessons/checkable_action_invariant_restore_sender.md`
+- [v3-architecture] **forest_visibility_apply_no_reveal**: LATENT —
+  `apply()` can hide but never show the hub. Toggling from hidden
+  into AOT/taskbar can leave hub stuck. No fix yet; UI gating limits
+  reachability.
+  → `rags/lessons/forest_visibility_apply_no_reveal.md`
+- [v3-architecture] **minimised_hub_virtual_desktop_follow**: LATENT
+  — `IsWindowOnCurrentVirtualDesktop` returns True for minimised
+  windows on any desktop. Taskbar-mode hub does not follow across
+  virtual desktops while minimised.
+  → `rags/lessons/minimised_hub_virtual_desktop_follow.md`

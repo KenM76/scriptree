@@ -98,3 +98,32 @@ subprocess oddities encountered while building V3.
   sharing the body's menu-builder with `item=None`. mapToGlobal
   goes through `header()`.
   → `rags/lessons/qheaderview_right_click_separate_signal.md`
+- [pyside6] **autohide_guard_own_modals**: auto-hide must short-
+  circuit when `QApplication.activeModalWidget()` or
+  `activePopupWidget()` is non-None — own dialogs/menus steal the
+  active-window slot and their parent chain doesn't reach a
+  CellWindow, causing `_is_inside_forest` to mis-read them as
+  "focus left". Guard in `_FocusWatcher._fire` before the
+  `_is_inside_forest` call.
+  → `rags/lessons/autohide_guard_own_modals.md`
+- [pyside6] **show_before_move_desktop_api**: `MoveWindowToDesktop`
+  (Windows virtual-desktop COM API) returns `TYPE_E_ELEMENTNOTFOUND`
+  (HRESULT 0x8002802B) for HIDDEN windows; MINIMISED windows accept
+  it. Rule: show first, then move. Applies to hub AND every tracked
+  descendant reveal path. The sibling-path corollary: fix one reveal
+  path, audit ALL others.
+  → `rags/lessons/show_before_move_desktop_api.md`
+- [pyside6] **qt_event_filter_never_raise**: `QObject.eventFilter`
+  overrides must never raise — during Qt/interpreter teardown,
+  instance attributes may be gone before the last event arrives.
+  Use `getattr(self, "_attr", default)` for every `self._X` access
+  inside `eventFilter`. Symptom: "Error calling Python override of
+  eventFilter" on exit.
+  → `rags/lessons/qt_event_filter_never_raise.md`
+- [pyside6] **checkable_action_invariant_restore_sender**: restoring
+  a "at least one checked" invariant inside a `toggled` handler must
+  restore ONLY the firing action (passed explicitly via lambda default
+  arg — `sender()` is unreliable for plain-callable slots) and wrap
+  the `setChecked(True)` restore in `blockSignals`. Looping over all
+  siblings without blocking re-emits `toggled` and corrupts state.
+  → `rags/lessons/checkable_action_invariant_restore_sender.md`

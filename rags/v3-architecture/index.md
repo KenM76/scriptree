@@ -269,3 +269,45 @@ design.
   it; no in-process signals, no live update — the contract is
   edit closed → forest reloaded.
   → `rags/lessons/editor_forest_sync_via_forest_file.md`
+- [v3-architecture] **rescue_cells_on_reveal**: every reveal path
+  (show_hub, taskbar restore, tray click) must call
+  `_rescue_cells_on_screen(shown_list)` after `cell.show()` so
+  cells that moved off-screen while hidden are clamped back.
+  Mirrors `screen_watcher.rescue_all_cells` contract. Both
+  `show_hub` and `_restore_descendants` must call it.
+  → `rags/lessons/rescue_cells_on_reveal.md`
+- [v3-architecture] **forest_startup_hub_not_draggable**: forest
+  hub not draggable at startup (tentative fix a63) — schedule
+  `_finalize_hub_interactive` via `QTimer.singleShot(0, ...)` to
+  `raise_()` + `activateWindow()` after Qt processes the map event.
+  Guard to no-op in taskbar/tray-hidden modes. Bug NOT reproducible
+  headless; `[forest_startup]` log tag captures next live-run data.
+  → `rags/lessons/forest_startup_hub_not_draggable.md`
+- [v3-architecture] **forest_controller_module_global_handle**:
+  publish the live `ForestController` as `ring_main._FOREST_CONTROLLER`
+  (set in `main()` after `start()` succeeds) so
+  `_handle_primary_message` can call `_visibility.show_hub()` on a
+  second launch instead of spawning a stray standalone cell.
+  → `rags/lessons/forest_controller_module_global_handle.md`
+- [v3-architecture] **single_instance_ack_semantics**: the
+  single-instance ack means "delivered to the live primary", NOT
+  "the work succeeded". Always ack ok=true. Surface failures
+  GUI-side via `_notify_handoff_error` (deferred via
+  `QTimer.singleShot(0, ...)` — a modal inside `readyRead` stalls
+  the ack and causes a second instance). Wrap every
+  `_handle_primary_message` branch in try/except; never let
+  exceptions escape to the handler.
+  → `rags/lessons/single_instance_ack_semantics.md`
+- [v3-architecture] **forest_visibility_apply_no_reveal**: LATENT
+  gap — `ForestVisibilityManager.apply()` can hide but never show/
+  showNormal the hub. Toggling into AOT/taskbar from a hidden state
+  leaves the hub stuck. Reachability is currently limited by the UI
+  (toggles live on the visible hub) but a defensive showNormal
+  branch is missing.
+  → `rags/lessons/forest_visibility_apply_no_reveal.md`
+- [v3-architecture] **minimised_hub_virtual_desktop_follow**: LATENT
+  gap — `IsWindowOnCurrentVirtualDesktop` returns True for minimised
+  windows regardless of their virtual desktop. The
+  `_follow_user_across_desktops` logic short-circuits and the
+  minimised taskbar-mode hub does NOT follow across desktops.
+  → `rags/lessons/minimised_hub_virtual_desktop_follow.md`

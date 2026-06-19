@@ -52,9 +52,21 @@ scriptree/
 ├── shell/                      # V3 cell + ring shell
 │   │                          #   (run via run_scriptreering.bat)
 │   ├── ring_main.py           # entry point: QApplication, primary
-│   │                          #   listener, autoload, --new-process
+│   │                          #   listener, autoload, --new-process.
+│   │                          #   _FOREST_CONTROLLER module global
+│   │                          #   (a64): published by main() after
+│   │                          #   ForestController.start() so
+│   │                          #   _handle_primary_message can reach
+│   │                          #   the live controller.
+│   │                          #   _notify_handoff_error (a65):
+│   │                          #   deferred QMessageBox.warning for
+│   │                          #   file-open failures — must not block
+│   │                          #   inside readyRead (stalled ack →
+│   │                          #   secondary starts second instance).
 │   ├── single_instance.py     # QLocalServer pipe per user;
-│   │                          #   try_handoff() for secondary processes
+│   │                          #   try_handoff() for secondary processes;
+│   │                          #   ack ok=true means "delivered",
+│   │                          #   NOT "succeeded" (see a65 lesson)
 │   ├── cell_window.py         # CellWindow — frameless hex/square
 │   │                          #   widget; click-toggle popup, drag
 │   │                          #   snap, drop handling, role-aware
@@ -79,6 +91,27 @@ scriptree/
 │   │                          #   per-action right-click — see
 │   │                          #   rags/lessons/
 │   │                          #   qmenu_per_action_right_click.md).
+│   ├── forest_controller.py   # v0.3.14+: ForestController singleton
+│   │                          #   orchestrates the forest layer.
+│   │                          #   Constructs the forest hub CellWindow,
+│   │                          #   spawns items, owns autosave, installs
+│   │                          #   the Forest right-click menu hook.
+│   │                          #   _finalize_hub_interactive (a63):
+│   │                          #   deferred raise+activate scheduled one
+│   │                          #   tick after startup show so the hub is
+│   │                          #   in the input queue for first drag.
+│   ├── forest_visibility.py   # v0.8.0a52+: ForestVisibilityManager —
+│   │                          #   three-surface hub visibility (AOT /
+│   │                          #   taskbar / tray). apply(), show_hub(),
+│   │                          #   hide_hub(), hide_descendants_only().
+│   │                          #   _FocusWatcher: auto-hide + virtual-
+│   │                          #   desktop follow. ForestTrayIcon: system
+│   │                          #   tray entry. ForestTaskbarHost:
+│   │                          #   DEPRECATED stub (a54 removed the proxy
+│   │                          #   pattern). Key invariant: every reveal
+│   │                          #   path must call show() BEFORE
+│   │                          #   MoveWindowToDesktop AND call
+│   │                          #   _rescue_cells_on_screen after show.
 │   ├── screen_watcher.py      # v0.8.0a26+: hooks every Qt screen-
 │   │                          #   change signal (screenAdded /
 │   │                          #   Removed / primaryScreenChanged /
@@ -321,6 +354,149 @@ Working recipe:
    uninstall path scope is the catalog's parent folder; per-
    leaf paths would point at sub-directories that aren't a
    strict descendant of the install root.
+
+## Forest hub visibility subsystem (v0.8.0a52+)
+
+`scriptree.shell.forest_visibility` owns the three-surface visibility
+model for the forest hub.  All maintainers touching this subsystem
+should read the relevant RAG lessons first.
+
+### Classes
+
+| Class | Role |
+|---|---|
+| `ForestVisibilityManager` | Orchestrator.  `apply(prefs)` is the single entry point from the controller; it re-derives flag states (Qt.Tool/Qt.Window swap for taskbar, WindowStaysOnTopHint for AOT) and wires/tears-down the tray icon and focus watcher. |
+| `_FocusWatcher` | Tracks `QApplication.focusWindowChanged` to drive auto-hide and the virtual-desktop follow-the-user logic.  Auto-hide is gated by `_enabled` (only when AOT is OFF).  Follow-the-user runs unconditionally on every focus change. |
+| `ForestTrayIcon` | `QSystemTrayIcon` with Show / Quit menu; left-click and double-click both call `on_activate`. |
+| `ForestTaskbarHost` | DEPRECATED in a54 — kept as a dead symbol so any external imports still resolve.  Not instantiated. |
+
+### Public API
+
+```python
+ForestVisibilityManager(forest_window, registry, quit_callback=None)
+    .apply(prefs: ForestPreferences) -> None
+    .show_hub() -> None
+    .hide_hub() -> None
+    .hide_descendants_only() -> None   # used by start() in auto-hide mode
+    .teardown() -> None
+```
+
+### Reveal path invariants (v0.8.0a59-a62)
+
+Every path that transitions the hub from hidden/minimised to visible
+must satisfy these invariants:
+
+1. **Show before move (virtual desktops).**  `MoveWindowToDesktop`
+   returns `TYPE_E_ELEMENTNOTFOUND` (0x8002802B) for a HIDDEN window.
+   Always call `window.show()` or `window.showNormal()` BEFORE the
+   COM move call.  Minimised windows accept the call; hidden windows
+   don't.  See `rags/lessons/show_before_move_desktop_api.md`.
+
+2. **Rescue cells on reveal (v0.8.0a62).**  Call
+   `_rescue_cells_on_screen(shown_list)` after every descendant
+   `cell.show()` call to clamp any cell whose stored position is now
+   off-screen.  Hub movement while cells were hidden leaves stale
+   positions.  See `rags/lessons/rescue_cells_on_reveal.md`.
+
+3. **Suppress the focus watcher during the show.**  Call
+   `self._watcher.suppress_for(ms)` before revealing the hub so the
+   platform's post-show focus shuffle doesn't trigger an immediate
+   phantom hide.  The suppression duration is 300 ms in `show_hub`,
+   200 ms in `_restore_descendants`.
+
+Both `show_hub` (tray + programmatic path) and `_restore_descendants`
+(taskbar-click path via `eventFilter`) must satisfy all three.  When
+adding a third reveal path, audit against this list before shipping.
+
+### Auto-hide guard — own modals (v0.8.0a60)
+
+`_FocusWatcher._fire` must never hide while one of THIS application's
+modal dialogs or popup menus is open.  A forest-spawned
+`QMessageBox.warning(parent=None, ...)` has no Qt parent chain to
+walk, so `_is_inside_forest` mis-identifies it as "external focus".
+
+Guard at the top of `_fire`, before `_is_inside_forest`:
+
+```python
+if (app.activeModalWidget() is not None
+        or app.activePopupWidget() is not None):
+    return   # our own dialog/menu — suppress hide
+```
+
+These methods only ever return THIS process's widgets.  See
+`rags/lessons/autohide_guard_own_modals.md`.
+
+### eventFilter teardown safety (v0.8.0a61)
+
+`ForestVisibilityManager.eventFilter` overrides a Qt virtual and can
+receive events during interpreter teardown — after `self.__dict__`
+is partially destroyed.  All instance attribute reads inside
+`eventFilter` MUST use `getattr(self, "_attr", default)` so the
+method degrades to "not handled" instead of raising.  See
+`rags/lessons/qt_event_filter_never_raise.md`.
+
+### Startup hub activation (v0.8.0a63)
+
+`ForestController.start()` schedules `_finalize_hub_interactive`
+via `QTimer.singleShot(0, ...)` immediately after the initial
+`show()`.  This deferred call does `raise_() + activateWindow()` so
+the hub is in the foreground input queue by the time the user attempts
+to drag it.  The call is guarded to no-op in taskbar-mode (hub starts
+minimised) and tray-only mode (hub stays hidden).
+
+This is a best-guess fix for a bug not reproducible under the headless
+Qt platform.  Diagnostic log tag: `[forest_startup]`.  See
+`rags/lessons/forest_startup_hub_not_draggable.md`.
+
+### Second-launch → reveal, not spawn (v0.8.0a64)
+
+`ring_main._FOREST_CONTROLLER` is a module global published by
+`main()` after `ForestController.start()` succeeds.  When
+`_handle_primary_message` receives `spawn_cell` (the default second-
+launch command) in forest mode, it calls `_FOREST_CONTROLLER._visibility.
+show_hub()` instead of spawning a new `CellWindow`.  See
+`rags/lessons/forest_controller_module_global_handle.md`.
+
+### Single-instance ack semantics (v0.8.0a65)
+
+The ack from the primary to the secondary means "I received the
+message", NOT "the work succeeded".  Every `_handle_primary_message`
+branch MUST:
+
+* Wrap its body in `try/except`.
+* On failure, call `_notify_handoff_error(title, text)` (deferred via
+  `QTimer.singleShot(0, ...)`) — never raise to the handler.
+* Return unconditionally at the end of each branch.
+
+A modal dialog inside the `readyRead` handler stalls the ack write.
+A stalled ack makes the secondary time out → it starts a second
+instance.  See `rags/lessons/single_instance_ack_semantics.md`.
+
+### Known latent gaps
+
+* **`apply()` has no reveal path.**  `ForestVisibilityManager.apply()`
+  can hide the hub but cannot show it.  Toggling into AOT/taskbar from
+  a hidden state leaves the hub stuck.  Currently unreachable via the
+  UI (the visibility toggles only appear on the visible hub's menu).
+  See `rags/lessons/forest_visibility_apply_no_reveal.md`.
+
+* **Minimised hub does not follow virtual desktops.**
+  `IsWindowOnCurrentVirtualDesktop` returns `True` for minimised
+  windows regardless of their desktop.  The `_follow_user_across_desktops`
+  logic short-circuits.  Only affects taskbar mode with Windows 11
+  virtual desktops enabled.  See
+  `rags/lessons/minimised_hub_virtual_desktop_follow.md`.
+
+### Checkable QAction invariant guard (v0.8.0a66)
+
+The "at least one visibility mode must stay checked" guard inside
+`_on_visibility_toggle` (in `forest_controller._populate_forest_menu`)
+must restore ONLY the firing action.  Pass the action explicitly via
+a `lambda` default-arg capture — `self.sender()` is unreliable for
+plain-callable slots.  Wrap the `setChecked(True)` restore in
+`blockSignals` so it does not re-emit `toggled` and re-enter the
+handler.  See
+`rags/lessons/checkable_action_invariant_restore_sender.md`.
 
 ## Display-change rescue (v0.8.0a26)
 

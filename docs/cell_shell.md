@@ -360,6 +360,65 @@ backup is the only recoverable scrap.
 
 ---
 
+## Forest hub visibility modes (v0.8.0a52+)
+
+The forest hub has three independently-toggleable surfaces.  At least
+one must always be active (the UI refuses to uncheck the last one and
+tells you why).
+
+| Surface | What it does | "Hidden" means |
+|---|---|---|
+| **Always on top** (default ON) | The hub floats above every other app window. It is always visible on the desktop. | — (you can minimise by right-clicking the taskbar entry if taskbar mode is also on, but AOT mode has no dedicated hide path) |
+| **Show on taskbar** | The hub gets a dedicated Windows taskbar entry (like PortableApps). Clicking the entry reveals the hub and all cells; clicking again minimises the hub back. | Hub minimised — taskbar button stays, hex is off-screen. |
+| **Show in system tray** | A small tree icon in the notification area. Left-click → reveal hub + cells; right-click → Show / Quit menu. Works whether or not AOT is also on. | Hub hidden (no taskbar entry, no hex). |
+
+Toggle these under **Forest ▶ Visibility** in the hub's right-click menu.
+
+### Auto-hide (taskbar and tray modes)
+
+When "Always on top" is OFF and at least one of taskbar / tray is ON,
+ScripTree enters **auto-hide** mode:
+
+* Clicking the taskbar entry or tray icon reveals the hub and every cell
+  that was visible when the hub was last hidden.  Cells you had
+  deliberately closed before hiding stay closed.
+* As soon as focus moves to a window that is NOT the forest hub or a
+  registered cell, the hub and its cells auto-hide after an 80 ms
+  debounce.
+* **Own dialogs are exempt.**  While a ScripTree-spawned dialog (About,
+  Settings, a warning dialog) or the cell right-click menu is open, the
+  auto-hide is suppressed — `QApplication.activeModalWidget()` and
+  `activePopupWidget()` are checked before every hide decision (v0.8.0a60).
+  A `QMessageBox.warning(parent=None, ...)` call (no explicit parent) is
+  caught by this check even though a parent-chain walk would miss it.
+
+### Cells revealed after a move (v0.8.0a62)
+
+If you drag the hub to a new location while the forest is hidden, the cells
+you previously had open remember their old positions — which may now be
+partly or wholly off-screen.  When the hub is next revealed (tray or
+taskbar click), ScripTree automatically rescues every revealed cell back
+onto a visible screen using the same clamping logic as the display-change
+rescue.  A cell that was already on-screen is left exactly where it is.
+
+### Re-launching the shortcut (v0.8.0a64)
+
+Double-clicking the ScripTree Forest shortcut while a forest is already
+running sends a "show me" signal to the live process.  The existing forest
+hub is revealed via the visibility manager — no duplicate instance is
+created, no stray cell is dropped.  This is the same PortableApps-style
+behaviour: re-launching = "bring it forward", not "start another copy."
+
+### Error feedback from file-open via second launch (v0.8.0a65)
+
+If you launch `run_scriptreeforest.bat path/to/file.scriptreering` while a
+forest is already running and the file can't be opened (bad path, read error,
+corrupted file), the LIVE primary process pops a warning dialog.  The second
+launch exits cleanly — the live process does not crash, and a second instance
+is NOT started.
+
+---
+
 ## Display-change recovery (v0.8.0a26+)
 
 If you change your screen resolution, unplug a monitor,
