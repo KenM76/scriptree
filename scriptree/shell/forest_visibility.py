@@ -770,19 +770,28 @@ class ForestVisibilityManager(QObject):
         OFF).  In always-on-top mode the user can minimise /
         restore the hub normally without us interfering.
         """
-        if obj is self._forest_window and event.type() == QEvent.Type.WindowStateChange:
-            if self._auto_hide and self._taskbar_on:
-                try:
-                    w = self._forest_window
-                    if w is not None and not w.isMinimized() and w.isVisible():
-                        # User restored us from the taskbar.
-                        # Reveal the descendants too.  Schedule on
-                        # the next event-loop tick so the OS
-                        # finishes processing the state change
-                        # first.
-                        QTimer.singleShot(0, self._restore_descendants)
-                except Exception as exc:  # noqa: BLE001
-                    _log(f"eventFilter: taskbar restore raised {exc!r}")
+        # Defensive (a61): a Qt event filter must NEVER raise.  During
+        # interpreter / Qt teardown this object can receive a final
+        # event after its Python attributes have been torn down -- read
+        # them via getattr so we degrade to "not handled" instead of
+        # spewing "Error calling Python override of eventFilter".
+        fw = getattr(self, "_forest_window", None)
+        if (
+            fw is not None
+            and obj is fw
+            and event.type() == QEvent.Type.WindowStateChange
+            and getattr(self, "_auto_hide", False)
+            and getattr(self, "_taskbar_on", False)
+        ):
+            try:
+                if not fw.isMinimized() and fw.isVisible():
+                    # User restored us from the taskbar.  Reveal the
+                    # descendants too.  Schedule on the next event-loop
+                    # tick so the OS finishes processing the state
+                    # change first.
+                    QTimer.singleShot(0, self._restore_descendants)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"eventFilter: taskbar restore raised {exc!r}")
         return super().eventFilter(obj, event)
 
     def _restore_descendants(self) -> None:
@@ -795,21 +804,50 @@ class ForestVisibilityManager(QObject):
             self._watcher.suppress_for(200)
         except Exception:  # noqa: BLE001
             pass
-        # a55: the hub is on the user's current desktop (Windows
-        # put it there when the user clicked the taskbar entry),
-        # but the cells were last shown wherever the forest used
-        # to live.  Move each one to the current desktop so the
-        # whole group appears together.
-        self._ensure_descendants_on_current_desktop()
+        # a61: SHOW each tracked cell FIRST, then move it to the
+        # user's current desktop.
+        #
+        # The hub is already on the user's current desktop (Windows
+        # put it there when the user clicked the taskbar entry), but
+        # the cells were last shown wherever the forest used to
+        # live, so they need moving to land beside the hub.  Pre-a61
+        # this called ``_ensure_descendants_on_current_desktop()``
+        # BEFORE the show loop -- while the cells were still hidden.
+        # ``MoveWindowToDesktop`` returns TYPE_E_ELEMENTNOTFOUND for
+        # a hidden window (the exact failure a59 fixed for the hub
+        # in ``show_hub``), so the move silently no-op'd and the
+        # cells reappeared on the forest's OLD desktop instead of
+        # beside the hub.  Mirror a59: show -> then move.
+        shown: list[Any] = []
         for cell_id in self._hidden_descendant_ids:
             cell = self._registry.get(cell_id)
             if cell is None:
                 continue
             try:
                 cell.show()
+                shown.append(cell)
             except Exception:  # noqa: BLE001
                 continue
         self._hidden_descendant_ids = []
+        # Now that they're visible, move the ones we just revealed to
+        # the current desktop.  We move only ``shown`` (not the full
+        # descendant walk) so we don't force-create native windows
+        # for cells the user had deliberately collapsed/closed.
+        if shown:
+            try:
+                from scriptree.shell import win_virtual_desktops as wvd
+                if wvd.is_supported():
+                    desktop_id = wvd.get_current_desktop_id()
+                    if desktop_id is not None:
+                        for cell in shown:
+                            try:
+                                wvd.move_window_to_desktop(
+                                    int(cell.winId()), desktop_id,
+                                )
+                            except Exception:  # noqa: BLE001
+                                continue
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_restore_descendants: post-show move raised {exc!r}")
         # Bring the hub itself to the foreground in case the
         # restore from taskbar didn't activate it properly.
         try:

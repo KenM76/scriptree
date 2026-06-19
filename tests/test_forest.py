@@ -2171,3 +2171,65 @@ class TestForestAutoHideModalGuard:
         watcher._fire()
         assert calls == [1]  # focus left + no modal/popup -> hide fires
         forest_window.close(); outside.close()
+
+
+class TestRestoreDescendantsDesktopOrder:
+    """v0.8.0a61: _restore_descendants (the taskbar-entry restore
+    path) must SHOW each tracked cell before moving it to the user's
+    current virtual desktop.
+
+    Pre-a61 it moved while the cells were still hidden, and
+    ``MoveWindowToDesktop`` rejects hidden windows
+    (TYPE_E_ELEMENTNOTFOUND) -- the same defect a59 fixed for the
+    hub in ``show_hub`` -- so cells reappeared on the forest's old
+    desktop instead of beside the restored hub.
+    """
+
+    def test_cells_shown_before_move(self, monkeypatch: Any) -> None:
+        from PySide6.QtWidgets import QWidget
+        from scriptree.shell import win_virtual_desktops as wvd
+        from scriptree.shell.forest_visibility import (
+            ForestVisibilityManager,
+        )
+
+        # Two tracked cells, both currently hidden.
+        cells = {}
+        for cid in ("c1", "c2"):
+            w = QWidget()
+            w.hide()
+            cells[cid] = w
+
+        class FakeRegistry:
+            def get(self, cid):
+                return cells.get(cid)
+
+        forest_window = QWidget()
+        mgr = ForestVisibilityManager(forest_window, FakeRegistry())
+        mgr._hidden_descendant_ids = ["c1", "c2"]
+
+        sentinel = object()
+        visible_at_move: dict[str, bool] = {}
+        monkeypatch.setattr(wvd, "is_supported", lambda: True)
+        monkeypatch.setattr(wvd, "get_current_desktop_id", lambda: sentinel)
+
+        def _record_move(hwnd, desktop_id):
+            assert desktop_id is sentinel
+            for cid, w in cells.items():
+                if int(w.winId()) == hwnd:
+                    visible_at_move[cid] = w.isVisible()
+            return True
+
+        monkeypatch.setattr(wvd, "move_window_to_desktop", _record_move)
+
+        mgr._restore_descendants()
+
+        # Both cells were shown, and were ALREADY visible at the
+        # moment MoveWindowToDesktop was called (move-after-show).
+        assert cells["c1"].isVisible() and cells["c2"].isVisible()
+        assert visible_at_move == {"c1": True, "c2": True}
+        # Tracking list is cleared so a second restore is a no-op.
+        assert mgr._hidden_descendant_ids == []
+
+        forest_window.close()
+        for w in cells.values():
+            w.close()
