@@ -60,11 +60,26 @@ def _log(msg: str) -> None:
 
 
 def rescue_all_cells() -> int:
-    """Move every off-screen cell back onto a visible work area.
+    """Bring every cell back onto a visible work area -- GROUP-AWARE.
 
-    Returns the number of cells that got moved.  Cells already on
-    a valid screen are left alone (their ``_clamp_to_screen`` call
-    is a no-op).
+    Returns the number of cells whose top-left was moved.  Cells
+    already on a valid screen are left alone.
+
+    a72: a resolution change used to clamp EACH cell's top-left
+    independently, which (a) can pile several members onto the same
+    screen edge (the "stacked" failure mode) and (b) moves a master
+    without re-packing its members around the master's new spot.  Now:
+
+      * For a MASTER (forest hub / ring): clamp the master on-screen
+        FIRST, then route its members through the layout engine
+        (``_repack_members(instant=True)`` -> ``_compute_layout``),
+        which assigns each a FREE, ON-SCREEN, NON-OVERLAPPING honeycomb
+        slot around the master's clamped position -- "attach to a side,
+        always on screen", the same engine startup/spawn/expand use.
+      * For a TRUE STANDALONE (``_group_master_id is None``): clamp it.
+      * A cell that is a MEMBER of a group is left to its master's
+        repack (handled above), so we don't fight the engine by
+        clamping it independently.
     """
     try:
         from scriptree.shell.cell_registry import CellRegistry
@@ -79,18 +94,43 @@ def rescue_all_cells() -> int:
         _log(f"rescue_all_cells: registry enumeration failed: {exc!r}")
         return 0
 
+    def _clamp(cell) -> bool:  # noqa: ANN001
+        raw = cell.pos()
+        clamped = cell._clamp_to_screen(raw)
+        if clamped != raw:
+            cell.move(clamped)
+            _log(
+                f"rescued cell id={cell._id[:8]} "
+                f"({raw.x()},{raw.y()}) -> ({clamped.x()},{clamped.y()})"
+            )
+            return True
+        return False
+
     for cell in cells:
         try:
-            raw = cell.pos()
-            clamped = cell._clamp_to_screen(raw)
-            if clamped != raw:
-                cell.move(clamped)
-                moved += 1
-                _log(
-                    f"rescued cell id={cell._id[:8]} "
-                    f"({raw.x()},{raw.y()}) -> "
-                    f"({clamped.x()},{clamped.y()})"
-                )
+            is_master = (
+                getattr(cell, "role", None) == "master"
+                and getattr(cell, "_members", None)
+            )
+            if is_master:
+                # Clamp the master FIRST so _compute_layout's
+                # screenAt(master.pos()) resolves to a valid screen,
+                # THEN re-pack its members onto free on-screen slots.
+                if _clamp(cell):
+                    moved += 1
+                try:
+                    cell._repack_members(instant=True)
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"rescue_all_cells: repack "
+                        f"{getattr(cell, '_id', '?')[:8]} raised {exc!r}"
+                    )
+            elif getattr(cell, "_group_master_id", None) is None:
+                # True standalone (no master) -- clamp it.
+                if _clamp(cell):
+                    moved += 1
+            # else: a member of a group -- its master's repack (above)
+            # places it on a free on-screen slot; don't clamp it here.
         except Exception as exc:  # noqa: BLE001
             _log(
                 f"rescue_all_cells: skipping cell "

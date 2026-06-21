@@ -2789,3 +2789,67 @@ class TestFlagSwapReassertsChrome:
 
         assert not hub.mask().isEmpty(), "hex mask must be restored"
         hub.close()
+
+
+class TestGroupAwareRescue:
+    """v0.8.0a72: a resolution-change rescue (screen_watcher.
+    rescue_all_cells) must route MASTERS through the layout engine
+    (clamp the master, then _repack_members) so members land on free,
+    on-screen, non-overlapping slots -- not clamp each cell
+    independently, which stacks them on the same screen edge.
+    """
+
+    def test_rescue_repacks_master_members_on_screen(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        import math
+
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.screen_watcher import rescue_all_cells
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+        m1 = CellWindow(load_branding())
+        m2 = CellWindow(load_branding())
+        for m in (m1, m2):
+            m.show()
+            forest._members[m._id] = m.pos()
+            forest._positioned.add(m._id)
+            m._group_master_id = forest._id  # mark as group members
+
+        # Drive the whole group far off-screen (simulate a resolution
+        # shrink that left them stranded).
+        forest.move(-9000, -9000)
+        m1.move(-8000, -8000)
+        m2.move(-8000, -8050)
+
+        rescue_all_cells()
+
+        # Hub clamped back on-screen.
+        assert QGuiApplication.screenAt(forest.pos()) is not None
+        # Members re-packed onto engine slots: off the hub, not stacked,
+        # adjacent (a free honeycomb slot, not a clamped pile-up).
+        fp = forest.pos()
+        p1 = forest._members[m1._id]
+        p2 = forest._members[m2._id]
+        assert (p1.x(), p1.y()) != (fp.x(), fp.y())
+        assert (p1.x(), p1.y()) != (p2.x(), p2.y())
+        for p in (p1, p2):
+            assert math.hypot(p.x() - fp.x(), p.y() - fp.y()) <= 2.5 * forest._size_px
+        m1.close()
+        m2.close()

@@ -87,7 +87,8 @@ paths and their engine hooks:
 - collapse/expand: `_start_expand` -> `_compute_layout` (a68);
 - auto-hide visibility reveal: `forest_visibility._rescue_cells_on_screen` (a62)
   — note this only CLAMPS; consider routing it through `_repack_members` too;
-- resolution-change: `screen_watcher.rescue_all_cells` — currently per-cell clamp
-  only (can stack); should also route masters through `_repack_members`.
+- resolution-change: `screen_watcher.rescue_all_cells` — now GROUP-AWARE (a72):
+  clamps the master, then routes its members through `_repack_members`; true
+  standalones are clamped; group members are left to their master's repack.
 A coordinate replay with no free-slot/on-screen/collision check is a latent
 overlap/off-screen bug.
