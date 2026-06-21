@@ -2496,24 +2496,21 @@ class TestVisibilityToggleLastModeGuard:
         assert prefs.show_in_system_tray is False
 
 
-class TestCollapseExpandRelativeOffsets:
-    """v0.8.0a67 (user-reported double bug): single-click COLLAPSE of
-    the forest hex, drag the forest elsewhere, then single-click
-    EXPAND must re-bloom each cell at its offset around the forest's
-    CURRENT position AND on-screen.
+class TestCollapseExpandUsesEngine:
+    """v0.8.0a68 (user-reported): single-click EXPAND of the forest
+    must re-bloom every cell THROUGH the layout engine
+    (``_compute_layout``) -- a free, on-screen, non-overlapping
+    honeycomb slot around the hub -- instead of replaying a remembered
+    coordinate (which stacked cells on top of the forest icon).
 
-    Before a67 ``_start_expand`` restored a stale ABSOLUTE position,
-    so after the forest moved the cells either went off-screen
-    (bug 1) or stacked on top of the forest (bug 2).  The fix records
-    each member's offset-from-master at collapse and re-anchors +
-    clamps at expand (``_expand_target_for``).
+    Supersedes the a67 offset approach, which still restored absolute
+    coordinates and so still overlapped.
     """
 
-    def _forest_with_member(self, tmp_path: Path, monkeypatch: Any):
+    def _forest(self, tmp_path: Path, monkeypatch: Any):
         from scriptree.shell import forest_controller as fc_mod
         from scriptree.shell import forest_io as io_mod
         from scriptree.shell.forest_controller import ForestController
-        from scriptree.shell.cell_window import CellWindow
 
         monkeypatch.setattr(
             io_mod, "default_preferences_path",
@@ -2527,70 +2524,84 @@ class TestCollapseExpandRelativeOffsets:
         ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
         ctrl.set_autosave_enabled(False)
         ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
-        forest = ctrl.forest_window
+        return ctrl, ctrl.forest_window
+
+    def _add_member(self, forest):
+        from scriptree.shell.cell_window import CellWindow
+
         m = CellWindow(load_branding())
         m.show()
         forest._members[m._id] = m.pos()
         forest._positioned.add(m._id)
-        return ctrl, forest, m
+        return m
 
-    def test_collapse_records_member_offset(
+    def test_expand_routes_through_compute_layout(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        from PySide6.QtCore import QPoint
-
-        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
-        forest.move(400, 400)
-        m.move(480, 360)
-        fp, mp = forest.pos(), m.pos()
-
+        ctrl, forest = self._forest(tmp_path, monkeypatch)
+        m = self._add_member(forest)
         forest._start_collapse()
-
-        assert forest._collapse_offsets[m._id] == QPoint(
-            mp.x() - fp.x(), mp.y() - fp.y(),
-        )
-        # Quiesce the collapse so the 1 s watchdog is a no-op.
         forest._collapse_state = "collapsed"
+
+        calls: list = []
+        orig = forest._compute_layout
+        monkeypatch.setattr(
+            forest, "_compute_layout",
+            lambda *a, **k: (calls.append(True), orig(*a, **k))[1],
+        )
+        forest._start_expand()
+        assert calls, "expand must re-bloom through the layout engine"
         m.close()
 
-    def test_expand_target_follows_moved_forest(
+    def test_expand_members_not_on_hub_and_not_stacked(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        from PySide6.QtCore import QPoint
+        import math
 
-        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
-        forest._collapse_offsets[m._id] = QPoint(80, -40)
-        # Isolate the re-anchor logic from screen clamping.
-        monkeypatch.setattr(m, "_clamp_to_screen", lambda p: p)
+        ctrl, forest = self._forest(tmp_path, monkeypatch)
+        m1 = self._add_member(forest)
+        m2 = self._add_member(forest)
+        forest.move(600, 500)
+        m1.move(660, 460)
+        m2.move(660, 540)
+        forest._start_collapse()
+        forest._collapse_state = "collapsed"
+        # Drag the forest across the screen WHILE collapsed.
+        forest.move(820, 680)
 
-        forest.move(700, 600)
+        forest._start_expand()
+
         fp = forest.pos()
-        target = forest._expand_target_for(m)
+        t1 = forest._members[m1._id]
+        t2 = forest._members[m2._id]
+        hub = (fp.x(), fp.y())
+        # Engine placed each member OFF the hub centre (never on the
+        # forest icon) and NOT stacked on each other.
+        assert (t1.x(), t1.y()) != hub
+        assert (t2.x(), t2.y()) != hub
+        assert (t1.x(), t1.y()) != (t2.x(), t2.y())
+        # Each lands on a honeycomb slot ADJACENT to the hub (a free
+        # slot, not a stale far-away coordinate).
+        for t in (t1, t2):
+            assert math.hypot(t.x() - fp.x(), t.y() - fp.y()) <= 2.5 * forest._size_px
+        m1.close()
+        m2.close()
 
-        # Re-bloomed at the SAME offset around the NEW forest position
-        # -> not stale, and offset away from the forest -> not stacked.
-        assert (target.x(), target.y()) == (fp.x() + 80, fp.y() - 40)
-        m.close()
-
-    def test_expand_target_is_clamped_on_screen(
+    def test_expand_clamps_offscreen_hub_before_layout(
         self, tmp_path: Path, monkeypatch: Any,
     ) -> None:
-        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
 
-        ctrl, forest, m = self._forest_with_member(tmp_path, monkeypatch)
-        forest._collapse_offsets[m._id] = QPoint(99999, 99999)  # way off-screen
-        sentinel = QPoint(50, 50)
-        clamp_calls: list = []
+        ctrl, forest = self._forest(tmp_path, monkeypatch)
+        m = self._add_member(forest)
+        forest._start_collapse()
+        forest._collapse_state = "collapsed"
+        # Hub driven far off every screen, then expanded.
+        forest.move(-9000, -9000)
 
-        def _fake_clamp(p):
-            clamp_calls.append(QPoint(p))
-            return sentinel
+        forest._start_expand()
 
-        monkeypatch.setattr(m, "_clamp_to_screen", _fake_clamp)
-
-        target = forest._expand_target_for(m)
-
-        # The clamp was consulted, and its on-screen result is used.
-        assert len(clamp_calls) == 1
-        assert (target.x(), target.y()) == (sentinel.x(), sentinel.y())
+        # _start_expand clamped the hub back on-screen so the engine
+        # computes slots off a valid origin.
+        assert QGuiApplication.screenAt(forest.pos()) is not None
         m.close()

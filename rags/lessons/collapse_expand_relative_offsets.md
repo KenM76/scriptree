@@ -1,96 +1,93 @@
 ---
-topic: collapse_expand_relative_offsets
-date: 2026-06-19
+topic: collapse_expand_route_through_layout_engine
+date: 2026-06-21
 status: gotcha
 related: [rescue_cells_on_reveal, show_before_move_desktop_api]
+supersedes_note: "v0.8.0a67 tried a relative-offset restore; it STILL overlapped. v0.8.0a68 routes through the layout engine — that is the real fix."
 ---
-# Forest collapse/expand must re-anchor members RELATIVE to the master + clamp on-screen — not restore stale absolute positions
+# Forest collapse/expand must re-bloom THROUGH the layout engine (`_compute_layout`), not replay remembered coordinates
 
-## What happened (user-reported, fixed v0.8.0a67)
+## What happened (user-reported)
 
-Two symptoms, same root cause, in the **single-click collapse/expand**
-("slide the cells in / out") path on a master hex (forest or ring) — NOT
-the auto-hide visibility path (`forest_visibility.show_hub`, which a62 had
-already fixed via `_rescue_cells_on_screen`):
+Single-click COLLAPSE of the forest hex, drag the forest, single-click EXPAND
+("slide the cells out") put cells in the wrong place:
+- **off-screen** when the forest had moved to an edge, and
+- **stacked on top of the forest icon** / on each other.
 
-1. **Off-screen:** collapse the forest, drag it to a screen edge, expand —
-   the cells re-bloomed at their stale absolute positions, which were now
-   off every screen, and nothing pulled them back.
-2. **Stacked on the master:** expand → collapse → move the forest → expand,
-   and every cell ended up sitting on top of the forest instead of spread
-   out around it.
-
-The user's words nailed it: *"It's like it isn't checking their positions
-when the forest is clicked and they expand out."*
+The user's diagnosis was exactly right: *"Isn't there a central tracker for
+knowing where cells are? the forest should know where there is open space and a
+side of a docked cell that it can attach to."*
 
 ## Root cause
 
-`CellWindow._start_expand` (cell_window.py) restored each member to
-`self._members.get(m._id)` — the **stored ABSOLUTE position** captured at the
-last collapse. That anchor is stale the instant the master moves:
+`CellWindow._start_expand` restored each member to a remembered ABSOLUTE
+coordinate (`self._members[m._id]`, captured at collapse) with **no free-slot,
+on-screen, or collision check**. So any stale/duplicate/zero-offset stored
+coordinate produced overlap, and a moved forest produced off-screen cells.
 
-- The master-drag cascade (`moveEvent` → `_shift_positioned_members`,
-  default `all_members=False`) only shifts the stored positions of
-  **`_positioned`** members. Forest members that are *loose-linked* (linked
-  but not in `_positioned` — e.g. auto-discovered/dropped items, see the
-  v0.8.0 P2 cascade-gate comment) are NOT shifted, so their stored absolute
-  position stays put while the forest moves away.
-- There is an intentional design that **separated members keep their
-  independent position during a master drag** (`moveEvent` comment), so you
-  must NOT "fix" this by force-shifting all members in the drag — that would
-  regress break-free behaviour.
+v0.8.0a67's intermediate attempt (record each member's offset-from-master at
+collapse, restore `master.pos() + offset`, clamp on-screen) FIXED off-screen but
+**still overlapped** — because preserved relative offsets still stack when
+offsets are small/shared, and it never consulted the free-slot engine. Replaying
+a coordinate is the wrong model.
 
-## Fix / recipe
+## The central tracker DOES exist — use it
 
-Re-anchor at the **expand** site using a movement-invariant **offset**, and
-always clamp on-screen. Do NOT touch `_members` semantics or the drag cascade.
+- `tiling.py` — geometry source of truth (slot offsets, polygon SAT collision).
+- `layout.py` — the slot PLANNER: `find_free_slot` / `nearest_free_slot`
+  (both apply: not-taken + not-back-toward-parent + `is_on_screen` + global
+  polygon-collision), `slot_world_pos`.
+- `CellWindow._compute_layout` (cell_window.py ~4360) — the single authority that
+  walks every member, assigns a FREE, ON-SCREEN, NON-COLLIDING honeycomb slot via
+  the planner, **forbids the master's own centre as a collider** (~4481 — "attach
+  to a side, never on the forest icon"), and writes the result into
+  `self._members[mid]`. `_repack_members(fixed=None)` delegates straight to it.
+  Startup and spawn already use this; collapse/expand did not.
+
+## Fix / recipe (v0.8.0a68)
+
+In `_start_expand`, before revealing members, route placement through the engine:
 
 ```python
-# __init__: new dict, captured at collapse, consumed at expand
-self._collapse_offsets: dict[str, QPoint] = {}
-
-# _start_collapse, in the per-member loop (alongside the existing
-# self._members[m._id] = QPoint(m.pos())):
-self._collapse_offsets[m._id] = m.pos() - self.pos()   # offset from master NOW
-
-# _expand_target_for(m): resolution order, then clamp on-screen
-offset = self._collapse_offsets.get(m._id)
-if offset is not None:
-    target = self.pos() + offset            # follows the master wherever it moved
-else:
-    stored = self._members.get(m._id)       # legacy: loaded-collapsed, no offset yet
-    target = QPoint(stored) if stored is not None else self.pos() + QPoint(self._size_px + 8, 0)
-return m._clamp_to_screen(target)           # never off-screen (falls back to primary)
-
-# _start_expand: use it instead of the raw stored position
-restore = self._expand_target_for(m)
+# 1. Clamp the HUB on-screen first, so _compute_layout's screenAt(self.pos())
+#    resolves to a real screen (an off-screen hub computes every slot off a bad origin).
+self.move(self._clamp_to_screen(self.pos()))
+# 2. Clear each non-floating member's _slot so Pass 1 re-derives a fresh slot
+#    around the hub's CURRENT position (floating/user-dragged members keep their pos).
+for m in members:
+    if not getattr(m, "_floating_intent", False):
+        m._slot = None
+# 3. Engine assigns free, on-screen, non-overlapping slots and writes _members[mid].
+self._compute_layout(instant=True)
+# 4. Bloom: per leaf member, move to hub centre, setVisible(True), animate to
+#    self._members[m._id] (engine slot, re-clamped for safety). Nested-ring
+#    sub-masters are dropped onto their engine slot FIRST, then recursed, so their
+#    children bloom around the ring's correct on-screen slot (not the hub centre
+#    mid-animation).
 ```
 
-`m._clamp_to_screen(point) -> QPoint` (cell_window.py ~9621) is the same
-contract `screen_watcher.rescue_all_cells` uses: clamp to the containing
-screen's `availableGeometry`, falling back to the primary screen for a point
-that maps to no screen.
+Two ordering rules that are load-bearing:
+- **Clamp the hub BEFORE `_compute_layout`** — it reads `screenAt(self.pos())` to
+  pick the screen; an off-screen origin poisons every slot.
+- **Place a nested ring at its engine slot BEFORE recursing into its expand** —
+  otherwise the ring is at the hub centre mid-bloom and its children lay out
+  around the wrong point.
 
-Why offsets, not "shift `_members` by the master delta": the offset is
-independent of whether the drag cascade already shifted `_members`, so there
-is no double-count, and it works identically for positioned and loose-linked
-members. If the master did not move since collapse, `master.pos() + offset`
-equals the original absolute position — identical to the old behaviour.
+The a67 offset machinery (`_collapse_offsets`, `_expand_target_for`) was removed.
 
-Implementation:
-* `scriptree/shell/cell_window.py` — `_collapse_offsets` init (~3652);
-  recorded in `_start_collapse` (~10565); `_expand_target_for` (~10592);
-  used by `_start_expand`.
+Implementation: `scriptree/shell/cell_window.py` — `_start_expand` (the engine
+pre-pass + leaf/sub-master split).
 
 ## How future-me detects it
 
-Two distinct reveal mechanisms exist and BOTH must place cells on-screen
-relative to the (possibly moved) master:
-- **auto-hide visibility** (`forest_visibility.show_hub` / `_restore_descendants`)
-  → `ForestVisibilityManager._rescue_cells_on_screen` (a62);
-- **single-click collapse/expand** (`cell_window._start_expand`)
-  → `_expand_target_for` (a67).
-
-If a NEW reveal/restore path is added, it must do the same: re-anchor to the
-master's current position and clamp via `_clamp_to_screen`. A restore that
-trusts a stored ABSOLUTE coordinate is a latent off-screen/stacking bug.
+ANY reveal/restore/rebloom path that writes a cell position must go through the
+engine (`_compute_layout` / `_repack_members` / `layout.find_free_slot` +
+`is_on_screen` + `slot_world_pos`), never replay a stored coordinate. The reveal
+paths and their engine hooks:
+- collapse/expand: `_start_expand` -> `_compute_layout` (a68);
+- auto-hide visibility reveal: `forest_visibility._rescue_cells_on_screen` (a62)
+  — note this only CLAMPS; consider routing it through `_repack_members` too;
+- resolution-change: `screen_watcher.rescue_all_cells` — currently per-cell clamp
+  only (can stack); should also route masters through `_repack_members`.
+A coordinate replay with no free-slot/on-screen/collision check is a latent
+overlap/off-screen bug.

@@ -3650,14 +3650,6 @@ class CellWindow(QMainWindow):
         self._home_positions: dict[str, QPoint] = self._members
         # Running animations keyed by hex_id — kept alive to avoid GC.
         self._collapse_animations: dict[str, QPropertyAnimation] = {}
-        # v0.8.0a67 — per-member OFFSET (member top-left minus master
-        # top-left) captured at the last collapse.  Expand restores
-        # each member to ``master.pos() + offset`` rather than a stale
-        # ABSOLUTE position, so cells follow the forest if it was
-        # dragged while collapsed (and are clamped on-screen).  See
-        # ``_expand_target_for`` + ``rags/lessons/
-        # collapse_expand_relative_offsets.md``.
-        self._collapse_offsets: dict[str, QPoint] = {}
         # v0.6.17 — opt-in: tuck this cell into its link-master when
         # the master collapses.  Default False (cells stay open).
         # ``_load_settings`` overrides for cells with persisted state;
@@ -10571,13 +10563,6 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
-            # v0.8.0a67 — ALSO record the member's offset relative to the
-            # master's CURRENT position.  Expand uses this so members
-            # re-bloom around wherever the forest is NOW, even if it was
-            # dragged across the screen while collapsed.  (The stored
-            # ABSOLUTE position above is a stale anchor the moment the
-            # forest moves; the offset is movement-invariant.)
-            self._collapse_offsets[m._id] = m.pos() - self.pos()
             # v0.6.20 — recursive cascade restored.  If this member
             # is itself a master with link-children (e.g. a ring
             # inside the forest), collapse it FIRST so its members
@@ -10603,49 +10588,6 @@ class CellWindow(QMainWindow):
             anim.start()
 
         _log(f"_start_collapse {self._id}: animating {len(members)} member(s) to master pos")
-
-    def _expand_target_for(self, m: "CellWindow") -> QPoint:
-        """Where member ``m`` should re-bloom to when this master
-        expands.
-
-        v0.8.0a67 (user-reported double bug):
-          1. Dragging the forest while collapsed, then expanding,
-             dropped cells at their stale ABSOLUTE collapse-time
-             positions -- which, after the forest moved, could be
-             OFF-SCREEN, and nothing pulled them back.
-          2. Expand → collapse → move → expand left every cell
-             stacked ON TOP of the forest, because the restore
-             positions were never re-checked against the forest's
-             new location.
-
-        Both stem from ``_start_expand`` restoring a stored ABSOLUTE
-        position.  The fix: prefer the OFFSET captured at collapse
-        (``master.pos() + offset``) so the member tracks the forest
-        wherever it moved, then ALWAYS clamp the result on-screen via
-        the member's own ``_clamp_to_screen`` (which falls back to the
-        primary screen for a point that maps to no screen).  Resolution
-        order:
-
-          * recorded collapse offset  -> ``self.pos() + offset``
-            (normal collapse/expand; movement-invariant);
-          * else stored absolute pos  -> legacy path, e.g. a forest
-            loaded already-collapsed with no offset recorded yet;
-          * else a default slot just to the master's right.
-        """
-        offset = self._collapse_offsets.get(m._id)
-        if offset is not None:
-            target = self.pos() + offset
-        else:
-            stored = self._members.get(m._id)
-            if stored is not None:
-                target = QPoint(stored)
-            else:
-                target = self.pos() + QPoint(self._size_px + 8, 0)
-        try:
-            return m._clamp_to_screen(target)
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_expand_target_for: clamp raised {exc!r} for {m._id[:8]}")
-            return target
 
     def _start_expand(self) -> None:
         """Restore ALL link-children to their stored positions
@@ -10720,26 +10662,61 @@ class CellWindow(QMainWindow):
                     self._check_edge_fold()
             return _on_finished
 
+        # v0.8.0a68 — re-bloom THROUGH THE LAYOUT ENGINE.
+        #
+        # The pre-a68 path (incl. a67's offset trick) replayed a
+        # remembered ABSOLUTE coordinate per member, with no free-slot,
+        # on-screen, or collision check -- so members overlapped the hub
+        # or each other and could land off-screen.  Route placement
+        # through the same engine startup/spawn already use:
+        #
+        #   1. Clamp the HUB on-screen first, so _compute_layout's
+        #      ``screenAt(self.pos())`` resolves to a real screen (an
+        #      off-screen hub would compute every slot off a bad origin).
+        #   2. Clear each non-floating member's ``_slot`` so Pass 1
+        #      re-derives a FREE, ON-SCREEN, NON-COLLIDING honeycomb slot
+        #      around the hub's CURRENT position -- _compute_layout
+        #      forbids the hub's own centre as a collider (~4481), i.e.
+        #      "attach to a side, never on the forest icon".
+        #   3. _compute_layout(instant=True) writes each member's
+        #      engine-assigned top-left into ``self._members[mid]`` --
+        #      now the authoritative bloom target.
+        try:
+            self.move(self._clamp_to_screen(self.pos()))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_start_expand: hub clamp raised {exc!r}")
         for m in members:
-            # v0.8.0a67 — re-anchor to the forest's CURRENT position and
-            # clamp on-screen (see _expand_target_for) instead of
-            # restoring a stale absolute position.
-            restore = self._expand_target_for(m)
-            # Make member visible and start from master position, then animate out.
-            m.move(self.pos())
-            m.setVisible(True)
-            anim = m._animate_to(restore, duration_ms=250)
-            anim.finished.connect(_make_finish_handler(m._id))
-            self._collapse_animations[m._id] = anim
-            anim.start()
-            # v0.6.20 — recursive expand restored.  If this member
-            # is itself a master in collapsed state, expand it too
-            # so the whole sub-tree re-blooms together with us.
-            if (
+            if not getattr(m, "_floating_intent", False):
+                m._slot = None
+        try:
+            self._compute_layout(instant=True)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_start_expand: _compute_layout raised {exc!r}")
+
+        leaf_pending: list[str] = []
+        for m in members:
+            # Engine-assigned destination (clamped again so a floating
+            # member, which _compute_layout intentionally skips, still
+            # can't strand off-screen).
+            target = self._members.get(m._id)
+            if target is None:
+                target = self.pos() + QPoint(self._size_px + 8, 0)
+            try:
+                target = m._clamp_to_screen(QPoint(target))
+            except Exception:  # noqa: BLE001
+                target = QPoint(target)
+            is_submaster = (
                 m.role == "master"
                 and getattr(m, "_members", None)
                 and m._collapse_state == "collapsed"
-            ):
+            )
+            if is_submaster:
+                # A nested ring: drop it straight onto its engine slot
+                # (no slide), THEN recurse so its OWN children bloom
+                # around the ring's correct, on-screen slot rather than
+                # around the hub centre mid-animation.
+                m.move(target)
+                m.setVisible(True)
                 try:
                     m._start_expand()
                 except Exception as exc:  # noqa: BLE001
@@ -10747,8 +10724,28 @@ class CellWindow(QMainWindow):
                         f"_start_expand: recursive expand of "
                         f"{m._id[:8]} raised {exc!r} — continuing"
                     )
+            else:
+                # Leaf cell: slide out from the hub centre to its
+                # engine-assigned slot (the "bloom").
+                leaf_pending.append(m._id)
+                m.move(self.pos())
+                m.setVisible(True)
+                anim = m._animate_to(target, duration_ms=250)
+                anim.finished.connect(_make_finish_handler(m._id))
+                self._collapse_animations[m._id] = anim
+                anim.start()
 
-        _log(f"_start_expand {self._id}: animating {len(members)} member(s) to stored positions")
+        # Only the sliding leaf members gate the "expanded" transition;
+        # if there are none (e.g. only nested rings), finalise now.
+        pending[:] = leaf_pending
+        if not leaf_pending:
+            self._collapse_state = "expanded"
+            self._check_edge_fold()
+
+        _log(
+            f"_start_expand {self._id}: re-bloomed {len(members)} "
+            f"member(s) via the layout engine"
+        )
 
     def _get_source_windows(self, registry) -> list["CellWindow"]:
         """Return ALL member CellWindow objects for this master.
