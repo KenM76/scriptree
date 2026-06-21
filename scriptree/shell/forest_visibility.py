@@ -316,6 +316,17 @@ class _FocusWatcher(QObject):
         self._suppress_timer.setSingleShot(True)
         self._suppress_timer.timeout.connect(self._clear_suppression)
         self._suppressed: bool = False
+        # a70: DEBOUNCE the virtual-desktop follow.  Pre-a70 it ran on
+        # EVERY focusWindowChanged, so a focus-churn burst (e.g. while
+        # dragging the hub, or alt-tabbing) fired dozens of raw COM
+        # MoveWindowToDesktop calls -- each a race opportunity that can
+        # land the hub on the wrong virtual desktop and strand it there
+        # ("forest disappeared, cells left behind").  Now one move
+        # fires ~120ms after focus settles.  No-op for single-desktop.
+        self._follow_debounce = QTimer(self)
+        self._follow_debounce.setSingleShot(True)
+        self._follow_debounce.setInterval(120)
+        self._follow_debounce.timeout.connect(self._fire_follow)
         app = QApplication.instance()
         if app is not None:
             app.focusWindowChanged.connect(self._on_focus_changed)
@@ -340,20 +351,25 @@ class _FocusWatcher(QObject):
         self._suppressed = False
 
     def _on_focus_changed(self, _new_window: Any) -> None:
-        # a55: the follow-the-user path runs UNCONDITIONALLY (it
-        # only matters when virtual desktops are in play, which is
-        # a no-op for users on a single desktop).  This is what
-        # gives the user the "forest appears on every desktop"
-        # PortableApps-style behaviour without the private-COM
-        # ``PinWindow`` fragility.
+        # a55: the follow-the-user path gives the "forest appears on
+        # every desktop" behaviour without the private-COM ``PinWindow``
+        # fragility.  a70: it is now DEBOUNCED (see _follow_debounce) so
+        # a focus-churn burst fires ONE COM move after focus settles,
+        # not one per event.  No-op for single-desktop users.
         if self._on_focus_changed_for_follow is not None:
-            try:
-                self._on_focus_changed_for_follow()
-            except Exception as exc:  # noqa: BLE001
-                _log(f"_on_focus_changed: follow callback raised {exc!r}")
+            self._follow_debounce.start()
         if not self._enabled or self._suppressed:
             return
         self._debounce.start()
+
+    def _fire_follow(self) -> None:
+        """Debounced virtual-desktop follow (see _on_focus_changed)."""
+        if self._on_focus_changed_for_follow is None:
+            return
+        try:
+            self._on_focus_changed_for_follow()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_fire_follow: follow callback raised {exc!r}")
 
     def _fire(self) -> None:
         if not self._enabled or self._suppressed:
@@ -1070,6 +1086,12 @@ class ForestVisibilityManager(QObject):
                 Qt.WidgetAttribute.WA_WState_Created
             ):
                 return
+            # a70: never move the hub across desktops while the user is
+            # actively dragging it.  A drag generates focus churn, and a
+            # mid-drag cross-desktop move is the most likely way the hub
+            # "disappears" out from under the user.
+            if getattr(self._forest_window, "_drag_started", False):
+                return
             hwnd = int(self._forest_window.winId())
             if wvd.is_window_on_current_desktop(hwnd):
                 return
@@ -1079,6 +1101,18 @@ class ForestVisibilityManager(QObject):
             if desktop_id is None:
                 return
             wvd.move_window_to_desktop(hwnd, desktop_id)
+            # a70: verify the move landed the hub on the user's current
+            # desktop.  If not, the COM call raced/failed and the hub may
+            # be stranded -- log it (the Forest -> Debug verbose stream
+            # carries the HRESULT) so a residual "disappeared" can be
+            # diagnosed directly instead of guessed at.
+            if not wvd.is_window_on_current_desktop(hwnd):
+                _log(
+                    "_follow_user_across_desktops: hub move did NOT land "
+                    "on the current desktop (possible COM race) -- hub may "
+                    "be stranded; capture the [win_virtual_desktops:debug] "
+                    "HRESULT line"
+                )
             for descendant in self._forest_descendants():
                 try:
                     if descendant.isVisible():

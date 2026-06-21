@@ -2685,3 +2685,57 @@ class TestForestHubOnScreenClamp:
         ctrl.start(forest=forest, suppress_first_run=True)
 
         assert QGuiApplication.screenAt(ctrl.forest_window.pos()) is not None
+
+
+class TestVirtualDesktopFollowGuards:
+    """v0.8.0a70: the virtual-desktop follow (the verified "forest
+    disappeared, cells left behind" cause) must be DEBOUNCED so a
+    focus-churn burst fires one COM move, and must NEVER move the hub
+    across desktops while it is being dragged.
+    """
+
+    def _mgr(self):
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        return mgr, hub
+
+    def test_focus_change_debounces_follow(self) -> None:
+        mgr, hub = self._mgr()
+        calls: list = []
+        mgr._watcher._on_focus_changed_for_follow = lambda: calls.append(1)
+
+        mgr._watcher._on_focus_changed(None)
+
+        # Debounced -- not called synchronously.
+        assert calls == []
+        assert mgr._watcher._follow_debounce.isActive()
+        hub.close()
+
+    def test_skip_follow_while_dragging(self, monkeypatch: Any) -> None:
+        from scriptree.shell import win_virtual_desktops as wvd
+
+        mgr, hub = self._mgr()
+        moves: list = []
+        monkeypatch.setattr(wvd, "is_supported", lambda: True)
+        monkeypatch.setattr(wvd, "is_window_on_current_desktop", lambda h: False)
+        monkeypatch.setattr(wvd, "get_current_desktop_id", lambda: object())
+        monkeypatch.setattr(
+            wvd, "move_window_to_desktop",
+            lambda h, d: (moves.append(h), True)[1],
+        )
+
+        # Dragging the hub -> the follow must NOT move it across desktops.
+        hub._drag_started = True
+        mgr._follow_user_across_desktops()
+        assert moves == []
+
+        # Not dragging -> the move fires normally.
+        hub._drag_started = False
+        mgr._follow_user_across_desktops()
+        assert len(moves) >= 1
+        hub.close()
