@@ -311,3 +311,21 @@ design.
   `_follow_user_across_desktops` logic short-circuits and the
   minimised taskbar-mode hub does NOT follow across desktops.
   → `rags/lessons/minimised_hub_virtual_desktop_follow.md`
+- [v3-architecture] **cell_positioning_central_tracker**: the layout
+  engine (tiling.py → layout.py → CellWindow._compute_layout) IS the
+  central tracker. Every reveal/restore/rescue path must route member
+  positions through it. Clamp hub on-screen before _compute_layout.
+  Reveal-path audit: startup, collapse/expand (a68), resolution rescue
+  (a72), programmatic hub moves (a69).
+  → `rags/lessons/cell_positioning_central_tracker.md`
+- [v3-architecture] **hub_onscreen_clamp_programmatic**: only live
+  drag clamped the hub; show_hub restore and start() position restore
+  didn't, so a stale coordinate stranded the hub off-screen. Fix (a69):
+  ForestVisibilityManager._clamp_hub + call it at both show_hub
+  branches and start().
+  → `rags/lessons/hub_onscreen_clamp_programmatic.md`
+- [v3-architecture] **group_aware_rescue_repack**: rescue_all_cells
+  must clamp master then _repack_members(instant=True); standalone
+  cells are clamped; group members are left to their master's repack.
+  Clamping members independently stacks them. Fix (a72).
+  → `rags/lessons/group_aware_rescue_repack.md`

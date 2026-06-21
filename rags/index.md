@@ -407,3 +407,34 @@ gives the per-topic slice.
   windows on any desktop. Taskbar-mode hub does not follow across
   virtual desktops while minimised.
   → `rags/lessons/minimised_hub_virtual_desktop_follow.md`
+- [v3-architecture] **cell_positioning_central_tracker**: the layout
+  engine (tiling.py → layout.py → CellWindow._compute_layout) IS the
+  central tracker. Every reveal/restore/rescue path must route member
+  positions through it, never replay a stored coordinate. Invariant:
+  clamp hub on-screen BEFORE calling _compute_layout. Reveal-path
+  audit: startup/_repack_members, collapse/expand a68, resolution
+  rescue a72, programmatic hub moves a69. A coordinate replay with no
+  free-slot/on-screen/collision check is a latent overlap/off-screen bug.
+  → `rags/lessons/cell_positioning_central_tracker.md`
+- [v3-architecture] **hub_onscreen_clamp_programmatic**: only live
+  mouse-drag clamped the hub; programmatic moves (show_hub
+  taskbar/tray restore + forest_controller.start position restore)
+  did not, so a stale saved coordinate stranded the hub off-screen —
+  "forest disappeared". Fix (a69): ForestVisibilityManager._clamp_hub
+  reuses hub._clamp_to_screen; both show_hub restore branches and
+  start() call it before w.move().
+  → `rags/lessons/hub_onscreen_clamp_programmatic.md`
+- [pyside6] **virtual_desktop_follow_debounce**: _follow_user_across_
+  desktops must be DEBOUNCED (120 ms _follow_debounce QTimer in
+  _FocusWatcher) so focus churn fires ONE COM move, not one per event.
+  Also guard with _drag_started: never MoveWindowToDesktop mid-drag
+  or the hub disappears from under the cursor. Verify-and-log after
+  the move. Fix (a70).
+  → `rags/lessons/virtual_desktop_follow_debounce.md`
+- [v3-architecture] **group_aware_rescue_repack**: rescue_all_cells
+  must be GROUP-AWARE: clamp each MASTER on-screen, then route its
+  members through _repack_members(instant=True) -> _compute_layout.
+  Clamp true standalones. Leave group members to their master's repack
+  — clamping them independently stacks them at the same screen edge.
+  Fix (a72).
+  → `rags/lessons/group_aware_rescue_repack.md`

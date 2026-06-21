@@ -96,6 +96,8 @@ Every cell in a master+members group shares the same **size**, **shape**, and **
 - Standalone cells (no group) still have per-cell size/shape — those settings only propagate once the cell docks.
 - After any geometry change, the ring is **repacked** so members stay edge-touching the master with no overlap. Members that would land off-screen at the new geometry are reassigned to a free, on-screen direction.
 - When you drag a master so part of the ring would slide off-screen, the off-edge members reattach to a different direction on release. They never end up clipped, hidden behind the taskbar, or stacked on top of each other.
+- **Collapse and expand keep cells on-screen and attached to a side (v0.8.0a68+).** Single-clicking the forest hub or a ring master to collapse tucks all members into the hub; single-clicking again to expand re-blooms them through the same free-slot engine that startup uses — each member lands on the nearest free, on-screen, non-overlapping honeycomb slot attached to the hub's current position. If the hub moved while collapsed, the cells re-bloom around the new position. Stacked or off-screen re-bloom is a sign that the expand path is replaying a stored coordinate instead of routing through the engine.
+- **Display-change keeps the whole ring together (v0.8.0a72+).** When a monitor is unplugged or the resolution changes, the ring master is clamped on-screen first, then its members are repacked via the same free-slot engine. They never stack at the screen edge — each member gets an unoccupied honeycomb slot around the master's new position.
 
 ### Drag-drop dispatch (v0.3.6)
 

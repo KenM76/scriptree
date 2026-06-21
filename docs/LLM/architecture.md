@@ -108,19 +108,29 @@ scriptree/
 │   │                          #   desktop follow. ForestTrayIcon: system
 │   │                          #   tray entry. ForestTaskbarHost:
 │   │                          #   DEPRECATED stub (a54 removed the proxy
-│   │                          #   pattern). Key invariant: every reveal
-│   │                          #   path must call show() BEFORE
-│   │                          #   MoveWindowToDesktop AND call
-│   │                          #   _rescue_cells_on_screen after show.
+│   │                          #   pattern). Key invariants: (1) every
+│   │                          #   reveal path calls show() BEFORE
+│   │                          #   MoveWindowToDesktop AND calls
+│   │                          #   _rescue_cells_on_screen after show;
+│   │                          #   (2) a69: show_hub clamps the hub
+│   │                          #   position on-screen via _clamp_hub
+│   │                          #   before w.move(); (3) a70: virtual-
+│   │                          #   desktop follow debounced 120 ms +
+│   │                          #   guarded by _drag_started.
 │   ├── screen_watcher.py      # v0.8.0a26+: hooks every Qt screen-
 │   │                          #   change signal (screenAdded /
 │   │                          #   Removed / primaryScreenChanged /
 │   │                          #   per-screen geometryChanged /
 │   │                          #   availableGeometryChanged), 200 ms
-│   │                          #   single-shot QTimer debounce, calls
-│   │                          #   CellWindow._clamp_to_screen on
-│   │                          #   every registered cell.  Installed
-│   │                          #   from ring_main.py at startup.
+│   │                          #   single-shot QTimer debounce on
+│   │                          #   app._screen_rescue_timer.
+│   │                          #   a72: rescue_all_cells is GROUP-
+│   │                          #   AWARE — clamps master, then routes
+│   │                          #   members through _repack_members;
+│   │                          #   true standalones are clamped;
+│   │                          #   group members left to their
+│   │                          #   master's repack. Installed from
+│   │                          #   ring_main.py at startup.
 │   ├── merged_tree.py         # build_merged_tree_for_master:
 │   │                          #   temp .scriptreetree per ring
 │   │                          #   membership signature
@@ -381,7 +391,7 @@ ForestVisibilityManager(forest_window, registry, quit_callback=None)
     .teardown() -> None
 ```
 
-### Reveal path invariants (v0.8.0a59-a62)
+### Reveal path invariants (v0.8.0a59-a72)
 
 Every path that transitions the hub from hidden/minimised to visible
 must satisfy these invariants:
@@ -404,9 +414,26 @@ must satisfy these invariants:
    phantom hide.  The suppression duration is 300 ms in `show_hub`,
    200 ms in `_restore_descendants`.
 
-Both `show_hub` (tray + programmatic path) and `_restore_descendants`
-(taskbar-click path via `eventFilter`) must satisfy all three.  When
-adding a third reveal path, audit against this list before shipping.
+4. **Clamp the hub position on-screen before moving it (v0.8.0a69).**
+   Pass `self._last_hub_position` through `_clamp_hub()` before
+   `w.move()` in both `show_hub` branches (taskbar and tray-only).
+   A stale saved coordinate (monitor unplugged, resolution shrank)
+   otherwise strands the hub off every visible screen.  See
+   `rags/lessons/hub_onscreen_clamp_programmatic.md`.
+
+5. **`setWindowFlags()` hides the widget — capture visibility first
+   (v0.8.0a71).**  Both flag helpers (`_apply_always_on_top_flag`,
+   `_apply_taskbar_flag`) must snapshot `isVisible()` BEFORE calling
+   `setWindowFlags()` (which calls `setParent()` → hides the widget),
+   then call `show()` + `_reassert_window_chrome()` using the
+   pre-captured value.  A guard placed AFTER `setWindowFlags()` is
+   always False.  See
+   `rags/lessons/setwindowflags_hides_and_drops_mask.md`.
+
+All five invariants apply to both `show_hub` (tray + programmatic path)
+and `_restore_descendants` (taskbar-click path via `eventFilter`).
+When adding a new reveal path, audit against this full list before
+shipping.
 
 ### Auto-hide guard — own modals (v0.8.0a60)
 
@@ -484,7 +511,9 @@ instance.  See `rags/lessons/single_instance_ack_semantics.md`.
   `IsWindowOnCurrentVirtualDesktop` returns `True` for minimised
   windows regardless of their desktop.  The `_follow_user_across_desktops`
   logic short-circuits.  Only affects taskbar mode with Windows 11
-  virtual desktops enabled.  See
+  virtual desktops enabled.  The a70 debounce and drag-guard are
+  in place but cannot fix this latent gap — it requires a separate
+  approach for the minimised case.  See
   `rags/lessons/minimised_hub_virtual_desktop_follow.md`.
 
 ### Checkable QAction invariant guard (v0.8.0a66)
@@ -498,7 +527,100 @@ plain-callable slots.  Wrap the `setChecked(True)` restore in
 handler.  See
 `rags/lessons/checkable_action_invariant_restore_sender.md`.
 
-## Display-change rescue (v0.8.0a26)
+## Cell positioning engine + on-screen invariant (v0.8.0a68–a72)
+
+### The central tracker
+
+Three files form the positioning stack for all member cells
+(ring members and forest-member rings):
+
+| File | Role |
+|---|---|
+| `scriptree/shell/tiling.py` | Geometry primitives: honeycomb slot offsets, polygon SAT collision. |
+| `scriptree/shell/layout.py` | Slot planner: `find_free_slot`, `nearest_free_slot`, `slot_world_pos`, `is_on_screen`. `find_free_slot` enforces not-taken + not-back-toward-parent + `is_on_screen` + global polygon-collision. |
+| `scriptree/shell/cell_window.py` | `CellWindow._compute_layout` (~line 4372) — the single slot authority. Walks `_members`, assigns a free, on-screen, non-colliding honeycomb slot per member, **forbids the master's own centre as a collider** (~line 4481) so cells attach to a side and never pile on the hub icon. Writes result into `self._members[mid]`. `_repack_members(fixed=None)` delegates to it. |
+
+### The engine invariant (mandatory)
+
+**Every reveal, restore, or rescue path that writes a cell position
+must route through the engine (`_compute_layout` / `_repack_members`
+/ `layout.find_free_slot`).  A path that replays a stored coordinate
+with no free-slot, on-screen, or collision check is a latent
+overlap/off-screen bug.**
+
+### Reveal-path audit (all six paths must satisfy the invariant)
+
+| Path | Engine hook | Commit |
+|---|---|---|
+| Startup / spawn | `_repack_members()` → `_compute_layout` | Always correct — the reference implementation. |
+| Collapse/expand (`_start_expand`) | `_compute_layout(instant=True)` — clears `_slot` on non-floating members so the engine re-derives each one | a68 |
+| Auto-hide reveal (`_rescue_cells_on_screen`) | `CellWindow._clamp_to_screen` per cell — clamps positions, does NOT re-slot (overlap that existed before hide survives) | a62 |
+| Resolution-change rescue (`rescue_all_cells`) | Clamp master, then `_repack_members(instant=True)` for each master; true standalones clamped; members skipped (engine handles them) | a72 |
+| Hub programmatic restore (`show_hub`) | `_clamp_hub` (reuses hub `_clamp_to_screen`) before `w.move()` in both taskbar and tray-only branches | a69 |
+| Hub startup restore (`ForestController.start`) | `_clamp_to_screen(position)` before `forest_window.move()` | a69 |
+
+### Pre-engine ordering rule (load-bearing)
+
+The hub MUST be clamped on-screen BEFORE `_compute_layout` is called:
+
+```python
+# 1. Clamp the hub so screenAt(self.pos()) resolves to a real screen.
+#    An off-screen origin poisons every slot computation.
+self.move(self._clamp_to_screen(self.pos()))
+
+# 2. Clear non-floating members' _slot so Pass 1 re-derives around
+#    the hub's current position (floating/dragged members keep their pos).
+for m in members:
+    if not getattr(m, "_floating_intent", False):
+        m._slot = None
+
+# 3. Engine assigns free, on-screen, non-overlapping slots.
+self._compute_layout(instant=True)
+```
+
+### Hub on-screen clamp invariant
+
+`CellWindow._clamp_to_screen(raw_pos) -> QPoint` (`cell_window.py:9660`)
+must be called at EVERY site that moves the hub programmatically:
+
+- **Interactive drag** — already wired in `mouseMoveEvent`.
+- **`show_hub` taskbar branch** — `_clamp_hub(self._last_hub_position)` (a69).
+- **`show_hub` tray-only branch** — `_clamp_hub(self._last_hub_position)` (a69).
+- **`ForestController.start` position restore** — `forest_window._clamp_to_screen(position)` (a69).
+
+`ForestVisibilityManager._clamp_hub` (`forest_visibility.py:550`) is a
+thin wrapper that delegates to the hub's `_clamp_to_screen` with a
+`try/except` fallback so a teardown-race can't raise.
+
+### Virtual-desktop follow debounce (a70)
+
+`_FocusWatcher._follow_user_across_desktops` fires on every
+`focusWindowChanged` event — a burst during focus churn produces one
+COM `MoveWindowToDesktop` call per event, a race opportunity.  Two
+guards in `forest_visibility.py`:
+
+1. **120 ms `_follow_debounce` QTimer** (`_FocusWatcher.__init__:326`) —
+   `_on_focus_changed` starts/restarts the timer; `_fire_follow` fires
+   once when focus settles.
+2. **`_drag_started` guard** (`_follow_user_across_desktops:1089`) —
+   skip `MoveWindowToDesktop` while the user is dragging the hub
+   (drag generates focus churn; a mid-drag COM move strands the hub).
+
+These are separate from the 80 ms auto-hide debounce (`_debounce`).
+
+### RAG lessons (read before touching any of these paths)
+
+- `rags/lessons/cell_positioning_central_tracker.md` — full reveal-path
+  audit + engine invariant.
+- `rags/lessons/hub_onscreen_clamp_programmatic.md` — a69 hub-clamp gap
+  and fix.
+- `rags/lessons/virtual_desktop_follow_debounce.md` — a70 debounce +
+  drag-guard.
+- `rags/lessons/group_aware_rescue_repack.md` — a72 group-aware rescue.
+- `rags/lessons/collapse_expand_relative_offsets.md` — a68 expand path.
+- `rags/lessons/rescue_cells_on_reveal.md` — reveal-path `_rescue_cells_on_screen` contract.
+
+## Display-change rescue (v0.8.0a26 / a72)
 
 `scriptree.shell.screen_watcher` keeps cells visible across
 display reconfigurations.  Hooks every Qt screen-change
@@ -516,11 +638,15 @@ a monitor is plugged in or resolution changes.  Storing the
 timer on the app is what makes the debounce span signal
 firings; a per-firing local timer would race.
 
-The rescue itself walks `CellRegistry.instance().all()` and
-delegates to `CellWindow._clamp_to_screen` — the same helper
-drag-end uses — so behaviour stays identical to "drag the
-cell off the edge and release."  Cells already on-screen are
-left alone (the clamp is a no-op for valid positions).
+**a72 — GROUP-AWARE rescue.**  `rescue_all_cells` now distinguishes
+masters from members.  For a master (forest hub or ring master): clamp
+its top-left on-screen first, then call `_repack_members(instant=True)`
+so each member is assigned a FREE, ON-SCREEN, NON-OVERLAPPING honeycomb
+slot around the master's new position — the same engine startup/spawn/
+collapse-expand use.  True standalones (no `_group_master_id`) are
+clamped as before.  Group members are left to their master's repack:
+clamping them independently fights the engine and stacks them at the
+same screen edge.  See `rags/lessons/group_aware_rescue_repack.md`.
 
 A manual entry point lives at Forest right-click → "Bring
 all cells back on-screen" (`forest_controller._on_rescue_offscreen`),

@@ -127,3 +127,10 @@ subprocess oddities encountered while building V3.
   the `setChecked(True)` restore in `blockSignals`. Looping over all
   siblings without blocking re-emits `toggled` and corrupts state.
   → `rags/lessons/checkable_action_invariant_restore_sender.md`
+- [pyside6] **virtual_desktop_follow_debounce**: the virtual-desktop
+  follow (_follow_user_across_desktops) fires on every focusWindowChanged
+  event — debounce it via a dedicated 120 ms QTimer (_follow_debounce)
+  so focus churn produces ONE COM call. Also guard with _drag_started:
+  skip MoveWindowToDesktop while the hub is being dragged (mid-drag
+  moves strand the hub). Verify-and-log after the move. Fix (a70).
+  → `rags/lessons/virtual_desktop_follow_debounce.md`
