@@ -9865,11 +9865,42 @@ class CellWindow(QMainWindow):
                 break
 
         if best is None:
-            _log(
-                f"_settle_no_overlap: no free slot found for "
-                f"{self._id[:8]} (subjects={len(subjects)}, "
-                f"obstacles={len(obstacles)})"
-            )
+            # a73: the rigid block didn't fit anywhere -- the classic
+            # case is a MASTER dragged into a CORNER where the whole
+            # cluster can't slide on-screen as ONE unit.  A rigid
+            # translation can only SLIDE the group; it can't
+            # RE-ARRANGE it.  So fall back to the layout ENGINE, which
+            # plans EVERY member's free, on-screen, non-overlapping
+            # slot UP FRONT (Pass 1) and then applies them (Pass 2) --
+            # "know where everything is going to go before placing it".
+            # Clear non-floating slots first so Pass 1 re-derives fresh
+            # slots around the master's current (corner) position.
+            if self.role == "master" and self._members:
+                _log(
+                    f"_settle_no_overlap: rigid block doesn't fit "
+                    f"{self._id[:8]} (subjects={len(subjects)}, "
+                    f"obstacles={len(obstacles)}) -- re-packing members "
+                    f"via the layout engine"
+                )
+                try:
+                    for mid in list(self._members):
+                        mm = registry.get(mid)
+                        if mm is not None and not getattr(
+                            mm, "_floating_intent", False
+                        ):
+                            mm._slot = None
+                    self._compute_layout(instant=True)
+                except Exception as exc:  # noqa: BLE001
+                    _log(
+                        f"_settle_no_overlap: engine re-pack fallback "
+                        f"raised {exc!r}"
+                    )
+            else:
+                _log(
+                    f"_settle_no_overlap: no free slot found for "
+                    f"{self._id[:8]} (subjects={len(subjects)}, "
+                    f"obstacles={len(obstacles)})"
+                )
             return
 
         dx, dy = best

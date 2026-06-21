@@ -2853,3 +2853,66 @@ class TestGroupAwareRescue:
             assert math.hypot(p.x() - fp.x(), p.y() - fp.y()) <= 2.5 * forest._size_px
         m1.close()
         m2.close()
+
+
+class TestSettleEngineFallbackAtCorner:
+    """v0.8.0a73 (user-reported): dragging the forest into a CORNER left
+    cells overlapping/undocked.  _settle_no_overlap is a rigid-block
+    slide -- it can't re-arrange the cluster, so at a corner where the
+    block can't fit it gave up and left the overlap.  It must fall back
+    to the layout engine (_compute_layout), which plans every member's
+    free, on-screen slot up front, then applies them.
+    """
+
+    def test_settle_falls_back_to_engine_when_block_cannot_fit(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        import math
+
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+        from scriptree.shell.cell_window import CellWindow
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        forest = ctrl.forest_window
+        m = CellWindow(load_branding())
+        m.show()
+        forest._members[m._id] = m.pos()
+        forest._positioned.add(m._id)
+
+        forest.move(120, 120)
+        # Member stranded far off-screen, so the rigid master+member
+        # block can't slide on-screen as one unit -> rigid search fails.
+        m.move(6000, 120)
+
+        calls: list = []
+        orig = forest._compute_layout
+        monkeypatch.setattr(
+            forest, "_compute_layout",
+            lambda *a, **k: (calls.append(1), orig(*a, **k))[1],
+        )
+
+        forest._settle_no_overlap()
+
+        # Rigid slide failed -> engine re-pack fallback fired.
+        assert calls, "settle must fall back to the engine when the block can't fit"
+        # The member is re-packed onto a free slot ADJACENT to the
+        # forest (on-screen, not the stale 6000px coordinate).
+        fp = forest.pos()
+        p = forest._members[m._id]
+        assert QGuiApplication.screenAt(p) is not None
+        assert math.hypot(p.x() - fp.x(), p.y() - fp.y()) <= 2.5 * forest._size_px
+        m.close()

@@ -376,6 +376,12 @@ gives the per-topic slice.
   Cause of "the forest lost its icon and disappeared" after a
   visibility-mode toggle. a71.
   → `rags/lessons/setwindowflags_hides_and_drops_mask.md`
+- [v3-architecture] **settle_rigid_slide_falls_back_to_engine_repack**:
+  drag-end `_settle_no_overlap` is a RIGID block slide (can't re-arrange);
+  at a corner where the cluster can't fit it gave up and left overlap.
+  Fall back to `_compute_layout` (engine re-pack: plan all slots, then
+  apply). a73.
+  → `rags/lessons/settle_rigid_slide_vs_engine_repack.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the
