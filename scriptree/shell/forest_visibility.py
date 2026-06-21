@@ -531,6 +531,24 @@ class ForestVisibilityManager(QObject):
             except Exception as exc:  # noqa: BLE001
                 _log(f"apply: post-flip auto-hide raised {exc!r}")
 
+    def _clamp_hub(self, pos: "QPoint") -> "QPoint":
+        """Clamp a prospective hub top-left onto a visible screen.
+
+        a69: programmatic hub moves (show_hub restore, startup
+        restore) must never strand the hub off-screen -- the
+        "forest disappeared" bug.  Reuses the hub's own
+        ``CellWindow._clamp_to_screen`` (the same helper interactive
+        drag and ``screen_watcher.rescue_all_cells`` use); degrades
+        to the raw point if the hub doesn't expose it.
+        """
+        w = self._forest_window
+        try:
+            if w is not None and hasattr(w, "_clamp_to_screen"):
+                return w._clamp_to_screen(pos)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_clamp_hub: {exc!r}")
+        return pos
+
     def show_hub(self) -> None:
         """Bring the forest hub AND its descendants back into view.
 
@@ -606,7 +624,11 @@ class ForestVisibilityManager(QObject):
                 # showNormal does nothing.
                 w.showNormal()
                 if self._last_hub_position is not None:
-                    w.move(self._last_hub_position)
+                    # a69: clamp so a stale / off-screen last position
+                    # (resolution shrank, monitor unplugged, hub last
+                    # dragged off-screen) can't strand the hub off the
+                    # visible desktop -- the "forest disappeared" bug.
+                    w.move(self._clamp_hub(self._last_hub_position))
                 # Belt-and-suspenders: re-check after show, in
                 # case some platform race put us back on the
                 # origin desktop.  Log the result so we can see
@@ -633,7 +655,9 @@ class ForestVisibilityManager(QObject):
                 # flash on origin desktop possible.  Mitigated
                 # by suppress_for above.
                 if self._last_hub_position is not None and not w.isVisible():
-                    w.move(self._last_hub_position)
+                    # a69: clamp the restore position on-screen (see the
+                    # taskbar branch above).
+                    w.move(self._clamp_hub(self._last_hub_position))
                 w.show()
                 if desktop_id is not None and hwnd:
                     try:

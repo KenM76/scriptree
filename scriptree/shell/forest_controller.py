@@ -466,6 +466,14 @@ class ForestController(QObject):
                     position = QPoint(x, y)
                 else:
                     position = QPoint(24, 600)
+        # a69: clamp the restored/derived position on-screen so a forest
+        # saved at a coordinate that no longer fits the current display
+        # (resolution shrank, monitor unplugged) can't start the hub
+        # off-screen -- the "forest disappeared" bug.
+        try:
+            position = self.forest_window._clamp_to_screen(position)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: hub position clamp raised {exc!r}")
         self.forest_window.move(position)
         # Seed the in-memory ForestDef so the first save without an
         # explicit move still carries the position (matches the user

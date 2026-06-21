@@ -2605,3 +2605,83 @@ class TestCollapseExpandUsesEngine:
         # computes slots off a valid origin.
         assert QGuiApplication.screenAt(forest.pos()) is not None
         m.close()
+
+
+class TestForestHubOnScreenClamp:
+    """v0.8.0a69 (user-reported "the forest lost its icon and
+    disappeared"): every PROGRAMMATIC hub move must clamp on-screen.
+    Only live mouse-drag clamped before; show_hub's restore of a stale
+    _last_hub_position and the startup restore of a persisted
+    window_position could strand the hub off the visible desktop.
+    """
+
+    def _hub(self):
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        return CellWindow(load_branding())
+
+    def test_show_hub_taskbar_clamps_offscreen_last_position(
+        self, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import win_virtual_desktops as wvd
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+        monkeypatch.setattr(wvd, "is_supported", lambda: False)
+        hub = self._hub()
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._taskbar_on = True
+        mgr._last_hub_position = QPoint(-9000, -9000)
+
+        mgr.show_hub()
+
+        assert QGuiApplication.screenAt(hub.pos()) is not None
+        hub.close()
+
+    def test_show_hub_tray_clamps_offscreen_last_position(
+        self, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import win_virtual_desktops as wvd
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+        monkeypatch.setattr(wvd, "is_supported", lambda: False)
+        hub = self._hub()
+        hub.hide()  # tray-mode restore branch requires the hub hidden
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._taskbar_on = False
+        mgr._last_hub_position = QPoint(-9000, -9000)
+
+        mgr.show_hub()
+
+        assert QGuiApplication.screenAt(hub.pos()) is not None
+        hub.close()
+
+    def test_startup_clamps_offscreen_window_position(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtGui import QGuiApplication
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        _fresh_registry()
+        forest = ForestDef(name="F")
+        forest.window_position = (-9000, -9000)  # persisted off-screen
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=forest, suppress_first_run=True)
+
+        assert QGuiApplication.screenAt(ctrl.forest_window.pos()) is not None
