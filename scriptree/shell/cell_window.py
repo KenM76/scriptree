@@ -3917,6 +3917,26 @@ class CellWindow(QMainWindow):
         self._geom = poly
         self.setMask(QRegion(poly.polygon))
 
+    def _reassert_window_chrome(self) -> None:
+        """Re-apply the hex mask + translucent background after a
+        ``setWindowFlags()``-driven native-window recreation.
+
+        a71: on Win11, changing window flags recreates the native HWND,
+        which DISCARDS ``setMask()`` and can reset
+        ``WA_TranslucentBackground``.  Without re-asserting them the cell
+        renders as an opaque, unclipped rectangle and the painted glyph
+        is lost -- the user-reported "the forest lost its icon" after a
+        visibility-mode (Qt.Tool <-> Qt.Window / always-on-top) flag
+        swap.  Safe to call on any cell; a no-op visually when the
+        chrome was already intact.
+        """
+        try:
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self._apply_hex_mask(self._size_px)
+            self.update()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_reassert_window_chrome: {exc!r}")
+
     # ------------------------------------------------------------------
     # Live shape / size / transparency / always-on-top apply methods
     # Per ADR-001 Amendment 1.
@@ -5282,14 +5302,24 @@ class CellWindow(QMainWindow):
         Qt requires a hide + show cycle for flag changes to take effect on Win11.
         We only do this if the window is already visible (not during construction).
         """
+        # a71: setWindowFlags() HIDES the widget (it calls setParent), so
+        # ``isVisible()`` is already False AFTER it -- capture visibility
+        # BEFORE.  The pre-a71 ``if self.isVisible(): self.show()`` was
+        # therefore dead: a runtime flag swap silently left the cell
+        # hidden (a forest "disappeared" cause).
+        was_visible = self.isVisible()
         flags = self.windowFlags()
         if on:
             flags |= Qt.WindowStaysOnTopHint
         else:
             flags &= ~Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
-        if self.isVisible():
+        if was_visible:
             self.show()
+            # The HWND recreation dropped the hex mask + translucent
+            # background -> re-apply so the cell doesn't render as a
+            # blank rectangle ("lost its icon").
+            self._reassert_window_chrome()
 
     def _apply_taskbar_flag(self, on: bool) -> None:
         """v0.8.0a54: swap ``Qt.Tool`` <-> ``Qt.Window`` so this cell
@@ -5317,6 +5347,11 @@ class CellWindow(QMainWindow):
         Mirrors ``_apply_always_on_top_flag``'s hide-and-reshow
         ritual (Win11 only picks up flag changes on the next show).
         """
+        # a71: capture visibility BEFORE setWindowFlags() hides the
+        # widget (see _apply_always_on_top_flag) -- the pre-a71
+        # ``if self.isVisible()`` re-show was dead, so toggling taskbar
+        # mode at runtime silently hid the hub.
+        was_visible = self.isVisible()
         flags = self.windowFlags()
         if on:
             flags &= ~Qt.Tool
@@ -5325,8 +5360,12 @@ class CellWindow(QMainWindow):
             flags &= ~Qt.Window
             flags |= Qt.Tool
         self.setWindowFlags(flags)
-        if self.isVisible():
+        if was_visible:
             self.show()
+            # The Qt.Tool<->Qt.Window swap recreated the HWND ->
+            # re-apply the hex mask + translucent background so the hub
+            # doesn't render as a blank rectangle ("lost its icon").
+            self._reassert_window_chrome()
 
     # ------------------------------------------------------------------
     # Paint

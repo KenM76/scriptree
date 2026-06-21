@@ -2739,3 +2739,53 @@ class TestVirtualDesktopFollowGuards:
         mgr._follow_user_across_desktops()
         assert len(moves) >= 1
         hub.close()
+
+
+class TestFlagSwapReassertsChrome:
+    """v0.8.0a71 (user-reported "the forest lost its icon"): a
+    visibility-mode flag swap calls setWindowFlags(), which recreates
+    the native HWND on Win11 and DROPS the hex mask -- the cell then
+    renders as a blank rectangle.  The flag helpers must re-assert the
+    hex mask + translucent background after the re-show.
+    """
+
+    def _hub(self):
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub.show()
+        return hub
+
+    def test_taskbar_flag_swap_reasserts_chrome(self) -> None:
+        hub = self._hub()
+        calls: list = []
+        orig = hub._reassert_window_chrome
+        hub._reassert_window_chrome = lambda: (calls.append(1), orig())[1]
+
+        hub._apply_taskbar_flag(True)
+
+        assert calls, "Qt.Tool<->Qt.Window swap must re-assert the hex chrome"
+        hub.close()
+
+    def test_always_on_top_flag_swap_reasserts_chrome(self) -> None:
+        hub = self._hub()
+        calls: list = []
+        orig = hub._reassert_window_chrome
+        hub._reassert_window_chrome = lambda: (calls.append(1), orig())[1]
+
+        hub._apply_always_on_top_flag(False)
+
+        assert calls, "always-on-top swap must re-assert the hex chrome"
+        hub.close()
+
+    def test_reassert_restores_dropped_mask(self) -> None:
+        hub = self._hub()
+        # Simulate the HWND-recreation mask loss.
+        hub.clearMask()
+        assert hub.mask().isEmpty()
+
+        hub._reassert_window_chrome()
+
+        assert not hub.mask().isEmpty(), "hex mask must be restored"
+        hub.close()

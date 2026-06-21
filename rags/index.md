@@ -362,13 +362,20 @@ gives the per-topic slice.
   Hidden cells don't track hub movement; stale positions can be off-
   screen. Mirrors `screen_watcher.rescue_all_cells` contract.
   → `rags/lessons/rescue_cells_on_reveal.md`
-- [v3-architecture] **collapse_expand_relative_offsets**: the OTHER
-  reveal path — single-click collapse/expand (`_start_expand`) — must
-  re-anchor members to `master.pos() + offset` (captured at collapse)
-  and clamp on-screen via `_expand_target_for`, not restore stale
-  ABSOLUTE positions (which go off-screen / stack on the master when
-  the forest moved while collapsed).
+- [v3-architecture] **collapse_expand_route_through_layout_engine**:
+  single-click collapse/expand (`_start_expand`) must re-bloom THROUGH
+  the layout engine (`_compute_layout`) — a free, on-screen,
+  non-overlapping honeycomb slot that forbids the hub centre — not
+  replay a remembered coordinate (a67's offset still overlapped). a68.
   → `rags/lessons/collapse_expand_relative_offsets.md`
+- [pyside6] **setwindowflags_hides_widget_and_drops_mask**:
+  `setWindowFlags()` calls setParent -> HIDES the widget (so
+  `isVisible()` is False AFTER it; capture it BEFORE) and recreates the
+  Win11 HWND, dropping `setMask()` + `WA_TranslucentBackground`. Re-show
+  on the pre-captured visibility, then re-assert mask/translucent bg.
+  Cause of "the forest lost its icon and disappeared" after a
+  visibility-mode toggle. a71.
+  → `rags/lessons/setwindowflags_hides_and_drops_mask.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the
