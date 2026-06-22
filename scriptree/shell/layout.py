@@ -24,10 +24,10 @@ The planner exposes the same public surface as v0.6.x
   cell actually sat; cells docked at NE could get re-assigned to
   N if N was free, jumbling the cluster.
 
-Legacy compat: ``INNER_RING`` / ``OUTER_RING`` are still exported
-as ``list[tuple[float, float]]`` factor tables (size_px = 1 unit)
-for any caller that imports them directly.  New code should use
-``tiling.slot_offset`` instead.
+v0.8.0a75: the legacy ``INNER_RING`` / ``OUTER_RING`` unit-factor
+tables were removed -- they had no importers (only the standalone
+simulator ``tools/layout_sim.py`` defines its own).  Use
+``tiling.slot_offset`` for slot geometry.
 """
 from __future__ import annotations
 
@@ -44,32 +44,6 @@ from scriptree.shell.tiling import (
 
 
 Slot = Optional[tuple[str, int]]
-
-
-# ---------------------------------------------------------------------------
-# Legacy compat — INNER_RING / OUTER_RING (unit factors for flat-top hex)
-# ---------------------------------------------------------------------------
-
-def _build_legacy_tables() -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Recover the v0.6.40 list-form factor tables for flat-top hex.
-
-    Each entry is ``(dx_factor, dy_factor)`` such that multiplying
-    by ``size_px`` gives the integer slot offset for that slot.
-    Used only by legacy callers; new code should call
-    ``tiling.slot_offset`` directly.
-    """
-    inner: list[tuple[float, float]] = []
-    for i in range(6):
-        dx, dy = tiling.slot_offset(HEX_FLAT_TOP, 1000, "inner", i)
-        inner.append((dx / 1000.0, dy / 1000.0))
-    outer: list[tuple[float, float]] = []
-    for i in range(12):
-        dx, dy = tiling.slot_offset(HEX_FLAT_TOP, 1000, "outer", i)
-        outer.append((dx / 1000.0, dy / 1000.0))
-    return inner, outer
-
-
-INNER_RING, OUTER_RING = _build_legacy_tables()
 
 
 # ---------------------------------------------------------------------------
