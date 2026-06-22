@@ -112,6 +112,15 @@ _SQRT3_HALF = math.sqrt(3) / 2   # ≈ 0.866
 _SQRT3_QRTR = math.sqrt(3) / 4   # ≈ 0.433
 
 # (dx_factor, dy_factor) in size_px units.
+#
+# a76: these tables duplicate the geometry that lives in ``tiling.py``
+# (the single source of truth).  They are NOT delegated to
+# ``tiling.slot_offset`` because this module's OUTER-ring INDEX ORDER
+# (6 axials, then 6 corners) differs from tiling's (interleaved), and
+# ``repack`` depends on that order.  Instead, the HEXAGON tables are
+# PINNED to tiling by ``tests/test_geometry_consistency.py`` (set
+# equality per ring) so they can never silently drift.  (Square uses a
+# different size convention than tiling -- see that test's xfail.)
 
 # Hexagons — radius 1 (centre-to-centre = size_px) for flat-top edges
 # touching, where the centre-to-centre on the y axis between two

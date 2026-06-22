@@ -389,6 +389,13 @@ gives the per-topic slice.
   default fraction_required=1.0; _start_expand uses engine slots
   verbatim (clamp only fallbacks). a74.
   → `rags/lessons/full_fit_slot_selection.md`
+- [v3-architecture] **group_layout_pinned_to_tiling_not_delegated**:
+  group_layout still has its own slot tables; its outer-ring ORDER
+  differs from tiling's and repack depends on it, so it's PINNED to
+  tiling by tests/test_geometry_consistency.py (set equality per ring)
+  rather than delegated. Hex matches exactly; square uses a different
+  size convention (xfail-tracked). a76.
+  → `rags/lessons/group_layout_pinned_to_tiling.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the
