@@ -382,6 +382,13 @@ gives the per-topic slice.
   Fall back to `_compute_layout` (engine re-pack: plan all slots, then
   apply). a73.
   → `rags/lessons/settle_rigid_slide_vs_engine_repack.md`
+- [v3-architecture] **full_fit_slot_selection_no_clamp**: slot
+  selection must require the WHOLE cell on-screen (is_on_screen 1.0),
+  not 50% -- a half-fit slot + the reveal's on-screen clamp shoved the
+  cell into its neighbour at a corner. find_free_slot/nearest_free_slot
+  default fraction_required=1.0; _start_expand uses engine slots
+  verbatim (clamp only fallbacks). a74.
+  → `rags/lessons/full_fit_slot_selection.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the

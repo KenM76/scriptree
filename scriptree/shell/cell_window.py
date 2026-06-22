@@ -4542,7 +4542,11 @@ class CellWindow(QMainWindow):
                 master_pos, self._size_px, m._slot, m._size_px,
                 master_orientation=self._orientation,
             )
-            if not is_on_screen(slot_tl, m._size_px, screen_rect):
+            # a74: full-fit (1.0) -- release any slot whose cell isn't
+            # WHOLLY on-screen so Pass 1 reassigns it to a fully-fitting
+            # slot, instead of leaving it half-off-screen (which the
+            # reveal clamp then shoved into a neighbour).
+            if not is_on_screen(slot_tl, m._size_px, screen_rect, 1.0):
                 # Release the slot so this cell can be reassigned.
                 taken_slots.discard(m._slot)
                 m._slot = None
@@ -4580,6 +4584,10 @@ class CellWindow(QMainWindow):
                 occupied_centres=occupied_centres,
                 screen_rect=screen_rect,
                 master_orientation=self._orientation,
+                # a74: only commit a slot where the WHOLE cell fits on
+                # screen, so the chosen position never needs clamping
+                # (which would push it into an adjacent cell).
+                fraction_required=1.0,
             )
             if slot is not None:
                 m._slot = slot
@@ -4632,7 +4640,7 @@ class CellWindow(QMainWindow):
             new_x, new_y = tl
             self._members[mid] = QPoint(new_x, new_y)
 
-            on = is_on_screen(tl, m._size_px, screen_rect)
+            on = is_on_screen(tl, m._size_px, screen_rect, 1.0)
             if on:
                 if mid in self._auto_hidden:
                     self._auto_hidden.discard(mid)
@@ -10765,16 +10773,24 @@ class CellWindow(QMainWindow):
 
         leaf_pending: list[str] = []
         for m in members:
-            # Engine-assigned destination (clamped again so a floating
-            # member, which _compute_layout intentionally skips, still
-            # can't strand off-screen).
+            # a74: for an ENGINE-PLACED member (``_slot`` set), use the
+            # engine slot VERBATIM -- do NOT clamp.  The a74 full-fit
+            # rule guarantees that slot is wholly on-screen, and
+            # clamping it was exactly what pushed a corner cell DOWN off
+            # its slot into the neighbour below ("bloom-into-corner
+            # overlap").  Only the FALLBACK (a floating member, which
+            # _compute_layout skips, or a member for which no free slot
+            # was found) is clamped on-screen.
             target = self._members.get(m._id)
-            if target is None:
-                target = self.pos() + QPoint(self._size_px + 8, 0)
-            try:
-                target = m._clamp_to_screen(QPoint(target))
-            except Exception:  # noqa: BLE001
+            if target is not None and m._slot is not None:
                 target = QPoint(target)
+            else:
+                if target is None:
+                    target = self.pos() + QPoint(self._size_px + 8, 0)
+                try:
+                    target = m._clamp_to_screen(QPoint(target))
+                except Exception:  # noqa: BLE001
+                    target = QPoint(target)
             is_submaster = (
                 m.role == "master"
                 and getattr(m, "_members", None)

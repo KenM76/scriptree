@@ -2916,3 +2916,62 @@ class TestSettleEngineFallbackAtCorner:
         assert QGuiApplication.screenAt(p) is not None
         assert math.hypot(p.x() - fp.x(), p.y() - fp.y()) <= 2.5 * forest._size_px
         m.close()
+
+
+class TestFullFitSlotSelection:
+    """v0.8.0a74 (user-reported bloom-into-corner overlap): the slot
+    selectors must require the WHOLE cell on-screen (fraction_required
+    defaults to 1.0), not just 50%.  A 50%-accepted slot put a cell's
+    top above the screen; the reveal then clamped it down into its
+    neighbour.  Full-fit selection means a committed slot never needs
+    clamping.  Pure-logic test of layout.find_free_slot (no Qt state).
+    """
+
+    def test_find_free_slot_requires_whole_cell_on_screen(self) -> None:
+        from scriptree.shell.layout import find_free_slot, slot_world_pos
+        from scriptree.shell.tiling import is_on_screen
+
+        screen = (0, 0, 1920, 1080)
+        size = 56
+        master_pos = (900, 35)  # near the TOP edge -> N inner slot juts above it
+        common = dict(
+            master_size=size, master_slot=None, child_size=size,
+            taken_slots=set(), occupied_centres=set(), screen_rect=screen,
+        )
+
+        # Old behaviour (0.5): accepts a slot that is only half on-screen.
+        loose = find_free_slot(master_pos=master_pos, fraction_required=0.5, **common)
+        # New default (1.0 full-fit).
+        strict = find_free_slot(master_pos=master_pos, **common)
+
+        assert loose is not None and strict is not None
+        tl_loose = slot_world_pos(master_pos, size, loose, size)
+        tl_strict = slot_world_pos(master_pos, size, strict, size)
+
+        # The loose rule commits a slot whose cell is NOT wholly on-screen
+        # (top above the screen) -- the position that later got clamped
+        # into a neighbour.
+        assert not is_on_screen(tl_loose, size, screen, 1.0)
+        assert tl_loose[1] < 0  # top edge above the screen
+
+        # The full-fit default commits only a wholly-on-screen slot, so
+        # no clamp (and thus no neighbour displacement) is ever needed.
+        assert is_on_screen(tl_strict, size, screen, 1.0)
+        assert tl_strict[1] >= 0
+
+    def test_default_is_full_fit(self) -> None:
+        """The new default fraction is 1.0 -- a slot only half on-screen
+        is rejected unless 0.5 is explicitly requested."""
+        from scriptree.shell.layout import find_free_slot, slot_world_pos
+        from scriptree.shell.tiling import is_on_screen
+
+        screen = (0, 0, 1920, 1080)
+        size = 56
+        master_pos = (900, 35)
+        common = dict(
+            master_size=size, master_slot=None, child_size=size,
+            taken_slots=set(), occupied_centres=set(), screen_rect=screen,
+        )
+        default_slot = find_free_slot(master_pos=master_pos, **common)
+        tl = slot_world_pos(master_pos, size, default_slot, size)
+        assert is_on_screen(tl, size, screen, 1.0)

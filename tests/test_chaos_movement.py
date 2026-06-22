@@ -330,7 +330,15 @@ def _on_screen_slot_count(
 ) -> int:
     """Count slots (inner + outer) whose world position fits
     on-screen for this master.  Used as the upper bound on how many
-    members SHOULD be visible after a layout pass."""
+    members SHOULD be visible after a layout pass.
+
+    v0.8.0a74: full-fit (``is_on_screen(..., 1.0)``) -- a slot counts
+    only when the WHOLE cell fits on-screen, matching the engine's new
+    slot-selection rule.  Pre-a74 this used the 0.5 (half-visible)
+    default, but a slot accepted at 50% put the cell partly off-screen
+    and the reveal clamp then shoved it into a neighbour; the engine
+    now commits only wholly-on-screen slots, so the expected-visibility
+    bound must use the same criterion."""
     from scriptree.shell.tiling import (
         slot_world_pos as _swp, inner_count, outer_count,
         is_on_screen as _ios, shape_from_legacy,
@@ -345,7 +353,7 @@ def _on_screen_slot_count(
                 master_pos, spec, master._size_px, kind, i,
                 spec, master._size_px,
             )
-            if _ios(tl, master._size_px, screen_rect):
+            if _ios(tl, master._size_px, screen_rect, 1.0):
                 n += 1
     return n
 
@@ -385,7 +393,7 @@ def assert_max_visibility(
                     master_pos, spec, master._size_px, kind, i,
                     spec, master._size_px,
                 )
-                if _ios(tl, master._size_px, screen_rect):
+                if _ios(tl, master._size_px, screen_rect, 1.0):
                     free_on_screen.append((kind, i))
         hidden = [
             (mid[:8], m._slot, m.pos().x(), m.pos().y())

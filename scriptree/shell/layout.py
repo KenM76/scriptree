@@ -126,6 +126,7 @@ def find_free_slot(
     child_shape: str = "hexagon",
     child_orientation: Optional[str] = None,
     other_specs: Optional[list[tuple[Shape, int, tuple[float, float]]]] = None,
+    fraction_required: float = 1.0,
 ) -> Slot:
     """Find a slot on the master that is:
 
@@ -133,7 +134,16 @@ def find_free_slot(
       2. Not the back-toward-parent slot, when ``master_slot`` is
          set — inner ``(N+n/2) % n`` and outer ``(2N + n) % 2n``
          are reserved so a child never lands on the master's parent.
-      3. On-screen (more than half of the cell visible).
+      3. On-screen.  ``fraction_required`` (default 1.0 = the WHOLE
+         cell must fit) is the fraction of the cell's bbox area that
+         must lie inside the screen.  v0.8.0a74 raised the default
+         from 0.5 to 1.0: a slot accepted at 50% put the cell's top
+         (say) above the screen, and the caller's later on-screen
+         clamp then shoved it DOWN into its neighbour — the
+         "bloom-into-corner overlap" bug.  Requiring full containment
+         means a committed slot never needs clamping, so adjacent
+         cells are never displaced.  (Matches ``group_layout.
+         slot_fits_on_screen``'s full-containment rule.)
       4. Globally non-colliding with every other placed cell
          (polygon SAT against the candidate child polygon at the
          slot position).
@@ -176,7 +186,7 @@ def find_free_slot(
             tl = tiling.slot_world_pos(
                 master_pos, m_shape, master_size, kind, i, c_shape, child_size,
             )
-            if not is_on_screen(tl, child_size, screen_rect):
+            if not is_on_screen(tl, child_size, screen_rect, fraction_required):
                 continue
             ccx = tl[0] + child_size / 2.0
             ccy = tl[1] + child_size / 2.0
@@ -202,9 +212,13 @@ def nearest_free_slot(
     child_shape: str = "hexagon",
     child_orientation: Optional[str] = None,
     other_specs: Optional[list[tuple[Shape, int, tuple[float, float]]]] = None,
+    fraction_required: float = 1.0,
 ) -> Slot:
     """Like :func:`find_free_slot` but picks the slot whose
     *centre* is closest to ``drop_centre``.
+
+    ``fraction_required`` (default 1.0 = full containment) is the
+    on-screen rule, same as :func:`find_free_slot` — see its rule 3.
 
     The v0.7.0 ``_compute_layout`` uses this (with the cell's
     current widget centre as ``drop_centre``) to bind a
@@ -244,7 +258,7 @@ def nearest_free_slot(
             tl = tiling.slot_world_pos(
                 master_pos, m_shape, master_size, kind, i, c_shape, child_size,
             )
-            if not is_on_screen(tl, child_size, screen_rect):
+            if not is_on_screen(tl, child_size, screen_rect, fraction_required):
                 continue
             ccx = tl[0] + child_size / 2.0
             ccy = tl[1] + child_size / 2.0
