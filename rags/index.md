@@ -403,11 +403,13 @@ gives the per-topic slice.
   release zip and strip the interop DLLs (keep ComBridge.Plugins.SolidWorks.dll)
   before `gh release create`. a75 release.
   → `rags/lessons/portable_zip_bundles_solidworks_interop.md`
-- [v3-architecture] **live_edge_reflow_races_rigid_drag_cascade**: the
-  per-frame _live_edge_reflow_or_fold relocated off-screen members via
-  move() WITHOUT updating _members, racing the rigid drag cascade ->
-  fast-drag "left behind" + gap. Removed the per-frame reflow; members
-  follow rigidly during drag, drag-end settle (+a73 engine) re-packs. a77.
+- [v3-architecture] **live_edge_reflow_is_load_bearing_dont_remove**:
+  the per-frame _live_edge_reflow_or_fold races the rigid drag cascade
+  (relocates without updating _members) -> fast-drag "left behind".
+  BUT it is LOAD-BEARING: it lets the forest stay in a corner (members
+  relocate around it); removing it (a77) made drag-end shove the whole
+  cluster back on-screen -> reverted in a78. Fix the divergence in
+  place (sync _members on relocate), do NOT remove the reflow.
   → `rags/lessons/live_edge_reflow_races_rigid_drag.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,

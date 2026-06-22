@@ -1,66 +1,57 @@
 ---
-topic: live_edge_reflow_races_rigid_drag_cascade
-date: 2026-06-21
+topic: live_edge_reflow_is_load_bearing_dont_remove
+date: 2026-06-22
 status: gotcha
 related: [settle_rigid_slide_falls_back_to_engine_repack, full_fit_slot_selection_no_clamp, cell_positioning_central_tracker]
 ---
-# The per-frame live-edge reflow raced the rigid drag cascade → fast-drag "left behind" + gap
+# The live-edge reflow races the rigid drag cascade — but it's LOAD-BEARING; fix the divergence in-place, do NOT remove it
 
-## What happened (user-reported, fixed v0.8.0a77)
+## The tension (a77 removed it → a78 reverted)
 
-Stack cells under the forest, docked, then drag the forest QUICKLY to a screen
-edge.  Members "relocate but sometimes get left behind", opening a gap and
-sometimes overlapping neighbours; once it happens, moving the forest again
-leaves the gapped cells behind.  User's read: "they move to where the forest is,
-but the forest has already moved by the time they get there."
+During a master drag, `CellWindow.moveEvent` runs two movers:
 
-## Root cause — two systems moving the same members with different models
+1. **Rigid cascade** (per-frame): shifts each positioned member's WIDGET and its
+   stored `_members[mid]` home by the drag delta — coupled.
+2. **`_live_edge_reflow_or_fold`** (throttled ~50ms): relocates off-screen
+   members to free on-screen slots (`group_layout.repack`) via instant `move()`.
 
-During a master drag, `CellWindow.moveEvent` ran TWO things each frame:
+**The race (real):** the reflow relocates the widget but does NOT update
+`_members[mid]`, so on a FAST drag widget and stored home diverge → at drag-end
+they disagree → gap / overlap / "left behind on the next move" (user-reported).
 
-1. **The rigid cascade** (the correct one): shift every positioned member's
-   WIDGET by the drag delta AND shift its stored `_members[mid]` home by the same
-   delta.  Widget and stored home stay coupled.
-2. **`_live_edge_reflow_or_fold`** (throttled ~50 ms): when a member goes
-   off-screen, `group_layout.repack` picks a fresh on-screen slot and the member
-   is moved there with an instant `m.move(new_tl)` — **but `_members[mid]` is NOT
-   updated**, and the slot isn't reconciled.
+**Why you must NOT just delete the reflow (v0.8.0a77 did — reverted in a78):**
+the reflow is what lets you drag the forest INTO A CORNER while keeping it
+there.  It relocates the would-be-off-screen members to on-screen slots AROUND
+the cornered forest, so the forest stays put.  Remove it and members merely clip
+during the drag; then the drag-end `_settle_no_overlap` (rigid block) can't fit
+the whole cluster, so it shoves the ENTIRE cluster — forest included — back onto
+the screen.  User symptom after a77: "I can't drag the forest to a corner if
+there are cells that will go off-screen; it keeps all the cells docked where
+they are and pushes everything back onto the screen."  So a78 reverted a77 and
+restored the reflow.
 
-So on a fast drag (cascade per-frame, reflow every 50 ms) the widget and the
-stored home **diverged**: the reflow yanked the widget to a slot, the cascade
-kept shifting the stale home, and they raced.  At drag-end the two disagreed → a
-gap (and overlap); on the next drag the cascade shifted the (already-diverged)
-home, so the member stayed "left behind".  The instant move avoided animation
-lag, but the throttle-vs-per-frame mismatch + the un-synced `_members` was the
-real race.
+## The CORRECT fix (not yet implemented — do this, not removal)
 
-## Fix / recipe
-
-Delete the per-frame reflow from the drag path.  Let members follow the master
-RIGIDLY during the drag (widget == stored, clipping transiently at the edge),
-and let the **drag-end settle** put everything back:
+Keep the reflow, but eliminate the divergence: when the reflow relocates a
+member, update its stored home (and slot) so the rigid cascade and the reflow
+agree on where the member is.
 
 ```python
-# moveEvent master-drag block: REMOVE the per-frame call
-#   self._live_edge_reflow_or_fold()   # <- raced the cascade; gone in a77
-# (the method is left in place, marked deprecated/unused)
+# in _live_edge_reflow_or_fold, after m.move(new_x, new_y):
+self._members[m._id] = QPoint(new_x, new_y)   # keep widget == stored home
+# (and reconcile m._slot with the slot repack assigned, so _compute_layout's
+#  taken_slots stays correct)
 ```
 
-At drag-end, `mouseReleaseEvent` already calls `_settle_no_overlap`, which (a73)
-falls back to the engine re-pack (`_compute_layout`) when the rigid block can't
-slide on-screen as a unit.  Because the cascade kept the cluster COHERENT (no
-reflow mangling), the settle either slides the clean stack on-screen or the
-engine re-packs it — one plan-then-apply pass, no race.
-
-Implementation: `scriptree/shell/cell_window.py` — removed the
-`_live_edge_reflow_or_fold()` call in `moveEvent`; method kept but deprecated.
+With widget and `_members` coupled, the per-frame rigid cascade then shifts both
+together, the fast-drag divergence disappears, AND the corner-relocate behaviour
+is preserved.  Verify against both: (a) fast drag to an edge keeps members
+bonded with no gap/left-behind, and (b) drag to a corner keeps the FOREST in the
+corner with members relocated on-screen around it.
 
 ## How future-me detects it
 
-NEVER have two code paths move the same cells on overlapping triggers with
-different position models — especially a per-frame rigid translate plus a
-throttled reactive relocate that doesn't update the same `_members` store.  One
-authority moves cells during a gesture (the rigid cascade); the engine re-packs
-at rest (drag-end / resolution-change).  A relocate that writes the widget but
-not `_members` (or vice-versa) is a divergence/"left-behind" bug waiting to
-happen.
+Two movers on the same cells during a drag is inherently fragile — but here the
+reflow is REQUIRED for the corner-stay behaviour, so the answer is to make the
+two agree (sync `_members` on relocate), NOT to delete one.  Removing the reflow
+trades the fast-drag bug for a worse corner-drag regression.
