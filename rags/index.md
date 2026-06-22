@@ -396,6 +396,13 @@ gives the per-topic slice.
   rather than delegated. Hex matches exactly; square uses a different
   size convention (xfail-tracked). a76.
   → `rags/lessons/group_layout_pinned_to_tiling.md`
+- [v3-process] **portable_zip_bundles_solidworks_interop_strip_before_public**:
+  make_portable.py bundles combridge's SolidWorks plugin folder, which
+  carries SolidWorks's OWN SDK interop DLLs (SolidWorks.Interop.*.dll) --
+  NOT git-tracked, so a `git ls-files` check misses them. Scan the BUILT
+  release zip and strip the interop DLLs (keep ComBridge.Plugins.SolidWorks.dll)
+  before `gh release create`. a75 release.
+  → `rags/lessons/portable_zip_bundles_solidworks_interop.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the
