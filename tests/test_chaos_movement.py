@@ -664,6 +664,215 @@ def test_compute_layout_cancels_pending_smooth_moves(
             c.close()
 
 
+# ---------------------------------------------------------------------------
+# v0.8.0a79 — fast-drag "cells gap / get left behind" (item 10)
+# ---------------------------------------------------------------------------
+#
+# Root cause (confirmed by an adversarial 3-agent trace of a78):
+#   * ``_live_edge_reflow_or_fold`` (moveEvent ~7345) is wall-clock
+#     throttled to ~50 ms, but Qt COALESCES a fast drag into a few
+#     large-delta moveEvents.  So the LAST reflow tick can fire at an
+#     INTERMEDIATE master position and never again before release.
+#   * ``mouseReleaseEvent`` previously ran no reflow at all (P4 disabled
+#     the recompute) — only ``_settle_no_overlap``, a rigid block slide
+#     that (a) can't re-tile and (b) explicitly SKIPS ``_auto_hidden``
+#     members — so a member the throttle stranded off-screen, or *folded*
+#     at an intermediate position, was never rescued at rest.
+#
+# The fix: one MANDATORY un-throttled reflow at drag-end (mouseReleaseEvent),
+# which re-runs repack against the TRUE resting master position.
+#
+# These tests pin all three facets: (1) the real moveEvent throttle does
+# strand a member and the release rescues it; (2) a folded member with room
+# at rest is un-folded (the case settle provably cannot fix); (3) the
+# release wiring clears the throttle so the final reflow can't early-return.
+
+
+def _release_event():
+    """A synthetic left-button MouseButtonRelease, the minimum
+    ``mouseReleaseEvent`` reads (``event.button()``)."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        QPointF(0, 0), QPointF(0, 0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
+def test_fast_drag_throttle_strands_member_then_release_rescues(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+) -> None:
+    """End-to-end via the REAL moveEvent path: a fast drag whose second
+    step is throttled strands a docked member off-screen; the mandatory
+    un-throttled reflow at drag-end (mouseReleaseEvent) must relocate it
+    back on-screen.
+
+    Reproduces the user report: "drag the forest quickly down to the
+    bottom of the screen, the repositioned cells ... get left behind."
+    """
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    master = CellWindow(branding, role="master")
+    master.show()
+    member = CellWindow(branding)
+    member.show()
+    cx = (sl + sr) // 2 - master._size_px // 2
+    top_y = st + 40
+    master.move(cx, top_y)
+    member.move(cx, top_y + master._size_px)  # docked SOUTH, on-screen
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    master._drag_started = True
+    master._last_pos = QPoint(master.pos())
+    try:
+        # Step 1 (small): the cascade keeps the member on-screen; the
+        # reflow fires (first call -> throttle clear) and arms the 50 ms
+        # throttle.
+        mid_y = (st + sb) // 2
+        master.move(cx, mid_y)
+        app.processEvents()
+        assert member.isVisible()
+
+        # Step 2 (big jump to the bottom edge): the cascade carries the
+        # member off the bottom, but the reflow is now THROTTLED
+        # (<50 ms since step 1) so it early-returns and never relocates
+        # it -- the member is stranded off-screen.
+        master.move(cx, sb - master._size_px - 2)
+        app.processEvents()
+        mp = member.pos()
+        assert mp.y() + member._size_px > sb, (
+            "test setup: member did not end off the bottom edge "
+            f"(bottom={mp.y() + member._size_px}, sb={sb}) -- the "
+            "throttle-strand precondition was not reproduced"
+        )
+
+        # Release: the mandatory un-throttled reflow must rescue it.
+        master.mouseReleaseEvent(_release_event())
+        app.processEvents()
+        mp = member.pos()
+        assert member.isVisible(), "member hidden after drag-end"
+        assert st <= mp.y() and mp.y() + member._size_px <= sb, (
+            f"member still off-screen vertically after drag-end "
+            f"(y={mp.y()}, bottom={mp.y() + member._size_px}, "
+            f"screen=[{st},{sb}]); final un-throttled reflow did not "
+            f"rescue it"
+        )
+        assert sl <= mp.x() and mp.x() + member._size_px <= sr
+    finally:
+        master._drag_started = False
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_drag_end_rescues_member_folded_by_throttled_reflow(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+) -> None:
+    """A member FOLDED (``_auto_hidden`` + hidden, widget off-screen) by a
+    throttled mid-drag reflow tick -- with room at the resting position --
+    must be un-folded and relocated on-screen by the drag-end reflow.
+
+    This is the case ``_settle_no_overlap`` provably CANNOT fix: it skips
+    ``_auto_hidden`` members entirely, so without the final reflow the cell
+    stays invisible forever ("left behind").  The master sits at the
+    bottom-centre with ample room ABOVE it, so a slot genuinely exists.
+    """
+    import time as _time
+
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    master = CellWindow(branding, role="master")
+    master.show()
+    cx = (sl + sr) // 2 - master._size_px // 2
+    master.move(cx, sb - master._size_px - 2)
+    member = CellWindow(branding)
+    member.show()
+    member.move(cx, sb + 200)  # widget stranded off the bottom
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    # Folded by the mid-drag tick, and the throttle is "armed" (a real
+    # tick fired <50 ms ago), so a naive reflow call would early-return.
+    master._auto_hidden.add(member._id)
+    member.setVisible(False)
+    master._last_live_reflow_time = _time.monotonic()
+    master._drag_started = True
+    try:
+        master.mouseReleaseEvent(_release_event())
+        app.processEvents()
+        assert member.isVisible(), (
+            "folded member not un-hidden at drag-end -- _settle_no_overlap "
+            "can't (it skips _auto_hidden); the final reflow must"
+        )
+        assert member._id not in master._auto_hidden, "still flagged auto_hidden"
+        mp = member.pos()
+        assert sl <= mp.x() and mp.x() + member._size_px <= sr
+        assert st <= mp.y() and mp.y() + member._size_px <= sb
+        assert math.hypot(
+            mp.x() - master.pos().x(), mp.y() - master.pos().y(),
+        ) <= 2.5 * master._size_px, "rescued member not adjacent to master"
+    finally:
+        master._drag_started = False
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_drag_end_runs_final_unthrottled_reflow(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+    monkeypatch,
+) -> None:
+    """The drag-end path must invoke ``_live_edge_reflow_or_fold`` exactly
+    once with the 50 ms wall-clock throttle CLEARED (timestamp reset to
+    0.0 before the call), otherwise it would early-return and miss the
+    rescue the test above depends on."""
+    import time as _time
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    master, _members = _make_master_with_members(branding, 3, (600, 600))
+    # Arm the throttle so a still-throttled call would no-op.
+    master._last_live_reflow_time = _time.monotonic()
+
+    seen_timestamps: list = []
+    orig = master._live_edge_reflow_or_fold
+
+    def _spy() -> None:
+        seen_timestamps.append(getattr(master, "_last_live_reflow_time", None))
+        return orig()
+
+    monkeypatch.setattr(master, "_live_edge_reflow_or_fold", _spy)
+    master._drag_started = True
+    try:
+        master.mouseReleaseEvent(_release_event())
+        assert seen_timestamps, (
+            "drag-end did not invoke _live_edge_reflow_or_fold at all"
+        )
+        assert seen_timestamps[0] == 0.0, (
+            f"final reflow was not un-throttled (last-reflow timestamp at "
+            f"call time was {seen_timestamps[0]}, not 0.0); it would "
+            f"early-return on the 50 ms guard and miss the rescue"
+        )
+    finally:
+        master._drag_started = False
+        for c in list(registry.all()):
+            c.close()
+
+
 def test_chaos_master_dragged_to_screen_corners(
     app: QGuiApplication,
     screen_rect: tuple[int, int, int, int],

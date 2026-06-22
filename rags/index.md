@@ -403,13 +403,18 @@ gives the per-topic slice.
   release zip and strip the interop DLLs (keep ComBridge.Plugins.SolidWorks.dll)
   before `gh release create`. a75 release.
   → `rags/lessons/portable_zip_bundles_solidworks_interop.md`
-- [v3-architecture] **live_edge_reflow_is_load_bearing_dont_remove**:
-  the per-frame _live_edge_reflow_or_fold races the rigid drag cascade
-  (relocates without updating _members) -> fast-drag "left behind".
-  BUT it is LOAD-BEARING: it lets the forest stay in a corner (members
-  relocate around it); removing it (a77) made drag-end shove the whole
-  cluster back on-screen -> reverted in a78. Fix the divergence in
-  place (sync _members on relocate), do NOT remove the reflow.
+- [v3-architecture] **fast_drag_left_behind_is_a_throttle_gap** (RESOLVED a79):
+  fast-drag "cells gap / left behind" is NOT a _members divergence (that
+  diagnosis was proven INERT — _members/_slot are dead-cache at drag-end;
+  drag_targets keys off _positioned). Real cause: the 50ms wall-clock reflow
+  throttle + Qt move-event coalescing + P4-disabled drag-end recompute leave a
+  member FOLDED/stranded at an intermediate position with no final
+  re-evaluation; _settle_no_overlap skips _auto_hidden so it can't rescue it.
+  Fix: ONE un-throttled reflow at mouseReleaseEvent (clear _last_live_reflow_time;
+  call _live_edge_reflow_or_fold) BEFORE settle. Corner-safe (ADDS, never
+  removes, the load-bearing reflow; master never moves). a77's removal of the
+  reflow was the WRONG fix (reverted a78). 3 regression tests in
+  test_chaos_movement.py.
   → `rags/lessons/live_edge_reflow_races_rigid_drag.md`
 - [v3-architecture] **known_issue_bloom_overlap_and_second_display_spill**:
   OPEN/deferred (a78) — shrink-then-bloom can overlap the forest icon or

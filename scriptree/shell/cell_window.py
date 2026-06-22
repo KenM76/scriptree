@@ -6926,7 +6926,57 @@ class CellWindow(QMainWindow):
             # forest-linked cells dragged away" logic on the
             # cell-alone-drag path; that's the new dock-break rule
             # that replaces this blanket recompute.
-            pass
+            #
+            # v0.8.0a79 (item 10 — "cells gap / get left behind on a
+            # fast drag") — one MANDATORY, un-throttled edge reflow at
+            # rest.
+            #
+            # WHY this is needed and is NOT the recompute P4 disabled:
+            # the live ``_live_edge_reflow_or_fold`` (moveEvent, ~7345)
+            # is wall-clock throttled to ~50 ms, but Qt COALESCES a fast
+            # drag into a few large-delta moveEvents.  So the LAST reflow
+            # tick can fire at an INTERMEDIATE master position and never
+            # again before release.  Two states then survive to rest and
+            # nothing fixes them:
+            #   (a) a member the throttle stranded off-screen, and
+            #   (b) — the one nothing else can rescue — a member the tick
+            #       *folded* (``_auto_hidden`` + ``setVisible(False)``)
+            #       because no on-screen slot existed at that intermediate
+            #       position, even though room exists at the RESTING
+            #       position.  ``_settle_no_overlap`` (the only drag-end
+            #       pass) explicitly SKIPS ``_auto_hidden`` members
+            #       (see its subject loop), and its engine fallback fires
+            #       only when the visible block can't slide at all — so a
+            #       folded member stays hidden forever.
+            # Forcing ONE reflow here, with the throttle cleared, re-runs
+            # ``group_layout.repack`` against the TRUE final master
+            # position: stranded members relocate, folded-but-now-fittable
+            # members un-fold, and a member with genuinely no slot folds
+            # (the historical, correct overflow behaviour).
+            #
+            # This does NOT reintroduce the recompute P4 removed: the
+            # reflow only touches members that are currently OFF-screen
+            # (its ``off_ids`` set); on-screen, user-placed members are
+            # passed as ``fixed`` and kept verbatim.  So "cells stay where
+            # I put them" still holds — we only rescue the ones the
+            # throttle would otherwise leave off-screen or hidden.
+            #
+            # Corner-safe: a77 broke corner drags by *removing* the live
+            # reflow (it is load-bearing for keeping the forest in the
+            # corner while relocating cells on-screen around it).  This
+            # ADDS one more invocation of that exact same path; the master
+            # never moves (repack is relative to ``self.pos()``), so the
+            # forest stays where the user dropped it.  Runs BEFORE the
+            # ``_settle_no_overlap`` below, so settle then tidies overlap
+            # on correctly-relocated, visible members.
+            self._last_live_reflow_time = 0.0
+            try:
+                self._live_edge_reflow_or_fold()
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"mouseReleaseEvent: final edge-reflow raised "
+                    f"{exc!r} id={self._id[:8]}"
+                )
 
         # v0.6.12 — drag-end settle: glide the just-released cell (or
         # the whole master group) to a non-overlapping, fully-on-screen
