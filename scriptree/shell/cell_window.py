@@ -7334,15 +7334,31 @@ class CellWindow(QMainWindow):
                 finally:
                     _GROUP_MOVE_IN_PROGRESS.discard(self._id)
 
-                # v0.6.11 — live edge reflow (replaces the old hide-only
-                # behaviour): when the group is dragged toward an edge,
-                # off-screen members are *relocated* to free on-screen
-                # honeycomb slots so they stay bonded and visible.  The
-                # call is throttled internally to ~50 ms; only the final
-                # call inside _live_edge_reflow_or_fold may fall back to
-                # the historical auto-hide when there's genuinely no
-                # on-screen slot left.
-                self._live_edge_reflow_or_fold()
+                # v0.8.0a77 — the per-frame "live edge reflow" that used
+                # to run here is REMOVED (user-reported fast-drag
+                # "left behind").
+                #
+                # It relocated off-screen members to fresh on-screen
+                # slots with an instant ``move()`` but did NOT update
+                # their stored ``_members`` home -- so it raced the
+                # rigid cascade ABOVE, which shifts ``_members`` by the
+                # same delta every frame.  On a fast drag (the reflow is
+                # throttled to ~50ms, the cascade is per-frame) the
+                # widget position and the stored home DIVERGED: a
+                # member would be yanked to a slot, the cascade kept
+                # shifting its stale home, and at drag-end the two no
+                # longer agreed -> a gap opened, sometimes overlapping a
+                # neighbour, and the member was "left behind" on the
+                # next move.
+                #
+                # New model: members follow the master RIGIDLY during
+                # the drag (the cascade above keeps widget == stored;
+                # they clip transiently at a screen edge), and the
+                # drag-end settle -- ``_settle_no_overlap`` with the a73
+                # engine re-pack fallback -- places the whole, still
+                # coherent cluster back on-screen and non-overlapping in
+                # one plan-then-apply pass.  No per-frame race.
+                # See rags/lessons/live_edge_reflow_races_rigid_drag.md.
 
         super().moveEvent(event)
 
@@ -9451,7 +9467,18 @@ class CellWindow(QMainWindow):
             _log(f"_resolve_member_stacking: repack failed: {exc!r}")
 
     def _live_edge_reflow_or_fold(self) -> None:
-        """v0.6.11 — during a group drag, *relocate* off-screen members
+        """DEPRECATED / UNUSED as of v0.8.0a77 — no longer called.
+
+        It was invoked per-frame from ``moveEvent`` during a master
+        drag, but its instant ``move()`` relocations did not update
+        ``_members``, racing the rigid drag cascade and causing the
+        fast-drag "left behind" / gap bug.  The drag now follows
+        members rigidly and relies on the drag-end settle
+        (``_settle_no_overlap`` + the a73 engine re-pack) instead.
+        Kept for now to avoid churn; safe to remove in a later pass.
+        See rags/lessons/live_edge_reflow_races_rigid_drag.md.
+
+        v0.6.11 — during a group drag, *relocate* off-screen members
         to free on-screen honeycomb slots so they stay bonded to the
         master and visible.  Falls back to the historical auto-hide
         only when no on-screen slot is available.
