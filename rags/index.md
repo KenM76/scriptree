@@ -411,6 +411,11 @@ gives the per-topic slice.
   cluster back on-screen -> reverted in a78. Fix the divergence in
   place (sync _members on relocate), do NOT remove the reflow.
   → `rags/lessons/live_edge_reflow_races_rigid_drag.md`
+- [v3-architecture] **known_issue_bloom_overlap_and_second_display_spill**:
+  OPEN/deferred (a78) — shrink-then-bloom can overlap the forest icon or
+  spill cells to a second display. In _start_expand/_compute_layout
+  (multi-display screen pick via screenAt). Fix forward (do NOT revert a74).
+  → `rags/lessons/known_issue_bloom_overlap_multidisplay.md`
 - [v3-architecture] **forest_startup_hub_not_draggable**: hub not
   draggable at startup — tentative fix: `QTimer.singleShot(0,
   _finalize_hub_interactive)` to raise+activate after Qt maps the
