@@ -873,6 +873,448 @@ def test_drag_end_runs_final_unthrottled_reflow(
             c.close()
 
 
+def test_reflow_relocation_does_not_undock_member(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a80 (user-reported "cell got left behind"): the live-edge
+    reflow relocates an off-screen member via m.move(); that fires
+    hexagonMoved -> ring_main._on_hexagon_moved -> _check_undock.  When
+    the relocation lands the member >~92px from its docked peer,
+    _check_undock would drop it from master._positioned, so the NEXT
+    master drag (cascades _positioned only) leaves it behind.  The reflow
+    is a SYSTEM move and must be guarded by _GROUP_MOVE_IN_PROGRESS so the
+    drift undock is suppressed.
+
+    Drives the REAL signal chain (connects the real _on_hexagon_moved) so
+    the guard is exercised end-to-end.
+    """
+    from scriptree.shell.cell_window import CellWindow as _CW
+    from scriptree.shell.ring_main import _on_hexagon_moved
+
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    cx = (sl + sr) // 2
+    cy = (st + sb) // 2
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(cx, cy)
+    size = master._size_px
+
+    # Peer B docked EAST of the master, fully on-screen (stays put).
+    b = _CW(branding)
+    b.show()
+    b.move(cx + size + 28, cy)
+    # Member A docked to B but stranded far off the LEFT edge, so the
+    # reflow relocates it to a WEST slot — far (>92px) from B.
+    a = _CW(branding)
+    a.show()
+    a.move(sl - 500, cy)
+    for m in (a, b):
+        master._members[m._id] = QPoint(m.pos())
+        master._positioned.add(m._id)
+        m._group_master_id = master._id
+    a._docked_to = {b._id}
+    b._docked_to = {a._id}
+
+    # Connect the real undock chain ONLY now (so setup moves above don't
+    # trip it), and disconnect in finally to avoid leaking into siblings.
+    registry.hexagonMoved.connect(_on_hexagon_moved)
+    try:
+        master._live_edge_reflow_or_fold()
+        app.processEvents()
+        assert a._id in master._positioned, (
+            "reflow relocation undocked the member (dropped from "
+            "_positioned) — it would be left behind on the next drag"
+        )
+        # And it should have been relocated on-screen (not folded), still
+        # a visible cluster member.
+        assert a.isVisible()
+        assert a._id not in master._auto_hidden
+    finally:
+        try:
+            registry.hexagonMoved.disconnect(_on_hexagon_moved)
+        except (RuntimeError, TypeError):
+            pass
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_clamp_offscreen_point_keeps_cell_on_current_monitor(
+    app: QGuiApplication,
+    monkeypatch,
+) -> None:
+    """v0.8.0a80 multi-monitor jitter: when a drag position is just outside
+    EVERY screen (e.g. negative y above a secondary monitor), _clamp_to_screen
+    must clamp to the cell's CURRENT monitor, NOT yank it to the primary.
+
+    Reproduces the user-reported jitter where the forest oscillated between
+    x=3383 (primary's right edge) and x~6712 (secondary monitor).  Uses a
+    simulated two-monitor geometry via monkeypatch so it's deterministic on
+    any host.
+    """
+    from PySide6.QtCore import QRect, QPoint
+    from PySide6.QtGui import QGuiApplication
+    from scriptree.shell.cell_window import CellWindow as _CW
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    class _FakeScreen:
+        def __init__(self, rect: QRect) -> None:
+            self._r = rect
+
+        def availableGeometry(self) -> QRect:
+            return self._r
+
+    primary = _FakeScreen(QRect(0, 0, 3440, 1392))          # x in [0, 3440)
+    secondary = _FakeScreen(QRect(3440, 0, 3440, 1392))      # x in [3440, 6880)
+
+    def fake_screen_at(p: QPoint):
+        x, y = p.x(), p.y()
+        if 0 <= y < 1392:
+            if 0 <= x < 3440:
+                return primary
+            if 3440 <= x < 6880:
+                return secondary
+        return None  # outside all screens (e.g. negative y)
+
+    app_inst = QGuiApplication.instance()
+    monkeypatch.setattr(app_inst, "screenAt", fake_screen_at)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: primary))
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
+
+    cell = _CW(branding, role="master")
+    cell.show()
+    cell.move(6712, 4)  # currently on the SECONDARY monitor
+    try:
+        # raw_pos has negative y -> above all screens -> screenAt None.
+        result = cell._clamp_to_screen(QPoint(6751, -15))
+        assert result.x() >= 3440, (
+            f"clamp yanked the cell onto the PRIMARY monitor (x={result.x()}); "
+            f"with raw_pos off every screen it must stay on the cell's current "
+            f"(secondary) monitor, x>=3440"
+        )
+        assert 0 <= result.y() <= 1392 - cell._size_px
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_reflow_keeps_member_visible_on_other_monitor(
+    app: QGuiApplication,
+    monkeypatch,
+) -> None:
+    """v0.8.0a80 multi-display ("cells reposition when they don't have to"):
+    the live edge reflow must NOT relocate a member that is fully visible on
+    a SECOND monitor just because it's off the MASTER's monitor.  Pre-fix the
+    single-screen classification (screenAt(master.pos()) only) scored that
+    member as off-screen and yanked it onto the master's monitor.
+    """
+    from PySide6.QtCore import QRect, QPoint
+    from PySide6.QtGui import QGuiApplication
+    from scriptree.shell.cell_window import CellWindow as _CW
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    class _FakeScreen:
+        def __init__(self, rect: QRect) -> None:
+            self._r = rect
+
+        def availableGeometry(self) -> QRect:
+            return self._r
+
+    primary = _FakeScreen(QRect(0, 0, 3440, 1392))          # x in [0, 3440)
+    secondary = _FakeScreen(QRect(3440, 0, 3440, 1392))      # x in [3440, 6880)
+
+    def fake_screen_at(p: QPoint):
+        x, y = p.x(), p.y()
+        if 0 <= y < 1392:
+            if 0 <= x < 3440:
+                return primary
+            if 3440 <= x < 6880:
+                return secondary
+        return None
+
+    app_inst = QGuiApplication.instance()
+    monkeypatch.setattr(app_inst, "screenAt", fake_screen_at)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: primary))
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(200, 600)  # on the PRIMARY monitor
+    member = _CW(branding)
+    member.show()
+    member.move(4000, 600)  # fully on the SECONDARY monitor
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    try:
+        before = (member.pos().x(), member.pos().y())
+        master._live_edge_reflow_or_fold()
+        app.processEvents()
+        after = (member.pos().x(), member.pos().y())
+        assert after == before, (
+            f"reflow relocated a member that is fully visible on the second "
+            f"monitor (from {before} to {after}); a cell visible on ANY "
+            f"monitor must be left in place"
+        )
+        assert member.isVisible()
+        assert member._id not in master._auto_hidden
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_check_edge_fold_keeps_member_visible_on_other_monitor(
+    app: QGuiApplication,
+    monkeypatch,
+) -> None:
+    """v0.8.0a80 multi-display: _check_edge_fold (the auto-hide twin of the
+    live reflow, run at load/settle/collapse) must NOT auto-hide a member
+    that is fully visible on a SECOND monitor just because it's off the
+    master's monitor."""
+    from PySide6.QtCore import QRect, QPoint
+    from PySide6.QtGui import QGuiApplication
+    from scriptree.shell.cell_window import CellWindow as _CW
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    class _FakeScreen:
+        def __init__(self, rect: QRect) -> None:
+            self._r = rect
+
+        def availableGeometry(self) -> QRect:
+            return self._r
+
+    primary = _FakeScreen(QRect(0, 0, 3440, 1392))
+    secondary = _FakeScreen(QRect(3440, 0, 3440, 1392))
+
+    def fake_screen_at(p: QPoint):
+        x, y = p.x(), p.y()
+        if 0 <= y < 1392:
+            if 0 <= x < 3440:
+                return primary
+            if 3440 <= x < 6880:
+                return secondary
+        return None
+
+    app_inst = QGuiApplication.instance()
+    monkeypatch.setattr(app_inst, "screenAt", fake_screen_at)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: primary))
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(200, 600)
+    member = _CW(branding)
+    member.show()
+    member.move(4000, 600)  # fully on the SECONDARY monitor
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    try:
+        master._check_edge_fold()
+        assert member._id not in master._auto_hidden, (
+            "member visible on the second monitor was auto-hidden by "
+            "_check_edge_fold (single-screen classification regression)"
+        )
+        assert member.isVisible()
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_system_move_does_not_undock_member(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a81 (user-reported "didn't complete docking / cell left behind"):
+    a docked member moved by the SYSTEM (not user-dragged -> _drag_started
+    False) must NOT be drift-undocked by _on_hexagon_moved, even if it lands
+    far from its docked peer.  Only the cell the user is physically dragging
+    can drift-undock; user drag-out is handled separately by break-free.  This
+    is the root fix that stops _settle_no_overlap's smooth-move (and the reflow
+    and _compute_layout) from silently dropping a member from the cluster.
+    """
+    from scriptree.shell.cell_window import CellWindow as _CW
+    from scriptree.shell.ring_main import _on_hexagon_moved
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(500, 500)
+    a = _CW(branding); a.show(); a.move(560, 500)
+    b = _CW(branding); b.show(); b.move(620, 500)
+    for m in (a, b):
+        master._members[m._id] = QPoint(m.pos())
+        master._positioned.add(m._id)
+        m._group_master_id = master._id
+    a._docked_to = {b._id}
+    b._docked_to = {a._id}
+
+    registry.hexagonMoved.connect(_on_hexagon_moved)
+    try:
+        # SYSTEM relocation of `a` far from `b`, with NO active user drag.
+        a._drag_started = False
+        a.move(2000, 500)  # ~1440px from b -> would trip the ~92px undock
+        app.processEvents()
+        assert a._id in master._positioned, (
+            "a system move (not a user drag) drift-undocked the member -- "
+            "it would not complete docking and be left behind"
+        )
+    finally:
+        try:
+            registry.hexagonMoved.disconnect(_on_hexagon_moved)
+        except (RuntimeError, TypeError):
+            pass
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_settle_does_not_shift_for_member_straddling_monitor_seam(
+    app: QGuiApplication,
+    monkeypatch,
+) -> None:
+    """v0.8.0a81 multi-display (user-reported "a cell shifts a little and
+    becomes offset"): _settle_no_overlap must NOT slide the cluster when a
+    member is fully visible but straddles the flush seam between two monitors.
+    Pre-fix the single-screen `avail` check treated the part on the 2nd
+    monitor as off-screen and nudged the whole cluster by a ~size//3 spiral
+    step 'to clear 0 obstacles'.
+    """
+    from PySide6.QtCore import QRect, QPoint
+    from PySide6.QtGui import QGuiApplication
+    from scriptree.shell.cell_window import CellWindow as _CW
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    class _FakeScreen:
+        def __init__(self, rect: QRect) -> None:
+            self._r = rect
+
+        def availableGeometry(self) -> QRect:
+            return self._r
+
+    primary = _FakeScreen(QRect(0, 0, 3440, 1392))          # x in [0, 3440)
+    secondary = _FakeScreen(QRect(3440, 0, 3440, 1392))      # x in [3440, 6880)
+
+    def fake_screen_at(p: QPoint):
+        x, y = p.x(), p.y()
+        if 0 <= y < 1392:
+            if 0 <= x < 3440:
+                return primary
+            if 3440 <= x < 6880:
+                return secondary
+        return None
+
+    app_inst = QGuiApplication.instance()
+    monkeypatch.setattr(app_inst, "screenAt", fake_screen_at)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: primary))
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(3300, 600)  # on the PRIMARY monitor, near its right edge
+    sz = master._size_px
+    member = _CW(branding)
+    member.show()
+    # Straddle the 3440 seam: part on primary, part on secondary, fully visible.
+    member.move(3440 - sz // 2, 600)
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+
+    # Record any settle-applied glide; with the fix, settle must do NONE.
+    calls: list = []
+    monkeypatch.setattr(master, "_smooth_move", lambda *a, **k: calls.append(("master",) + a))
+    monkeypatch.setattr(member, "_smooth_move", lambda *a, **k: calls.append(("member",) + a))
+    try:
+        master._settle_no_overlap()
+        assert not calls, (
+            f"settle slid the cluster though the member is fully visible "
+            f"across the monitor seam: {calls}"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_break_free_detaches_dock_children_so_redock_does_not_drag_them(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a82 (user-reported "moving one cell shifts another docked cell"):
+    when the user drags a single cell OUT of the cluster, break-free must
+    detach the cell's dock-CHILDREN, so the later snap-commit move_to (whose
+    Bug-4 cascade shifts _dock_children_by_edge) does NOT drag those children
+    along.  Dragging one cell must move ONLY that cell.
+    """
+    from scriptree.shell.cell_window import CellWindow as _CW
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(500, 500)
+    a = _CW(branding); a.show(); a.move(560, 500)
+    b = _CW(branding); b.show(); b.move(620, 500)  # b docked to a's edge
+    for m in (a, b):
+        master._members[m._id] = QPoint(m.pos())
+        master._positioned.add(m._id)
+        m._group_master_id = master._id
+    # Dock B to A: A is B's dock-parent (B sits at A's edge 0).
+    a._dock_children_by_edge = {0: b._id}
+    b._dock_partner_id = a._id
+    b._dock_edge = 0
+    a._docked_to = {b._id}
+    b._docked_to = {a._id}
+
+    b_before = (b.pos().x(), b.pos().y())
+    try:
+        # User starts dragging A out of the cluster -> break-free.
+        a._break_free_from_cluster()
+        assert not a._dock_children_by_edge, (
+            "break-free did not clear the dragged cell's dock-children"
+        )
+        assert b._dock_partner_id is None, (
+            "dock-child still points to the dragged cell as its parent"
+        )
+        # A snaps / re-docks to a new spot via move_to (the snap-commit path).
+        a.move_to(a.pos().x() + 200, a.pos().y() + 100)
+        app.processEvents()
+        assert (b.pos().x(), b.pos().y()) == b_before, (
+            f"dock-child moved when the dragged cell was re-docked: "
+            f"{b_before} -> {(b.pos().x(), b.pos().y())}"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
 def test_chaos_master_dragged_to_screen_corners(
     app: QGuiApplication,
     screen_rect: tuple[int, int, int, int],

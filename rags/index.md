@@ -416,6 +416,19 @@ gives the per-topic slice.
   reflow was the WRONG fix (reverted a78). 3 regression tests in
   test_chaos_movement.py.
   → `rags/lessons/live_edge_reflow_races_rigid_drag.md`
+- [v3-architecture] **forest_cluster_multidisplay_and_reflow_undock_fixes** (a80,
+  pending release): three fixes for a multi-monitor user report. (A) the live reflow's
+  relocation fired _check_undock OUTSIDE the _GROUP_MOVE_IN_PROGRESS guard and ejected a
+  member from _positioned -> "left behind"; wrap the relocation loop in the guard.
+  (B) _clamp_to_screen fell back to primaryScreen() when screenAt(raw_pos) was None
+  (cursor above a 2nd monitor) -> forest teleported/oscillated between monitors; prefer
+  current/nearest screen. (C) reflow + _check_edge_fold classified on/off-screen against
+  ONE screen -> a cell visible on a 2nd monitor got relocated/auto-hidden; new
+  _visible_area_on_any_screen (sum of per-screen overlaps) judges visibility across ALL
+  monitors. Dock path traced CLEAN (not the cause of symptom 2). Live diagnosis via
+  Win32_Process start-time vs deploy-time + the %APPDATA% debug log + saved
+  .scriptreeforest. 4 regression tests in test_chaos_movement.py.
+  → `rags/lessons/multidisplay_and_reflow_undock_fixes_a80.md`
 - [v3-architecture] **known_issue_bloom_overlap_and_second_display_spill**:
   OPEN/deferred (a78) — shrink-then-bloom can overlap the forest icon or
   spill cells to a second display. In _start_expand/_compute_layout

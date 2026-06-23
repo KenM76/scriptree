@@ -2893,9 +2893,33 @@ class TestSettleEngineFallbackAtCorner:
         forest._members[m._id] = m.pos()
         forest._positioned.add(m._id)
 
+        # Pin a single 1920x1080 screen so "off-screen" is deterministic
+        # regardless of the test machine's real monitor layout.  (a81: settle
+        # now judges on/off-screen against the UNION of all monitors, so on a
+        # multi-monitor host x=6000 could be ON a second monitor; pinning one
+        # screen keeps this test's "stranded off-screen" premise valid.)
+        from PySide6.QtCore import QRect as _QRect
+
+        class _OneScreen:
+            def availableGeometry(self):
+                return _QRect(0, 0, 1920, 1080)
+
+            def geometry(self):
+                return _QRect(0, 0, 1920, 1080)
+
+        _scr = _OneScreen()
+
+        def _screen_at(p):
+            return _scr if (0 <= p.x() < 1920 and 0 <= p.y() < 1080) else None
+
+        monkeypatch.setattr(QGuiApplication, "screenAt", staticmethod(_screen_at))
+        monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: _scr))
+        monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [_scr]))
+
         forest.move(120, 120)
-        # Member stranded far off-screen, so the rigid master+member
-        # block can't slide on-screen as one unit -> rigid search fails.
+        # Member stranded far off-screen (x=6000 is off the pinned 1920-wide
+        # screen), so the rigid master+member block can't slide on-screen as
+        # one unit -> rigid search fails -> engine re-pack fallback.
         m.move(6000, 120)
 
         calls: list = []

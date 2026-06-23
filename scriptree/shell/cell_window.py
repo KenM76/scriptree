@@ -8626,8 +8626,11 @@ class CellWindow(QMainWindow):
         """Break-free drag path: cell leaves the POSITIONAL CLUSTER
         but retains link-group membership.
 
-        Called at the 4 px drag threshold in mouseMoveEvent when
-        self.role == 'standalone' and self._docked_to is non-empty.
+        Called at the 4 px drag threshold in mouseMoveEvent for any
+        NON-forest cell that is docked or grouped — the actual trigger is
+        ``not is_forest and (self._docked_to or self._group_master_id is
+        not None)``, i.e. standalone cells AND ring masters (never the
+        forest root).
 
         Steps:
         1. Remove self from every _docked_to peer's _docked_to set.
@@ -8668,6 +8671,30 @@ class CellWindow(QMainWindow):
                 partner._dock_children_by_edge.pop(self._dock_edge, None)
         self._dock_partner_id = None
         self._dock_edge = None
+
+        # v0.8.0a82 — also detach our dock-CHILDREN (cells docked to OUR
+        # edges).  Without this, dragging a single cell OUT of the cluster
+        # leaves ``self._dock_children_by_edge`` populated, so when the cell
+        # re-docks the snap commit funnels through ``move_to``, whose Bug-4
+        # cascade (~line 10291) shifts every dock-child by the snap delta —
+        # the user-reported "moving one cell makes another docked cell shift
+        # and become offset".  A user pulling a single cell out of the
+        # cluster should move ONLY that cell; its former dock-children stay
+        # put (they keep ``_group_master_id`` — still forest members — they
+        # just lose the dock-chain link to the cell that was dragged away).
+        # Mirrors the master-disband child-release at ~line 9075.
+        #
+        # FUTURE (user note, a82): tree RING masters may later be EXEMPTED
+        # here so a ring travels with all its docked components as one unit
+        # — e.g. gate this block on ``self.role != "master"``.  Left
+        # unconditional for now per "get it working the way you propose
+        # first".
+        for _edge, _child_id in list(self._dock_children_by_edge.items()):
+            _child = registry.get(_child_id)
+            if _child is not None and _child._dock_partner_id == self._id:
+                _child._dock_partner_id = None
+                _child._dock_edge = None
+        self._dock_children_by_edge.clear()
 
         # Remove from master's positioned set; update stored position.
         mid = self._group_master_id
@@ -9500,6 +9527,37 @@ class CellWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             _log(f"_resolve_member_stacking: repack failed: {exc!r}")
 
+    def _visible_area_on_any_screen(self, rect: QRect) -> int:
+        """Total visible area (px²) of ``rect`` across ALL monitors — 0 if
+        ``rect`` is off every screen.
+
+        Multi-display correctness helper (v0.8.0a80).  The single-screen
+        ``screenAt(master.pos())`` test treated a cell visible on a second
+        monitor as off-screen (zero overlap with the master's monitor) and
+        relocated/auto-hid it; summing the overlap across every monitor
+        means a member counts as on-screen when it is visible on ANY
+        display.  Used by the live edge reflow and ``_check_edge_fold``.
+
+        We SUM the per-screen intersection areas rather than taking the max.
+        Extended-desktop screens are DISJOINT in virtual-desktop
+        coordinates, so the sum is exactly the true visible (union) area —
+        and a member straddling a monitor seam (e.g. ~45 % on each of two
+        flush monitors) correctly scores ~90 % visible instead of 45 %.
+        For the rare mirrored-display case the geometries coincide and the
+        sum over-counts, but that only inflates the visibility score, so a
+        clearly-visible member can never be misclassified as off-screen.
+        With a single monitor the loop runs once and the result equals the
+        old single-screen ``inter_area`` exactly (no behaviour change).
+        """
+        from PySide6.QtGui import QGuiApplication
+
+        total = 0
+        for s in QGuiApplication.screens():
+            inter = rect.intersected(s.availableGeometry())
+            if not inter.isEmpty():
+                total += inter.width() * inter.height()
+        return total
+
     def _live_edge_reflow_or_fold(self) -> None:
         """v0.6.11 — during a group drag, *relocate* off-screen members
         to free on-screen honeycomb slots so they stay bonded to the
@@ -9537,9 +9595,19 @@ class CellWindow(QMainWindow):
         if screen is None:
             screen = QGuiApplication.primaryScreen()
         if screen is None:
-            return
-        avail = screen.availableGeometry()
+            return  # no displays at all — nothing to classify against
 
+        # v0.8.0a80 (multi-display "cells reposition when they don't have
+        # to" fix) — classify a member off-screen ONLY when it is off
+        # EVERY monitor, not just off the master's monitor.  The old code
+        # tested intersection against ``screenAt(self.pos())`` alone, so on
+        # a multi-monitor desktop a member genuinely visible on a SECOND
+        # monitor (while the master is on the first, or vice versa) scored
+        # zero intersection and was treated as off-screen — then relocated
+        # onto the master's monitor, yanking a cell the user had placed and
+        # could plainly see.  ``_visible_area_on_any_screen`` sums the
+        # overlap across all screens (the true visible area), so only a
+        # truly-invisible member (off every monitor) is relocated/folded.
         off_ids: list[str] = []
         on_ids: list[str] = []
         for mid in self._positioned:
@@ -9548,31 +9616,21 @@ class CellWindow(QMainWindow):
                 continue
             sz = m._size_px
             rect = QRect(m.pos().x(), m.pos().y(), sz, sz)
-            inter = rect.intersected(avail)
-            inter_area = (
-                inter.width() * inter.height()
-                if not inter.isEmpty() else 0
-            )
-            if inter_area < (sz * sz) / 2:
+            if self._visible_area_on_any_screen(rect) < (sz * sz) / 2:
                 off_ids.append(mid)
             else:
                 on_ids.append(mid)
 
         if not off_ids:
             # Everything that should be visible IS — un-fold any
-            # members that came back on-screen.
+            # members that came back on-screen (on ANY monitor).
             for mid in list(self._auto_hidden):
                 m = registry.get(mid)
                 if m is None:
                     continue
                 sz = m._size_px
                 rect = QRect(m.pos().x(), m.pos().y(), sz, sz)
-                inter = rect.intersected(avail)
-                inter_area = (
-                    inter.width() * inter.height()
-                    if not inter.isEmpty() else 0
-                )
-                if inter_area >= (sz * sz) / 2:
+                if self._visible_area_on_any_screen(rect) >= (sz * sz) / 2:
                     self._auto_hidden.discard(mid)
                     m.setVisible(True)
             return
@@ -9602,39 +9660,62 @@ class CellWindow(QMainWindow):
             _log(f"_live_edge_reflow_or_fold: repack failed: {exc!r}")
             return
 
-        for mid in off_ids:
-            m = registry.get(mid)
-            if m is None:
-                continue
-            new_tl = new_positions.get(mid)
-            if new_tl is None:
-                # No on-screen slot — fall back to the historical
-                # hide so the ring doesn't grow off-screen ghosts.
-                # The v0.6.32 sibling-redock branch was reverted in
-                # v0.6.34: it introduced re-link races during
-                # collapse / drag that made cells disappear.  See
-                # the next-session scene-graph refactor plan for
-                # the proper redock path.
-                if mid not in self._auto_hidden:
-                    self._auto_hidden.add(mid)
-                    m.setVisible(False)
-                continue
-            new_x, new_y = new_tl
-            if mid in self._auto_hidden:
-                self._auto_hidden.discard(mid)
-                m.setVisible(True)
-            # Instant move — we're inside the drag event loop and an
-            # eased animation would fight the next per-frame rigid
-            # translation from master.moveEvent.  Kill any prior
-            # in-flight pos animation first (defensive).
-            prior = getattr(m, "_pos_anim", None)
-            if prior is not None:
-                try:
-                    prior.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-                m._pos_anim = None
-            m.move(new_x, new_y)
+        # v0.8.0a80 (left-behind fix) — these relocations are a SYSTEM
+        # move of off-screen members around the (stationary) master to
+        # keep them on-screen.  Each ``m.move()`` below fires the
+        # member's ``hexagonMoved`` -> ``ring_main._on_hexagon_moved``,
+        # which runs ``_check_undock`` whenever NO group move is flagged.
+        # A relocation can jump a member well past the ~92 px undock
+        # threshold from its docked peer, so ``_check_undock`` would
+        # silently drop it from ``_positioned`` — and the next master
+        # drag (which only cascades ``_positioned`` members) would then
+        # leave it behind.  This is the user-reported "cell got left
+        # behind", traced live to ``ae463801`` stranded at (42,33) while
+        # the rest of the cluster moved to the second monitor.
+        #
+        # The reflow is a coordinated, system-driven relocation — exactly
+        # what ``_GROUP_MOVE_IN_PROGRESS`` exists to mark — so set it for
+        # the duration of these moves.  ``_on_hexagon_moved`` then sees a
+        # group move in progress and skips the drift undock (the relative
+        # positions are managed by the engine, not drifting under a user
+        # drag).  Mirrors the guard the rigid cascade uses in moveEvent.
+        _GROUP_MOVE_IN_PROGRESS.add(self._id)
+        try:
+            for mid in off_ids:
+                m = registry.get(mid)
+                if m is None:
+                    continue
+                new_tl = new_positions.get(mid)
+                if new_tl is None:
+                    # No on-screen slot — fall back to the historical
+                    # hide so the ring doesn't grow off-screen ghosts.
+                    # The v0.6.32 sibling-redock branch was reverted in
+                    # v0.6.34: it introduced re-link races during
+                    # collapse / drag that made cells disappear.  See
+                    # the next-session scene-graph refactor plan for
+                    # the proper redock path.
+                    if mid not in self._auto_hidden:
+                        self._auto_hidden.add(mid)
+                        m.setVisible(False)
+                    continue
+                new_x, new_y = new_tl
+                if mid in self._auto_hidden:
+                    self._auto_hidden.discard(mid)
+                    m.setVisible(True)
+                # Instant move — we're inside the drag event loop and an
+                # eased animation would fight the next per-frame rigid
+                # translation from master.moveEvent.  Kill any prior
+                # in-flight pos animation first (defensive).
+                prior = getattr(m, "_pos_anim", None)
+                if prior is not None:
+                    try:
+                        prior.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    m._pos_anim = None
+                m.move(new_x, new_y)
+        finally:
+            _GROUP_MOVE_IN_PROGRESS.discard(self._id)
 
         self.update()  # repaint badge / outline
 
@@ -9664,13 +9745,14 @@ class CellWindow(QMainWindow):
         if app_inst is None:
             return
 
-        # Determine the screen's available rect.
+        # Guard: bail only when there is NO display at all (otherwise we'd
+        # auto-hide every member).  Visibility itself is judged against ALL
+        # monitors below, not just the master's screen.
         screen = app_inst.screenAt(self.pos())
         if screen is None:
             screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
-        avail = screen.availableGeometry()
 
         badge_changed = False
         for member_id in list(self._positioned):
@@ -9684,10 +9766,13 @@ class CellWindow(QMainWindow):
             my = member.pos().y()
             member_rect = QRect(mx, my, sz, sz)
 
-            # Intersection area with available geometry.
-            inter = member_rect.intersected(avail)
+            # v0.8.0a80 multi-display: judge visibility across EVERY monitor
+            # (see _visible_area_on_any_screen), so a member visible on a
+            # second monitor isn't auto-hidden just because it's off the
+            # master's monitor — the single-screen test was the auto-hide
+            # twin of the live-reflow misclassification.
             member_area = sz * sz
-            inter_area = inter.width() * inter.height() if not inter.isEmpty() else 0
+            inter_area = self._visible_area_on_any_screen(member_rect)
 
             more_than_half_off = inter_area < (member_area / 2)
 
@@ -9715,6 +9800,37 @@ class CellWindow(QMainWindow):
         if badge_changed:
             self.update()  # repaint badge
 
+    def _nearest_screen(self, point: QPoint):
+        """Return the ``QScreen`` whose ``availableGeometry`` is nearest to
+        ``point`` (a point inside a screen scores distance 0), or ``None``
+        if there are no screens.
+
+        Used by :meth:`_clamp_to_screen` when ``point`` lies outside every
+        screen so the cell clamps to the CLOSEST monitor rather than being
+        yanked to the primary (the v0.8.0a80 multi-monitor jitter fix).
+        Distance is the squared Euclidean distance from the point to the
+        rect (0 when contained), which is monotonic and avoids a sqrt.
+        """
+        from PySide6.QtGui import QGuiApplication
+
+        screens = QGuiApplication.screens()
+        if not screens:
+            return None
+        px, py = point.x(), point.y()
+        best = None
+        best_d: int | None = None
+        for s in screens:
+            r = s.availableGeometry()
+            # Clamp the point into the rect on each axis; the leftover is
+            # the axis distance (0 when the point is inside on that axis).
+            dx = max(r.left() - px, 0, px - r.right())
+            dy = max(r.top() - py, 0, py - r.bottom())
+            d = dx * dx + dy * dy
+            if best_d is None or d < best_d:
+                best_d = d
+                best = s
+        return best
+
     def _clamp_to_screen(self, raw_pos: QPoint) -> QPoint:
         """Clamp a prospective window top-left to the containing screen's
         available geometry.
@@ -9728,11 +9844,29 @@ class CellWindow(QMainWindow):
 
         Strategy:
         1. Find the screen that contains raw_pos.
-        2. If none, fall back to the primary screen.
+        2. If none (raw_pos lies outside EVERY screen — e.g. the cursor
+           drifted just above the top edge of a secondary monitor during a
+           drag), DON'T blindly fall back to the primary screen.  Prefer the
+           screen the cell is CURRENTLY on, then the screen nearest to
+           raw_pos, and only then the primary.  (v0.8.0a80 multi-monitor
+           fix — see below.)
         3. Clamp the window top-left so the window stays inside that screen's
            availableGeometry (accounts for taskbar and tray area).
         4. If no screen is found at all (no displays), return raw_pos unchanged
            so we do not silently freeze dragging.
+
+        v0.8.0a80 — multi-monitor jitter fix.  The old step 2 fell back to
+        ``primaryScreen()`` whenever ``screenAt(raw_pos)`` was None.  On a
+        multi-monitor desktop, dragging the forest near the TOP edge of a
+        secondary monitor puts the cursor at a slightly-negative y that is
+        above every screen, so ``screenAt`` returned None and the cell was
+        yanked all the way to the PRIMARY monitor's edge — then, when the
+        cursor dropped back onto the secondary, it jumped back.  The forest
+        oscillated between the primary edge and the secondary (the live
+        trace showed it snapping between x=3383 and x~6712), dragging its
+        whole cluster back and forth ("cells reposition when they don't
+        have to").  Keeping the cell on its CURRENT monitor when raw_pos is
+        off every screen eliminates the teleport.
         """
         from PySide6.QtGui import QGuiApplication
 
@@ -9742,7 +9876,24 @@ class CellWindow(QMainWindow):
             try:
                 screen = app_inst.screenAt(raw_pos)
             except Exception as _e:
-                _log(f"_clamp_to_screen: screenAt raised {_e!r} — falling back to primary")
+                _log(f"_clamp_to_screen: screenAt raised {_e!r} — falling back to current/nearest screen")
+
+        if screen is None and app_inst is not None:
+            # raw_pos is outside every screen.  Prefer the monitor the cell
+            # is currently on (by top-left, then by centre), then the
+            # nearest monitor — anything but a blind jump to the primary.
+            try:
+                screen = app_inst.screenAt(self.pos())
+                if screen is None:
+                    centre = QPoint(
+                        self.pos().x() + self._size_px // 2,
+                        self.pos().y() + self._size_px // 2,
+                    )
+                    screen = app_inst.screenAt(centre)
+            except Exception:  # noqa: BLE001
+                screen = None
+            if screen is None:
+                screen = self._nearest_screen(raw_pos)
 
         if screen is None:
             screen = QGuiApplication.primaryScreen() if app_inst is not None else None
@@ -9858,24 +10009,32 @@ class CellWindow(QMainWindow):
                 QRect(h.pos().x(), h.pos().y(), sz, sz),
             )
 
-        # Determine the containing screen via the subject's centre.
+        # v0.8.0a81 multi-display: judge "fully on-screen" against the UNION
+        # of ALL monitors, not just the subject's own screen.  The old
+        # single-screen ``avail`` made settle treat a member that crossed onto
+        # a SECOND monitor as off-screen, so it nudged the whole cluster back
+        # by a 25px (size//3) spiral step "to clear 0 obstacle(s)" — the
+        # user-reported "a cell shifts a little and becomes offset from its
+        # docked location".  Keep ``screenAt`` only as a no-display guard so we
+        # never spiral-shift blindly when there are zero screens.
         pivot = subjects[0][1].center()
         screen = app_inst.screenAt(pivot)
         if screen is None:
             screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
-        avail = screen.availableGeometry()
 
         def _ok(dx: int, dy: int) -> bool:
             for _c, r in subjects:
                 moved = r.translated(dx, dy)
-                # Must fit fully inside the available rect.
-                if (
-                    moved.left() < avail.left()
-                    or moved.top() < avail.top()
-                    or moved.right() > avail.right()
-                    or moved.bottom() > avail.bottom()
+                # Must be FULLY visible across all monitors (union of screen
+                # avail rects).  A member fully on ANY single screen — or split
+                # across a flush inter-monitor bezel — counts as on-screen;
+                # only a member hanging into dead space (off every monitor)
+                # forces a slide.  On a single monitor this is identical to the
+                # old full-containment test.
+                if self._visible_area_on_any_screen(moved) < (
+                    moved.width() * moved.height()
                 ):
                     return False
                 # v0.6.18 — overlap test uses CENTRE-DISTANCE, not

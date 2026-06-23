@@ -325,6 +325,20 @@ def _on_hexagon_moved(hex_id: str) -> None:
     occurred.  We identify coordinated moves via _GROUP_MOVE_IN_PROGRESS:
     if ANY hex is listed there as the initiator, the move is part of a
     group drag.
+
+    v0.8.0a81 — drift-undock applies ONLY to the cell the USER is actively
+    dragging (``hex_win._drag_started``).  SYSTEM relocations move cells with
+    ``_drag_started`` False — the drag-end ``_settle_no_overlap`` smooth-move,
+    the live edge reflow, ``_compute_layout`` — and running ``_check_undock``
+    on those silently dropped a member from the cluster, surfacing as the
+    user-reported "another cell offsets / didn't complete docking / cell left
+    behind".  The user dragging a cell OUT is handled separately by
+    ``_break_free_from_cluster`` at the 4px drag-start threshold (it clears
+    ``_docked_to``/``_slot``/``_positioned`` immediately), so by the time a
+    user-dragged cell reaches here its ``_docked_to`` is already empty and
+    ``_check_undock`` is a no-op — gating on ``_drag_started`` therefore
+    removes ZERO legitimate undock while killing every spurious system-move
+    undock (this generalises the per-site reflow guard added in a80).
     """
     group_in_progress = bool(_GROUP_MOVE_IN_PROGRESS)
     # Rate-limited log — _on_hexagon_moved fires every frame during a drag.
@@ -342,8 +356,13 @@ def _on_hexagon_moved(hex_id: str) -> None:
     registry = CellRegistry.instance()
     hex_win = registry.get(hex_id)
     # Amendment 2: use _docked_to (positional cluster) rather than _dock_partners (shim).
-    if hex_win is not None and hex_win._docked_to:
-        _check_undock(hex_win)
+    if hex_win is None or not hex_win._docked_to:
+        return
+    # a81 — only the cell the user is physically dragging can drift-undock;
+    # a system relocation (settle / reflow / layout) must never undock.
+    if not getattr(hex_win, "_drag_started", False):
+        return
+    _check_undock(hex_win)
 
 
 def _notify_handoff_error(title: str, text: str) -> None:
