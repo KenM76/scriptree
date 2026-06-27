@@ -59,9 +59,11 @@ from PySide6.QtCore import QSettings
 _MAX_RECENT: int = 10
 _KEY_TOOL: str = "hex_shell/recent_scriptree"
 _KEY_TREE: str = "hex_shell/recent_scriptreetree"
+_KEY_LAYOUT: str = "hex_shell/recent_scriptreelayout"
 
 SCRIPTREE_EXT: str = ".scriptree"
 SCRIPTREETREE_EXT: str = ".scriptreetree"
+SCRIPTREELAYOUT_EXT: str = ".scriptreelayout"
 
 
 def _ext(path: str) -> str:
@@ -113,9 +115,32 @@ def get_scriptreetree() -> list[str]:
     return _load(_KEY_TREE)
 
 
+def add_layout(path: str) -> None:
+    """Prepend *path* to the recent cell-layout list (v0.8.0a83).
+
+    Same dedup-on-resolved-path + cap-at-_MAX_RECENT contract as ``add``,
+    but a dedicated list (no extension routing — layouts are always
+    ``.scriptreelayout``).  Used by the forest's Cell-layout Save/Load menu.
+    """
+    if not path:
+        return
+    resolved = str(Path(path).resolve())
+    items = _load(_KEY_LAYOUT)
+    items = [p for p in items if p != resolved]
+    items.insert(0, resolved)
+    del items[_MAX_RECENT:]
+    _save(_KEY_LAYOUT, items)
+
+
+def get_layouts() -> list[str]:
+    """Return the recent *.scriptreelayout list, most-recent first."""
+    return _load(_KEY_LAYOUT)
+
+
 def clear() -> None:
-    """Erase both recent lists from QSettings."""
+    """Erase all recent lists from QSettings."""
     s = QSettings()
     s.remove(_KEY_TOOL)
     s.remove(_KEY_TREE)
+    s.remove(_KEY_LAYOUT)
     s.sync()

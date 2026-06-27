@@ -119,7 +119,15 @@ def rescue_all_cells() -> int:
                 if _clamp(cell):
                     moved += 1
                 try:
-                    cell._repack_members(instant=True)
+                    # v0.8.0a83 — after a screen change, first try to restore
+                    # each member to its REMEMBERED offset (cells whose spot
+                    # still fits go back there); the engine then tiles only the
+                    # ones that no longer fit, around the restored cells.
+                    _placed = set()
+                    restore = getattr(cell, "_restore_remembered_offsets", None)
+                    if callable(restore):
+                        _placed = restore(move=True)
+                    cell._compute_layout(instant=True, pinned=_placed)
                 except Exception as exc:  # noqa: BLE001
                     _log(
                         f"rescue_all_cells: repack "

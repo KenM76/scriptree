@@ -174,6 +174,15 @@ class ForestItem:
     to.  Usually identical to ``path`` — kept separate so the field
     is consistent with how single-cell standalones are tracked."""
 
+    rel_offset: tuple[int, int] | None = None
+    """v0.8.0a83 — this item's offset RELATIVE TO the forest hub
+    (``(dx, dy)`` = item_top_left − hub_top_left), as the user last
+    arranged it.  Authoritative for the remembered-layout restore on
+    expand / startup / screen-rescue; ``position`` (absolute) remains the
+    legacy seed / fallback.  ``None`` when the user has never deliberately
+    placed this item (the layout engine tiles it).  Serialised only when
+    set, so pre-a83 forests stay byte-identical."""
+
 
 def _default_roots() -> list[str]:
     """Compute the factory default for ``AutoDiscoverConfig.roots``.
@@ -414,6 +423,10 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
         }
         if it.position is not None:
             d["position"] = list(it.position)
+        # v0.8.0a83 — emit the remembered offset-from-hub only when set so
+        # pre-a83 forests round-trip byte-identical.
+        if it.rel_offset is not None:
+            d["rel_offset"] = [int(it.rel_offset[0]), int(it.rel_offset[1])]
         if it.catalog_path:
             d["catalog_path"] = _to_relative_if_possible(
                 Path(it.catalog_path), root,
@@ -503,11 +516,21 @@ def load_forest(path: str | Path) -> ForestDef:
         catalog = d.get("catalog_path")
         if catalog:
             catalog = str(_resolve_for_load(str(catalog), path))
+        # v0.8.0a83 — remembered offset-from-hub.  Same defensive 2-int
+        # parse as position/window_position; any other shape -> None.
+        ro_raw = d.get("rel_offset")
+        rel_offset: tuple[int, int] | None = None
+        if isinstance(ro_raw, (list, tuple)) and len(ro_raw) == 2:
+            try:
+                rel_offset = (int(ro_raw[0]), int(ro_raw[1]))
+            except (TypeError, ValueError):
+                rel_offset = None
         items.append(ForestItem(
             path=str(resolved),
             kind=kind,  # type: ignore[arg-type]
             position=pos,
             catalog_path=catalog,
+            rel_offset=rel_offset,
         ))
 
     excluded = [
@@ -787,6 +810,27 @@ class ForestPreferences:
     """Add a system tray icon.  Left-click brings the hub to the
     front; right-click menu offers Show / Quit."""
 
+    # ------------------------------------------------------------------
+    # Login autostart (v0.8.0a84+)
+    # ------------------------------------------------------------------
+    autostart_scope: str = "off"
+    """Windows login-autostart scope for the forest, mirroring the
+    tree-ring's "Auto-load on startup" capability.  One of:
+
+      * ``"off"``     — not registered to launch at login (factory default).
+      * ``"user"``    — a per-user Run-key (``HKCU\\...\\Run``) launches
+                        ScripTree in forest mode at login.
+      * ``"system"``  — an all-users Run-key (``HKLM\\...\\Run``), set via a
+                        UAC-elevated child; requires admin.
+
+    A forest is the single top-level workspace, so unlike rings (which keep a
+    *list* of autoload paths) there is exactly one scope (or none).  This is
+    the source of truth for the menu/dialog state; the actual Run-key is kept
+    in sync by ``ring_io.recompute_autostart`` (the shared chokepoint that also
+    folds in ring autostart so the two never clobber the single Run-key value).
+    When enabled, ``default_forest_path`` + ``fallback_to_default`` are set so
+    the login ``--forest`` process loads exactly the configured forest."""
+
     def resolved_default_path(self, branding: dict) -> Path:
         """Return the actual file path the launcher should fall
         back to.  Folds the "empty means canonical" rule so callers
@@ -824,6 +868,7 @@ class ForestPreferences:
                 show_always_on_top=True,
                 show_on_taskbar=self.show_on_taskbar,
                 show_in_system_tray=self.show_in_system_tray,
+                autostart_scope=self.autostart_scope,
             )
         return self
 
@@ -854,12 +899,18 @@ def load_preferences(branding: dict) -> ForestPreferences:
     if fmt != _PREFS_FORMAT:
         _log(f"load_preferences: unexpected format {fmt!r}; using defaults")
         return ForestPreferences()
+    # Clamp autostart_scope to the known set; legacy files (and any
+    # hand-edited garbage) fall back to "off" so a bad value can never
+    # leave the forest silently registered for login.
+    raw_scope = str(raw.get("autostart_scope", "off") or "off")
+    autostart_scope = raw_scope if raw_scope in ("off", "user", "system") else "off"
     prefs = ForestPreferences(
         fallback_to_default=bool(raw.get("fallback_to_default", True)),
         default_forest_path=str(raw.get("default_forest_path", "") or ""),
         show_always_on_top=bool(raw.get("show_always_on_top", True)),
         show_on_taskbar=bool(raw.get("show_on_taskbar", False)),
         show_in_system_tray=bool(raw.get("show_in_system_tray", False)),
+        autostart_scope=autostart_scope,
     )
     # Hand-edited / older prefs files may not carry the visibility
     # keys at all (older format) -- defaults restore the historical
@@ -887,6 +938,94 @@ def save_preferences(prefs: ForestPreferences, branding: dict) -> None:
         "show_always_on_top": bool(prefs.show_always_on_top),
         "show_on_taskbar": bool(prefs.show_on_taskbar),
         "show_in_system_tray": bool(prefs.show_in_system_tray),
+        "autostart_scope": str(prefs.autostart_scope or "off"),
     }
     p.write_text(json.dumps(blob, indent=2), encoding="utf-8")
     _log(f"save_preferences: wrote {p}")
+
+
+# ---------------------------------------------------------------------------
+# Login autostart (v0.8.0a84) — forest analog of the ring autostart API
+# ---------------------------------------------------------------------------
+
+def set_forest_autostart(scope: str, branding: dict, *, forest_path: str) -> None:
+    """Register the forest to auto-load at Windows login in *scope*.
+
+    *scope* is ``"user"`` or ``"system"``.  Mirrors the tree-ring's
+    ``add_autoload_ring`` but for the single top-level forest:
+
+      1. Persist the intent — set ``autostart_scope = scope`` and point the
+         launch-default at the saved forest (``default_forest_path =
+         resolve(forest_path)``, ``fallback_to_default = True``) so the login
+         ``--forest`` process loads exactly *this* forest via the existing
+         ``ForestController.start`` path (no new load code needed).
+      2. Sync the Run-key — call ``ring_io.recompute_autostart(scope)`` (the
+         shared chokepoint), which writes the combined ring+forest command
+         into the one Run-key value for that scope.
+      3. Single-forest mutual exclusion — if the forest was previously
+         registered in the OTHER scope, recompute that scope too so its
+         Run-key drops the ``--forest`` flag.
+
+    For ``scope == "system"`` the recompute's HKLM write raises
+    ``PermissionError`` unless elevated, so callers route system-scope
+    requests through ``ring_io.elevate_for_forest_autostart_system`` (which
+    re-enters this function inside the elevated child).
+
+    The caller must ensure *forest_path* is a real saved file (the forest has
+    a ``loaded_from``); a transient/unsaved forest cannot be autostarted.
+    """
+    # Lazy import to avoid an import cycle (ring_io imports forest_io lazily
+    # from inside recompute_autostart / _forest_autostart_on).
+    from scriptree.shell.ring_io import recompute_autostart
+
+    prefs = load_preferences(branding)
+    old_scope = prefs.autostart_scope
+    prefs.autostart_scope = scope if scope in ("user", "system") else "off"
+    prefs.default_forest_path = str(Path(forest_path).expanduser().resolve())
+    prefs.fallback_to_default = True
+    save_preferences(prefs, branding)
+
+    recompute_autostart(scope)  # type: ignore[arg-type]
+    # If we moved scopes, the old scope's Run-key must drop --forest.
+    if old_scope in ("user", "system") and old_scope != scope:
+        recompute_autostart(old_scope)  # type: ignore[arg-type]
+    _log(f"set_forest_autostart: scope={scope} forest={prefs.default_forest_path}")
+
+
+def disable_forest_autostart(branding: dict) -> None:
+    """Remove the forest from login autostart (set scope to ``"off"``).
+
+    Mirrors the ring's ``_autoload_disable`` clearing both scopes: sets
+    ``autostart_scope = "off"`` and recomputes BOTH the user and system
+    Run-keys so neither carries ``--forest`` afterwards.  Leaves
+    ``default_forest_path`` / ``fallback_to_default`` intact (the in-app
+    default-forest behaviour is independent of login autostart).
+
+    Recomputing the SYSTEM scope writes/deletes the HKLM value and so raises
+    ``PermissionError`` unless elevated; callers route a system→off transition
+    through ``ring_io.elevate_for_forest_autostart_disable_system`` when not
+    admin.
+    """
+    from scriptree.shell.ring_io import recompute_autostart
+
+    prefs = load_preferences(branding)
+    old_scope = prefs.autostart_scope
+    prefs.autostart_scope = "off"
+    save_preferences(prefs, branding)
+
+    # Recompute ONLY the previously-active scope.  Single-forest mutual
+    # exclusion guarantees that at most one scope's Run-key ever carried
+    # ``--forest``, so that is the only one to clear.  Recomputing the OTHER
+    # scope would be pointless AND harmful: an unelevated ``user → off``
+    # disable would call ``recompute_autostart("system")`` →
+    # ``unregister_autostart("system")``, whose admin check raises
+    # ``PermissionError`` BEFORE the empty-key no-op — crashing a routine,
+    # admin-free operation.  (System → off while non-admin is routed through
+    # the elevated child by the caller, so it reaches here as old_scope
+    # ``"system"`` only when already admin.)
+    if old_scope in ("user", "system"):
+        recompute_autostart(old_scope)  # type: ignore[arg-type]
+    _log(
+        f"disable_forest_autostart: autostart_scope set off; "
+        f"recomputed old scope={old_scope!r}"
+    )

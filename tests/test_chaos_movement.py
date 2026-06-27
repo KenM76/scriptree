@@ -592,6 +592,209 @@ def test_off_screen_slot_gets_reassigned_to_on_screen(
             c.close()
 
 
+# ---------------------------------------------------------------------------
+# v0.8.0a85 — "cells left behind" fixes (Bug A: dock-graph hide walk;
+#             Bug B: on-screen limbo member must not vanish)
+# ---------------------------------------------------------------------------
+
+def test_forest_descendants_follows_dock_graph(app: QGuiApplication) -> None:
+    """Bug A: the forest auto-hide walk (``ForestVisibilityManager.
+    _forest_descendants``) must follow the DOCK graph
+    (``_dock_children_by_edge``), not only the membership graph
+    (``_members``).
+
+    A ring (or any sub-cluster whose root is a master) dragged onto the forest
+    goes through ``_try_spawn_master`` Case M1 — *"purely spatial, no link
+    change"* — so it lands in ``hub._dock_children_by_edge`` but NOT in
+    ``hub._members``.  The pre-a85 walk followed only ``_members`` (recursing
+    only into masters), so it never enumerated that ring → ``hide_hub`` left it
+    (and its members) on screen.  This builds exactly that topology and asserts
+    the walk now reaches the whole visible cluster.
+    """
+    from scriptree.shell.forest_visibility import ForestVisibilityManager
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    hub = CellWindow(branding, role="master")
+    member = CellWindow(branding)            # direct forest member (in _members)
+    ring = CellWindow(branding, role="master")  # docked via DOCK graph ONLY
+    ring_child = CellWindow(branding)        # the ring's own member
+    chain_tail = CellWindow(branding)        # plain cell docked to the member
+    for w in (hub, member, ring, ring_child, chain_tail):
+        w.show()
+
+    # Membership graph: hub owns `member`; ring owns `ring_child`.
+    hub._members = {member._id: QPoint(member.pos())}
+    ring._members = {ring_child._id: QPoint(ring_child.pos())}
+    # Dock graph: the ring is docked to the hub (Case M1 — NOT a hub member),
+    # and a plain cell is dock-chained off `member` (exercises the removed
+    # role=='master' recursion gate — a plain cell carrying a dock-child).
+    hub._dock_children_by_edge = {0: ring._id}
+    member._dock_children_by_edge = {1: chain_tail._id}
+
+    vm = ForestVisibilityManager(hub, registry)
+    try:
+        ids = {cell._id for cell in vm._forest_descendants()}
+        assert ids == {
+            member._id, ring._id, ring_child._id, chain_tail._id
+        }, (
+            "Hide walk missed dock-attached cells — it must follow "
+            "_dock_children_by_edge, not only _members."
+        )
+    finally:
+        try:
+            vm.teardown()
+        except Exception:  # noqa: BLE001
+            pass
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_onscreen_limbo_member_stays_visible(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bug B: a member that finds NO free full-fit slot (limbo) but sits
+    WHOLLY ON-SCREEN must stay VISIBLE — not vanish.
+
+    Pre-a85, ``_compute_layout`` Pass 2 auto-hid such a member
+    (``setVisible(False)``) and relied on a LATER pass to slot it; if a docked
+    sibling kept the slots occupied it stayed gone ("the cell docked to the
+    forest occasionally disappears", always-on-top mode).  Force limbo by
+    stubbing ``nearest_free_slot`` → None and assert the on-screen member is
+    re-shown.
+    """
+    from scriptree.shell import layout as layout_mod
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    mx, my = sl + 400, st + 300            # comfortably on-screen
+    master = CellWindow(branding, role="master")
+    master.show(); master.move(mx, my)
+    member = CellWindow(branding)
+    member.show(); member.move(mx + 60, my)  # adjacent → wholly on-screen
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    member._slot = None
+    member._floating_intent = False
+    # Simulate a prior limbo auto-hide so we also test the RE-SHOW path.
+    master._auto_hidden.add(member._id)
+    member.setVisible(False)
+    # No slot will ever be found → Pass 1 leaves _slot None → Pass 2 limbo.
+    monkeypatch.setattr(layout_mod, "nearest_free_slot", lambda **kw: None)
+
+    try:
+        master._compute_layout(instant=True)
+        assert member.isVisible(), (
+            "on-screen limbo member must stay VISIBLE, not auto-hide"
+        )
+        assert member._id not in master._auto_hidden, (
+            "on-screen limbo member must be cleared from _auto_hidden"
+        )
+        # The keep-visible path must NOT re-admit visible overlap.
+        assert _polygon_overlap_pairs(_visible_cells(registry)) == [], (
+            "kept-visible limbo member overlaps another cell"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_onscreen_limbo_member_hidden_when_it_would_overlap(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bug B collision guard (a85 adversarial fix): an on-screen limbo member
+    whose current position OVERLAPS the hub (or a sibling) must be auto-hidden,
+    NOT kept visible — otherwise the keep-visible fix re-admits the a67/a74
+    visible-overlap class.  Place the member directly on the hub, force limbo,
+    and assert it is hidden and no visible overlap remains.
+    """
+    from scriptree.shell import layout as layout_mod
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    mx, my = sl + 400, st + 300
+    master = CellWindow(branding, role="master")
+    master.show(); master.move(mx, my)
+    member = CellWindow(branding)
+    member.show(); member.move(mx, my)   # ON TOP of the hub → overlaps it
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    member._slot = None
+    member._floating_intent = False
+    monkeypatch.setattr(layout_mod, "nearest_free_slot", lambda **kw: None)
+
+    try:
+        master._compute_layout(instant=True)
+        assert member._id in master._auto_hidden, (
+            "limbo member overlapping the hub must be auto-hidden"
+        )
+        assert not member.isVisible(), (
+            "overlapping limbo member must be hidden"
+        )
+        assert _polygon_overlap_pairs(_visible_cells(registry)) == [], (
+            "no visible overlap may remain"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_offscreen_limbo_member_stays_hidden(
+    app: QGuiApplication,
+    screen_rect: tuple[int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bug B complement: a limbo member that is actually OFF-screen must STILL
+    be auto-hidden — preserving the a74/a80 behaviour and the chaos invariant
+    'no visible member fully off-screen'.  The a85 keep-visible fix is gated on
+    the cell being wholly on-screen, so this case is unchanged.
+    """
+    from scriptree.shell import layout as layout_mod
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    mx, my = sl + 400, st + 300
+    master = CellWindow(branding, role="master")
+    master.show(); master.move(mx, my)
+    member = CellWindow(branding)
+    member.show(); member.move(sr + 300, my)  # fully off the right edge
+    master._members[member._id] = QPoint(member.pos())
+    master._positioned.add(member._id)
+    member._group_master_id = master._id
+    member._slot = None
+    member._floating_intent = False
+    monkeypatch.setattr(layout_mod, "nearest_free_slot", lambda **kw: None)
+
+    try:
+        master._compute_layout(instant=True)
+        assert member._id in master._auto_hidden, (
+            "off-screen limbo member must be auto-hidden"
+        )
+        assert not member.isVisible(), (
+            "off-screen limbo member must be hidden"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
 def test_compute_layout_cancels_pending_smooth_moves(
     app: QGuiApplication,
     screen_rect: tuple[int, int, int, int],
@@ -1311,6 +1514,201 @@ def test_break_free_detaches_dock_children_so_redock_does_not_drag_them(
             f"{b_before} -> {(b.pos().x(), b.pos().y())}"
         )
     finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def _master_with_member_paths(branding, n, master_pos):
+    """Like _make_master_with_members but each member carries a distinct
+    _catalog_path (so _member_offset_key returns a stable key) — needed by the
+    a83 remembered-layout tests."""
+    from scriptree.shell.cell_window import CellWindow as _CW
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(*master_pos)
+    members = []
+    for i in range(n):
+        c = _CW(branding)
+        c.show()
+        c.move(master_pos[0] + 60 + i * 10, master_pos[1])
+        c._catalog_path = f"C:/fake/tool_{i}.scriptree"
+        master._members[c._id] = QPoint(c.pos())
+        master._positioned.add(c._id)
+        c._group_master_id = master._id
+        members.append(c)
+    return master, members
+
+
+def test_remembered_offset_restored_when_on_screen(
+    app: QGuiApplication, screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a83: a member with a remembered offset that lands fully
+    on-screen is restored to exactly hub.pos()+offset."""
+    from scriptree.shell.cell_window import _member_offset_key
+
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    cx, cy = (sl + sr) // 2, (st + sb) // 2
+    master, (m,) = _master_with_member_paths(branding, 1, (cx, cy))
+    key = _member_offset_key(m)
+    assert key is not None
+    master._remembered_offsets[key] = (90, -30)
+    try:
+        placed = master._restore_remembered_offsets(move=True)
+        assert m._id in placed
+        assert (m.pos().x(), m.pos().y()) == (cx + 90, cy - 30)
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_remembered_offset_skipped_off_screen_but_retained(
+    app: QGuiApplication, screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a83: a member whose remembered spot is off-screen is NOT
+    restored there (left for the engine), but its offset is RETAINED so it
+    returns once space allows."""
+    from scriptree.shell.cell_window import _member_offset_key
+
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    cx, cy = (sl + sr) // 2, (st + sb) // 2
+    master, (m,) = _master_with_member_paths(branding, 1, (cx, cy))
+    key = _member_offset_key(m)
+    before = (m.pos().x(), m.pos().y())
+    # Offset far off the right edge of every screen.
+    master._remembered_offsets[key] = (sr - cx + 5000, 0)
+    try:
+        placed = master._restore_remembered_offsets(move=True)
+        assert m._id not in placed, "off-screen remembered spot was used"
+        assert (m.pos().x(), m.pos().y()) == before, "member moved off-screen"
+        assert key in master._remembered_offsets, "offset was discarded"
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_pinned_restored_member_is_not_tiled_onto(
+    app: QGuiApplication, screen_rect: tuple[int, int, int, int],
+) -> None:
+    """v0.8.0a83: _compute_layout(pinned=...) must tile the remaining members
+    AROUND a restored (pinned) member, never onto it."""
+    from scriptree.shell.cell_window import _member_offset_key
+
+    sl, st, sr, sb = screen_rect
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+    cx, cy = (sl + sr) // 2, (st + sb) // 2
+    master, (a, b) = _master_with_member_paths(branding, 2, (cx, cy))
+    # Pin A at a known on-screen offset; B has no remembered offset.
+    master._remembered_offsets[_member_offset_key(a)] = (a._size_px + 8, 0)
+    try:
+        placed = master._restore_remembered_offsets(move=True)
+        assert a._id in placed and b._id not in placed
+        a_pos = (a.pos().x(), a.pos().y())
+        master._compute_layout(instant=True, pinned=placed)
+        # A stays exactly where it was restored (engine didn't move it).
+        assert (a.pos().x(), a.pos().y()) == a_pos
+        # B was placed; its centre is not stacked on A's centre.
+        acx, acy = a.pos().x() + a._size_px / 2, a.pos().y() + a._size_px / 2
+        bcx, bcy = b.pos().x() + b._size_px / 2, b.pos().y() + b._size_px / 2
+        thr = min(a._size_px, b._size_px) * 0.75
+        assert not (abs(acx - bcx) < thr and abs(acy - bcy) < thr), (
+            "engine tiled B onto the pinned member A"
+        )
+    finally:
+        for c in list(registry.all()):
+            c.close()
+
+
+def test_expand_restores_seam_straddling_member_verbatim(
+    app: QGuiApplication, monkeypatch,
+) -> None:
+    """v0.8.0a83 (multi-monitor regression caught in adversarial verify): on
+    expand, a restored member whose remembered spot straddles a monitor seam
+    (and whose _slot is None — the post-load state) must bloom to that spot
+    VERBATIM.  It must NOT be routed through the single-screen
+    _clamp_to_screen, which would yank it off the seam onto one monitor (and
+    potentially onto an engine-tiled neighbour)."""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtGui import QGuiApplication
+    from scriptree.shell.cell_window import CellWindow as _CW, _member_offset_key
+
+    branding = load_branding()
+    registry = CellRegistry.instance()
+    for c in list(registry.all()):
+        c.close()
+
+    class _FakeScreen:
+        def __init__(self, r: QRect) -> None:
+            self._r = r
+
+        def availableGeometry(self) -> QRect:
+            return self._r
+
+        def geometry(self) -> QRect:
+            return self._r
+
+    primary = _FakeScreen(QRect(0, 0, 1920, 1080))
+    secondary = _FakeScreen(QRect(1920, 0, 1920, 1080))
+
+    def fake_at(p: QPoint):
+        x, y = p.x(), p.y()
+        if 0 <= y < 1080:
+            if 0 <= x < 1920:
+                return primary
+            if 1920 <= x < 3840:
+                return secondary
+        return None
+
+    app_inst = QGuiApplication.instance()
+    monkeypatch.setattr(app_inst, "screenAt", fake_at)
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: primary))
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
+
+    master = _CW(branding, role="master")
+    master.show()
+    master.move(1800, 500)  # on the primary monitor, near the seam
+    m = _CW(branding)
+    m.show()
+    m.move(1800, 600)
+    m._catalog_path = "C:/fake/seam_tool.scriptree"
+    m._slot = None  # the post-load state of a restored member
+    master._members[m._id] = QPoint(m.pos())
+    master._positioned.add(m._id)
+    m._group_master_id = master._id
+    # Remembered spot (1900,500) straddles the 1920 seam, fully visible across
+    # the union, but screenAt((1900,500)) == primary -> single-screen clamp
+    # would shove it to ~1864 (off the seam).
+    master._remembered_offsets[_member_offset_key(m)] = (100, 0)
+
+    captured: dict = {}
+    orig = m._animate_to
+
+    def _spy(tgt, **kw):
+        captured["target"] = QPoint(tgt)
+        return orig(tgt, **kw)
+
+    monkeypatch.setattr(m, "_animate_to", _spy)
+    try:
+        master._start_expand()
+        app.processEvents()
+        assert "target" in captured, "member did not bloom"
+        assert (captured["target"].x(), captured["target"].y()) == (1900, 500), (
+            f"restored seam-straddling member was clamped off its remembered "
+            f"spot: bloom target {(captured['target'].x(), captured['target'].y())} "
+            f"!= (1900, 500)"
+        )
+    finally:
+        master._collapse_state = "expanded"
         for c in list(registry.all()):
             c.close()
 

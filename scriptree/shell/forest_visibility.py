@@ -1128,12 +1128,30 @@ class ForestVisibilityManager(QObject):
     # ------------------------------------------------------------------
 
     def _forest_descendants(self) -> list[Any]:
-        """Return the flat list of every CellWindow that belongs
-        to the forest hub.
+        """Return the flat list of every CellWindow attached to the forest hub.
 
-        Walks the hub's ``_members`` (direct forest members --
-        rings + standalone forest items), then for each member
-        that's a master walks ITS ``_members`` recursively.
+        Enumerates via BOTH attachment graphs, because either alone misses
+        cells the user sees as "part of the forest":
+
+          * the LINK / membership graph (``_members``) -- rings + standalone
+            forest items the forest OWNS; and
+          * the DOCK graph (``_dock_children_by_edge``) -- cells/rings snapped
+            onto an edge of a node.
+
+        Why both (v0.8.0a85 fix): a ring (or any sub-cluster whose root is a
+        master) dragged onto the forest goes through ``_try_spawn_master``
+        **Case M1** -- *"a ring docking onto anything is purely spatial -- no
+        link change"*.  It is wired into the DOCK graph
+        (``hub._dock_children_by_edge``) so it moves with the forest and looks
+        attached, but it is NEVER added to ``hub._members`` and its
+        ``_group_master_id`` is never set to the hub.  The pre-a85 walk
+        followed only ``_members`` (and recursed only into masters), so it
+        never enumerated that sub-cluster -- ``hide_hub`` left it on screen
+        ("cells left behind on the desktop").  Following the dock graph too,
+        and recursing through EVERY node (a plain cell can carry a dock-chain),
+        makes "what is hidden/shown with the forest" == "what is visually
+        attached to it".  The ``seen`` set keeps it finite and dedupes the
+        overlap between the two graphs.
         """
         w = self._forest_window
         if w is None:
@@ -1142,17 +1160,21 @@ class ForestVisibilityManager(QObject):
         seen: set[str] = set()
 
         def _walk(parent: Any) -> None:
-            members = getattr(parent, "_members", None) or {}
-            for member_id in list(members):
-                if member_id in seen:
+            child_ids: list[str] = list(getattr(parent, "_members", None) or {})
+            dock_children = getattr(parent, "_dock_children_by_edge", None) or {}
+            child_ids.extend(dock_children.values())
+            for child_id in child_ids:
+                if child_id in seen:
                     continue
-                seen.add(member_id)
-                cell = self._registry.get(member_id)
+                seen.add(child_id)
+                cell = self._registry.get(child_id)
                 if cell is None:
                     continue
                 out.append(cell)
-                if getattr(cell, "role", None) == "master":
-                    _walk(cell)
+                # Recurse through EVERY node (the ``seen`` set bounds it).  The
+                # old ``role == "master"`` gate stopped at the first plain cell
+                # and stranded any dock-chain hanging off it.
+                _walk(cell)
 
         try:
             _walk(w)

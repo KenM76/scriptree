@@ -1026,6 +1026,17 @@ class _RunWorker(QObject):
 
 # --- main widget ----------------------------------------------------------
 
+# v0.8.0a88 — headless-capture mode.  Set True by the headless screenshooter
+# (``screenshooter.py``) BEFORE it builds any ToolRunnerView.  When True, the
+# runner skips the two things that BLOCK in a no-event-loop / no-user context:
+#   1. the modal personal-config collision prompt
+#      (``_load_personal_configs_with_collision_prompt`` → ``QDialog.exec()``),
+#   2. on-open choice providers (``_run_provider`` shells out to
+#      SolidWorks/combridge and hangs when nothing is there to answer).
+# The normal app leaves this False, so interactive behaviour is unchanged.
+HEADLESS_CAPTURE: bool = False
+
+
 class ToolRunnerView(QWidget):
     """Form + output pane for running one tool.
 
@@ -2344,6 +2355,11 @@ class ToolRunnerView(QWidget):
     def _run_provider(
         self, param: Any, *, bypass_cache: bool = False,
     ) -> None:
+        # v0.8.0a88 — never run providers under headless capture: they shell out
+        # (e.g. SolidWorks/combridge queries) and block with no event loop / no
+        # user.  The combo just stays unpopulated, which is fine for a snapshot.
+        if HEADLESS_CAPTURE:
+            return
         from scriptree.core.providers import resolve_provider
         spec = param.choices_provider
         upstream = self._upstream_values(param)
@@ -4293,6 +4309,11 @@ class ToolRunnerView(QWidget):
             return
 
         # Candidates exist but none by location — prompt the user.
+        # v0.8.0a88 — under headless capture there is no one to answer the modal
+        # prompt (it blocks forever); treat as no personal configs loaded (the
+        # sidecar/default config is used), exactly like the no-candidates path.
+        if HEADLESS_CAPTURE:
+            return
         dlg = PersonalConfigCollisionDialog(
             self, Path(self._file_path), candidates,
         )

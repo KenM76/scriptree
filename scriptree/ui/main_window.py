@@ -289,6 +289,13 @@ class MainWindow(QMainWindow):
         )
         self._run_controls_dock.toggleView(False)
 
+        # v0.8.0a87 — snapshot the default dock arrangement so View ▸ Reset
+        # layout can restore it after the user floats/rearranges the docks.
+        try:
+            self._default_layout_state = self._dock_manager.saveState()
+        except Exception:  # noqa: BLE001
+            self._default_layout_state = None
+
         self._build_menu()
 
         # Restore saved layout if the user opted in.
@@ -301,6 +308,19 @@ class MainWindow(QMainWindow):
                 self.restoreState(state)
 
         self.statusBar().showMessage("Ready.")
+
+    def _reset_dock_layout(self) -> None:
+        """Restore the editor's dock arrangement to the default captured at
+        construction (v0.8.0a87) — recovery for floated/rearranged/merged docks.
+        """
+        dm = getattr(self, "_dock_manager", None)
+        state = getattr(self, "_default_layout_state", None)
+        if dm is None or not state:
+            return
+        try:
+            dm.restoreState(state)
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- menu ----------------------------------------------------------------
 
@@ -574,6 +594,17 @@ class MainWindow(QMainWindow):
         m_view.addAction(self._form_dock.toggleViewAction())
         m_view.addAction(self._run_controls_dock.toggleViewAction())
         m_view.addAction(self._output_dock.toggleViewAction())
+        m_view.addSeparator()
+        # v0.8.0a87 — restore the dock arrangement to its default (recovery for a
+        # merged / floated / rearranged layout, matching the standalone window's
+        # View ▸ Reset layout).
+        act_reset_layout = QAction("Reset layout", self)
+        act_reset_layout.setToolTip(
+            "Restore the Form / Tools / Output / Run-controls docks to their "
+            "default arrangement."
+        )
+        act_reset_layout.triggered.connect(self._reset_dock_layout)
+        m_view.addAction(act_reset_layout)
         m_view.addSeparator()
         act_standalone = QAction("Open current &tool standalone", self)
         act_standalone.setShortcut("Ctrl+Shift+S")

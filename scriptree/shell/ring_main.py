@@ -96,6 +96,20 @@ def _handle_early_flags(argv: list[str]) -> bool:
             Requires admin (the caller already elevated via ShellExecuteW).
         --unregister-autostart <scope>
             Remove the Run-key entry and (optionally) empty the autoload config.
+        --register-forest-autostart-user <forest-path>   (a84)
+            Set forest login-autostart to user scope (HKCU Run-key).
+        --register-forest-autostart-system <forest-path>  (a84)
+            Set forest login-autostart to system scope (HKLM Run-key).
+            Requires admin (the caller already elevated via ShellExecuteW).
+        --unregister-forest-autostart-system  (a84)
+            Disable forest login-autostart (scope→off), recompute both Run-keys.
+            Runs admin so the HKLM contribution can be dropped.
+
+    The forest flags (a84) mirror the ring ones but target the single
+    ``forest_preferences.json`` ``autostart_scope`` and route the Run-key
+    write through ``ring_io.recompute_autostart`` (the shared chokepoint).
+    Each runs in the UAC-elevated child for system scope, does the registry
+    write, and exits before any QApplication is constructed.
     """
     if "--register-autostart-user" in argv:
         idx = argv.index("--register-autostart-user")
@@ -125,6 +139,44 @@ def _handle_early_flags(argv: list[str]) -> bool:
             print(f"[shell.main] Registered system autoload for {ring_path}", file=sys.stderr)
         except Exception as exc:
             print(f"[shell.main] --register-autostart-system failed: {exc!r}", file=sys.stderr)
+        return True
+
+    # ---- Forest login-autostart (a84) -----------------------------------
+    if "--register-forest-autostart-user" in argv:
+        idx = argv.index("--register-forest-autostart-user")
+        if idx + 1 >= len(argv):
+            print("[shell.main] --register-forest-autostart-user requires a path", file=sys.stderr)
+            return True
+        forest_path = argv[idx + 1]
+        try:
+            from scriptree.shell.forest_io import set_forest_autostart
+            set_forest_autostart("user", load_branding(), forest_path=forest_path)
+            print(f"[shell.main] Registered user forest autostart for {forest_path}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[shell.main] --register-forest-autostart-user failed: {exc!r}", file=sys.stderr)
+        return True
+
+    if "--register-forest-autostart-system" in argv:
+        idx = argv.index("--register-forest-autostart-system")
+        if idx + 1 >= len(argv):
+            print("[shell.main] --register-forest-autostart-system requires a path", file=sys.stderr)
+            return True
+        forest_path = argv[idx + 1]
+        try:
+            from scriptree.shell.forest_io import set_forest_autostart
+            set_forest_autostart("system", load_branding(), forest_path=forest_path)
+            print(f"[shell.main] Registered system forest autostart for {forest_path}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[shell.main] --register-forest-autostart-system failed: {exc!r}", file=sys.stderr)
+        return True
+
+    if "--unregister-forest-autostart-system" in argv:
+        try:
+            from scriptree.shell.forest_io import disable_forest_autostart
+            disable_forest_autostart(load_branding())
+            print("[shell.main] Disabled forest autostart (system)", file=sys.stderr)
+        except Exception as exc:
+            print(f"[shell.main] --unregister-forest-autostart-system failed: {exc!r}", file=sys.stderr)
         return True
 
     if "--unregister-autostart" in argv:

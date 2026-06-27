@@ -804,9 +804,11 @@ def add_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
     else:
         _log(f"add_autoload_ring: {path_str} already in {scope} config — skipped")
 
-    # Register autostart entry.
-    cmd = _build_autostart_cmd()
-    register_autostart(scope, cmd, brand_name)
+    # Register autostart entry.  Route through the unified chokepoint so the
+    # Run-key carries the combined ring+forest command (a84) — for a
+    # forest-off process this is byte-identical to the historic
+    # ``register_autostart(scope, _build_autostart_cmd(), brand)``.
+    recompute_autostart(scope)
 
 
 def remove_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
@@ -840,10 +842,13 @@ def remove_autoload_ring(path: Path, scope: Literal["user", "system"]) -> None:
     else:
         _log(f"remove_autoload_ring: {path_str} not in {scope} config — no-op")
 
-    # If no rings remain, remove the autostart entry.
-    if not rings:
-        _log(f"remove_autoload_ring: no rings left in {scope} — unregistering autostart")
-        unregister_autostart(scope, brand_name)
+    # Recompute the Run-key from the combined state (a84).  When rings now
+    # empty AND forest autostart is off for this scope, this unregisters
+    # (same as the historic behaviour).  When forest autostart IS on for
+    # this scope, the Run-key is kept as a ``--forest``-only command instead
+    # of being deleted — so removing the last ring never disables the
+    # forest's own login autostart.
+    recompute_autostart(scope)
 
 
 def _read_brand_name() -> str:
@@ -858,11 +863,103 @@ def _read_brand_name() -> str:
         return "ScripTree"
 
 
-def _build_autostart_cmd() -> str:
-    """Build the command-line string for the Windows Run-key value."""
+def _build_autostart_cmd_combined(*, forest: bool, rings: bool) -> str:
+    """Build the Windows Run-key command for the requested launch mode(s).
+
+    ScripTree is single-instance: there is exactly ONE Run-key value per
+    scope (named after the brand), so ring-autostart and forest-autostart
+    must coexist in a single command rather than fight over the value.
+    This builder is the single source of truth for that command.
+
+    Flags (order is fixed, ``--forest`` first):
+      * ``--forest``          → start in forest mode; ``ForestController``
+                                loads the configured default forest.
+      * ``--autoload-rings``  → load every ring registered in the user +
+                                system autoload configs.
+
+    Both may be present (``--forest --autoload-rings``) — the
+    ``--autoload-rings`` block in ``ring_main.main`` runs before forest
+    dispatch, so a single process honours both.
+
+    The ``forest=False, rings=True`` case is byte-identical to the historic
+    ``_build_autostart_cmd()`` output; keep it that way so existing
+    ring-only autostart registrations are never rewritten on upgrade.
+    """
     exe = sys.executable
+    flags: list[str] = []
+    if forest:
+        flags.append("--forest")
+    if rings:
+        flags.append("--autoload-rings")
     # Quote the executable path to handle spaces.
-    return f'"{exe}" -m scriptree.shell.ring_main --autoload-rings'
+    return f'"{exe}" -m scriptree.shell.ring_main ' + " ".join(flags)
+
+
+def _build_autostart_cmd() -> str:
+    """Build the command-line string for the Windows Run-key value (ring-only).
+
+    Thin wrapper preserved for byte-equality with pre-a84 registrations and
+    for any external caller; the canonical builder is
+    ``_build_autostart_cmd_combined``.
+    """
+    return _build_autostart_cmd_combined(forest=False, rings=True)
+
+
+def _forest_autostart_on(scope: Literal["user", "system"]) -> bool:
+    """Return True if the forest is configured to auto-load at login in *scope*.
+
+    The forest's autostart state is a single string ``autostart_scope`` in
+    ``forest_preferences.json`` (values ``"off"|"user"|"system"``) — a forest
+    is the user's one top-level workspace, so unlike rings there is no list,
+    just the one scope (or none).  Read lazily here to avoid a module import
+    cycle (forest_io imports nothing from ring_io at module load, but ring_io
+    must not hard-depend on forest_io at import time either).
+    """
+    try:
+        from scriptree.shell.branding_loader import load_branding
+        from scriptree.shell.forest_io import load_preferences
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_forest_autostart_on: import failed: {exc!r}")
+        return False
+    try:
+        branding = load_branding() or {}
+    except Exception:
+        branding = {}
+    try:
+        return load_preferences(branding).autostart_scope == scope
+    except Exception as exc:  # noqa: BLE001
+        _log(f"_forest_autostart_on: load_preferences failed: {exc!r}")
+        return False
+
+
+def recompute_autostart(scope: Literal["user", "system"]) -> None:
+    """Recompute and write the single Run-key value for *scope*.
+
+    This is the ONE chokepoint that decides the Run-key contents from the
+    combined autostart state:
+
+      * ``rings``  = any rings registered for this scope, AND
+      * ``forest`` = forest autostart configured for this scope.
+
+    If neither is enabled the Run-key value is removed (``unregister``);
+    otherwise it is (re)written with the combined command.  Both the ring
+    add/remove paths and the forest enable/disable paths funnel through here
+    so the two features never clobber each other's registry value.
+
+    For ``scope == "system"`` the underlying ``register_autostart`` /
+    ``unregister_autostart`` raise ``PermissionError`` unless the process is
+    elevated — so a system-scope recompute is only ever invoked inside the
+    UAC-elevated child (see ``elevate_for_*`` + the ``--register-*-system``
+    early-flag handlers in ``ring_main``).
+    """
+    rings = bool(list_autoload_rings(scope))
+    forest = _forest_autostart_on(scope)
+    brand_name = _read_brand_name()
+    if not rings and not forest:
+        unregister_autostart(scope, brand_name)
+        return
+    cmd = _build_autostart_cmd_combined(forest=forest, rings=rings)
+    register_autostart(scope, cmd, brand_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1009,4 +1106,124 @@ def elevate_for_system_autostart(ring_path: Path) -> None:
         _log(f"elevate_for_system_autostart: ShellExecuteW returned {ret} (error)")
     else:
         _log(f"elevate_for_system_autostart: elevation launched (ret={ret})")
+
+
+def elevate_for_forest_autostart_system(forest_path: Path) -> bool:
+    """Re-launch elevated to register SYSTEM-scope FOREST autostart (a84).
+
+    Forest analog of ``elevate_for_system_autostart``.  Called from the
+    forest's "Auto-load on startup → For all users" menu when the process is
+    not already admin.  The elevated child runs:
+
+        <exe> -m scriptree.shell.ring_main --register-forest-autostart-system "<forest-path>"
+
+    which writes ``autostart_scope="system"`` into ``forest_preferences.json``
+    and recomputes the HKLM Run-key, then exits before any GUI is built.
+
+    Returns True iff ``ShellExecuteW`` reported success (ret > 32).  A UAC
+    *cancel* returns SE_ERR_ACCESSDENIED (5) ≤ 32 → returns False, so the
+    caller can avoid optimistically flipping its cached scope to a state that
+    was never actually written (the menu-lies-until-relaunch defect).  Returns
+    False on non-Windows (cannot elevate).
+
+    L13 lesson (see ``elevate_for_system_autostart``): the child MUST launch
+    the V3 entry point ``scriptree.shell.ring_main`` or it dies on import and
+    silently no-ops.
+    """
+    if sys.platform != "win32":
+        _log("elevate_for_forest_autostart_system: non-Windows — cannot elevate")
+        return False
+
+    import ctypes
+
+    exe = sys.executable
+    args = (
+        f'-m scriptree.shell.ring_main '
+        f'--register-forest-autostart-system "{forest_path}"'
+    )
+    _log(f"elevate_for_forest_autostart_system: launching elevated: {exe} {args}")
+
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        0, "runas", exe, args, None, 1,
+    )
+    if ret <= 32:
+        _log(f"elevate_for_forest_autostart_system: ShellExecuteW returned {ret} (error/cancel)")
+        return False
+    _log(f"elevate_for_forest_autostart_system: elevation launched (ret={ret})")
+    return True
+
+
+def elevate_for_forest_autostart_user(forest_path: Path) -> bool:
+    """Re-launch elevated to set forest autostart to USER scope (a84).
+
+    Normally enabling user scope needs no admin (HKCU is writable).  This
+    helper exists for the one transition that does: moving FROM ``"system"``
+    TO ``"user"`` while not admin — the HKLM Run-key contribution must be
+    dropped (requires admin) while the HKCU one is added.  The elevated child
+    runs ``--register-forest-autostart-user "<path>"`` →
+    ``set_forest_autostart("user", …)``, which recomputes BOTH scopes (adding
+    HKCU, dropping HKLM) under admin, then exits.
+
+    Returns True iff ``ShellExecuteW`` reported success (ret > 32); a UAC
+    cancel or non-Windows returns False (see
+    ``elevate_for_forest_autostart_system`` for why the caller needs this).
+    Same L13 V3-module rule as the sibling helpers.
+    """
+    if sys.platform != "win32":
+        _log("elevate_for_forest_autostart_user: non-Windows — cannot elevate")
+        return False
+
+    import ctypes
+
+    exe = sys.executable
+    args = (
+        f'-m scriptree.shell.ring_main '
+        f'--register-forest-autostart-user "{forest_path}"'
+    )
+    _log(f"elevate_for_forest_autostart_user: launching elevated: {exe} {args}")
+
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        0, "runas", exe, args, None, 1,
+    )
+    if ret <= 32:
+        _log(f"elevate_for_forest_autostart_user: ShellExecuteW returned {ret} (error/cancel)")
+        return False
+    _log(f"elevate_for_forest_autostart_user: elevation launched (ret={ret})")
+    return True
+
+
+def elevate_for_forest_autostart_disable_system() -> bool:
+    """Re-launch elevated to DISABLE forest autostart from SYSTEM scope (a84).
+
+    Used when the forest's current autostart scope is ``"system"`` and the
+    user picks "Disabled" while not admin — removing the HKLM Run-key
+    contribution requires elevation.  The elevated child runs:
+
+        <exe> -m scriptree.shell.ring_main --unregister-forest-autostart-system
+
+    which sets ``autostart_scope="off"`` and recomputes the (system) Run-key,
+    dropping ``--forest``, then exits.
+
+    Returns True iff ``ShellExecuteW`` reported success (ret > 32); a UAC
+    cancel or non-Windows returns False.  Same L13 V3-module rule as the
+    other elevation helpers.
+    """
+    if sys.platform != "win32":
+        _log("elevate_for_forest_autostart_disable_system: non-Windows — cannot elevate")
+        return False
+
+    import ctypes
+
+    exe = sys.executable
+    args = '-m scriptree.shell.ring_main --unregister-forest-autostart-system'
+    _log(f"elevate_for_forest_autostart_disable_system: launching elevated: {exe} {args}")
+
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        0, "runas", exe, args, None, 1,
+    )
+    if ret <= 32:
+        _log(f"elevate_for_forest_autostart_disable_system: ShellExecuteW returned {ret} (error/cancel)")
+        return False
+    _log(f"elevate_for_forest_autostart_disable_system: elevation launched (ret={ret})")
+    return True
 

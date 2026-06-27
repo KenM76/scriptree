@@ -3611,6 +3611,21 @@ class CellWindow(QMainWindow):
         # NOT serialised to .scriptreering files.
         self._auto_hidden: set[str] = set()
 
+        # v0.8.0a83 — REMEMBERED cell layout (master only).  DISTINCT from
+        # ``_members`` (the current/possibly-temporary position written by the
+        # engine, cascade, reflow, settle): this stores each member's offset
+        # RELATIVE TO this hub as the user LAST DROPPED it — captured at a
+        # user drag-end ONLY, never on a system relocation.  Keyed by the
+        # member's normalised catalog path (``_member_offset_key`` — stable
+        # across the member-id regeneration every launch/load), so it persists
+        # in the ``.scriptreeforest`` (``ForestItem.rel_offset``) and rebinds
+        # to whatever cell holds that tool/tree path next session.  Value =
+        # ``(dx, dy)`` = member_top_left − hub_top_left.  Read by
+        # ``_restore_remembered_offsets`` to slide members back to where the
+        # user put them, engine-tiling only the ones whose remembered spot is
+        # off-screen.
+        self._remembered_offsets: dict[str, tuple[int, int]] = {}
+
         # Ring dirty-state flag (V3 v0.3.1).  Only meaningful on
         # master cells.  Set when a cell is added to or removed from
         # this master's group; cleared when the ring is saved.
@@ -4369,7 +4384,9 @@ class CellWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
 
-    def _compute_layout(self, *, instant: bool = True) -> None:
+    def _compute_layout(
+        self, *, instant: bool = True, pinned: set[str] | None = None,
+    ) -> None:
         """The single slot-based layout authority (v0.6.35).
 
         Walks every member id in ``self._members`` and:
@@ -4402,6 +4419,14 @@ class CellWindow(QMainWindow):
         """
         if self.role != "master" or not self._members:
             return
+
+        # v0.8.0a83 — ``pinned`` members were just placed at their REMEMBERED
+        # offset by ``_restore_remembered_offsets`` and must NOT be re-tiled:
+        # they are skipped in the pre-pass / Pass 1 / Pass 2 below, and their
+        # target centres are fed into ``occupied_centres`` so the engine tiles
+        # the remaining members AROUND them.  Empty by default -> identical to
+        # pre-a83 behaviour.
+        pinned = pinned or set()
 
         # v0.6.36 — trace entry.
         try:
@@ -4502,6 +4527,18 @@ class CellWindow(QMainWindow):
             self.pos().x() + self._size_px // 2,
             self.pos().y() + self._size_px // 2,
         ))
+        # v0.8.0a83 — seed PINNED members' TARGET centres (from _members,
+        # which holds their just-restored remembered spot) into the snapshot.
+        # Own members are normally excluded above because their pre-layout
+        # positions are stale; a pinned member's _members IS its final
+        # position, so the engine must avoid tiling onto it.
+        for _pid in pinned:
+            _pp = self._members.get(_pid)
+            if _pp is None:
+                continue
+            _pm = registry.get(_pid)
+            _psz = _pm._size_px if _pm is not None else self._size_px
+            occupied_centres.add((_pp.x() + _psz // 2, _pp.y() + _psz // 2))
 
         taken_slots: set[tuple[str, int]] = set()
         for mid in self._members:
@@ -4534,6 +4571,8 @@ class CellWindow(QMainWindow):
             m = registry.get(mid)
             if m is None:
                 continue
+            if mid in pinned:
+                continue  # a83: restored at remembered offset — don't re-tile
             if m._slot is None:
                 continue
             if m._floating_intent:
@@ -4557,6 +4596,8 @@ class CellWindow(QMainWindow):
             m = registry.get(mid)
             if m is None:
                 continue
+            if mid in pinned:
+                continue  # a83: restored at remembered offset — don't re-tile
             if m._slot is not None:
                 continue
             if m._floating_intent:
@@ -4619,18 +4660,84 @@ class CellWindow(QMainWindow):
             m = registry.get(mid)
             if m is None:
                 continue
+            if mid in pinned:
+                continue  # a83: restored at remembered offset — keep _members
 
             if m._slot is None:
                 # Floating — leave widget alone, just sync the
                 # _members map to the cell's owned pos.
                 if m._floating_intent:
                     self._members[mid] = QPoint(m.pos().x(), m.pos().y())
-                # If neither slot nor floating intent, the member
-                # is in limbo (no free slot was found).  Auto-hide.
+                # v0.8.0a85 — neither slot nor floating intent = LIMBO: Pass 1
+                # found no free slot where the whole cell fits on-screen.
+                # Pre-a85 we auto-hid the member (setVisible(False)) and relied
+                # on a LATER ``_compute_layout`` to slot it.  But if a docked
+                # sibling or a non-member cell docked into the cluster keeps the
+                # nearby slots occupied, no slot ever opens and the cell stays
+                # GONE with no way back short of a manual reflow — the
+                # user-reported "occasionally the cell docked to the forest just
+                # disappears" (always-on-top mode, where the auto-hide visibility
+                # manager isn't even involved).  Keep it VISIBLE at its current
+                # position instead, and leave ``_slot`` unassigned so the next
+                # pass tiles it the instant a slot frees up.  A visible
+                # (possibly slightly-overlapping) cell beats a vanished one, and
+                # for this forest (a handful of cells, never a genuinely
+                # over-full 18-slot ring) limbo is always a transient blocking
+                # failure, not real overflow.
+                #
+                # Gate on the cell being WHOLLY on-screen: only an on-screen
+                # limbo cell is kept visible (the user's case — a centred hub's
+                # directly-docked cell that momentarily can't grab a slot).  A
+                # limbo cell that is actually OFF-screen (a member dragged past
+                # the screen edge with no on-screen slot to rebind to) keeps the
+                # legitimate a74/a80 auto-hide — which also preserves the
+                # chaos-test invariant "no visible member fully off-screen".
                 else:
-                    self._auto_hidden.add(mid)
-                    if m.isVisible():
-                        m.setVisible(False)
+                    cur_tl = (m.pos().x(), m.pos().y())
+                    # Keep an on-screen limbo member VISIBLE only if it does NOT
+                    # overlap any already-placed cell or the hub.  Limbo is
+                    # entered precisely because the member's slots are blocked
+                    # (taken / off-screen / COLLIDING), so its current spot may
+                    # sit on top of a sibling or the hub — keeping it visible
+                    # there would re-admit the a67/a74 visible-overlap class.
+                    # Reuse the SAME polygon-SAT collision the slot engine uses
+                    # (``any_polygon_collides`` over ``occupied_centres``, which
+                    # already holds the hub centre + every Pass-1-slotted sibling
+                    # + external visible cells), so a kept-visible cell never
+                    # trips the chaos overlap invariant.  On overlap, fall back
+                    # to auto-hide — better hidden than overlapping.
+                    keep = is_on_screen(cur_tl, m._size_px, screen_rect, 1.0)
+                    if keep:
+                        from scriptree.shell import tiling as _tiling
+                        c_spec = _tiling.shape_from_legacy(
+                            m._shape, m._orientation,
+                        )
+                        ccx = cur_tl[0] + m._size_px / 2.0
+                        ccy = cur_tl[1] + m._size_px / 2.0
+                        others = [
+                            (c_spec, m._size_px, (float(ox), float(oy)))
+                            for ox, oy in occupied_centres
+                        ]
+                        if _tiling.any_polygon_collides(
+                            c_spec, m._size_px, (ccx, ccy), others, slop_px=0.5,
+                        ):
+                            keep = False
+                    if keep:
+                        if mid in self._auto_hidden:
+                            self._auto_hidden.discard(mid)
+                        if not m.isVisible():
+                            m.setVisible(True)
+                        self._members[mid] = QPoint(cur_tl[0], cur_tl[1])
+                        # Add to occupied_centres so a later limbo member in
+                        # this same pass sees this one as a collider.
+                        occupied_centres.add((
+                            cur_tl[0] + m._size_px // 2,
+                            cur_tl[1] + m._size_px // 2,
+                        ))
+                    else:
+                        self._auto_hidden.add(mid)
+                        if m.isVisible():
+                            m.setVisible(False)
                 continue
 
             tl = slot_world_pos(
@@ -7037,6 +7144,18 @@ class CellWindow(QMainWindow):
                 _log(
                     f"settle/relocate (drag-end) raised {exc!r}"
                 )
+
+            # v0.8.0a83 — REMEMBER where the user just dropped this cell
+            # (offset from its forest hub) so the arrangement is restored on
+            # expand / startup / screen-rescue.  Captured ONLY here — a real
+            # USER drag-end (this block is gated on ``was_dragging``) — never
+            # from a system relocation, so the remembered layout reflects user
+            # intent.  Runs AFTER the settle so the stored offset is the final
+            # non-overlapping resting position.
+            try:
+                self._capture_remembered_offset()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"capture remembered offset raised {exc!r}")
 
     def _single_leaf_path(self) -> str | None:
         """Return the absolute path of this cell's lone tool leaf, or
@@ -9527,6 +9646,155 @@ class CellWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             _log(f"_resolve_member_stacking: repack failed: {exc!r}")
 
+    def _capture_remembered_offset(self) -> None:
+        """Record where the USER just dropped THIS cell, as an offset from its
+        forest hub, into the hub's ``_remembered_offsets`` (v0.8.0a83).
+
+        Called only from ``mouseReleaseEvent`` at a real drag-end (the caller
+        gates on ``was_dragging``) — never from a system relocation — so the
+        remembered layout captures user intent, not a transient reflow/settle.
+
+        No-op unless this cell is a forest-cluster member: its
+        ``_group_master_id`` resolves to an ``_is_forest_master`` hub and it
+        carries a catalog path (the stable key).  The forest hub itself is
+        skipped — its members' offsets are hub-relative and are preserved by
+        the drag cascade, so moving the hub needs no re-capture.  Nested
+        ring-members (whose master is a ring, not the forest) are likewise
+        skipped — they belong to the ring's own ``.scriptreering`` layout.
+
+        Triggers the forest controller's debounced autosave so the new offset
+        persists to the ``.scriptreeforest`` (a pure member rearrange does not
+        otherwise mark the forest dirty — only a hub move does).
+        """
+        if getattr(self, "_is_forest_master", False):
+            return
+        mid = getattr(self, "_group_master_id", None)
+        if mid is None:
+            return
+        from scriptree.shell.cell_registry import CellRegistry
+
+        hub = CellRegistry.instance().get(mid)
+        if hub is None or not getattr(hub, "_is_forest_master", False):
+            return
+        key = _member_offset_key(self)
+        if key is None:
+            return
+        dx = self.pos().x() - hub.pos().x()
+        dy = self.pos().y() - hub.pos().y()
+        hub._remembered_offsets[key] = (dx, dy)
+        _log(f"remembered offset {self._id[:8]} -> ({dx},{dy})")
+        # Persist: nudge the forest controller's debounced autosave (250 ms).
+        try:
+            from scriptree.shell import ring_main as _rm
+            ctrl = getattr(_rm, "_FOREST_CONTROLLER", None)
+            if ctrl is not None:
+                ctrl.forestChanged.emit()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _restore_remembered_offsets(self, *, move: bool) -> set[str]:
+        """Place this hub's members at their REMEMBERED offset
+        (``_remembered_offsets``) when that spot is fully visible across ALL
+        monitors.  Returns the set of placed member ids — the caller passes
+        them as ``_compute_layout(pinned=...)`` so the engine tiles the
+        remainder AROUND them (v0.8.0a83).
+
+        This is the "keep the user's arrangement unless there's no room" half
+        of the remembered-layout feature:
+
+        * A member whose ``hub.pos() + remembered_offset`` is WHOLLY on-screen
+          (``_visible_area_on_any_screen`` — union of all monitors) is
+          restored to that spot.
+        * A member with no remembered offset, or an off-screen target, is LEFT
+          for the layout engine; its offset is RETAINED so it returns once
+          screen space allows.
+
+        ``move=True`` moves the widget there now (load / screen-rescue, where
+        there is no bloom animation).  ``move=False`` only writes the target
+        into ``_members[mid]`` (and un-folds it) — used by ``_start_expand``,
+        whose bloom animation then animates each member from the hub centre to
+        that target.  Floating members own their own position and are skipped.
+        Master-only; a no-op when there are no remembered offsets.
+        """
+        if (
+            self.role != "master"
+            or not self._remembered_offsets
+            or not self._members
+        ):
+            return set()
+        from scriptree.shell.cell_registry import CellRegistry
+
+        registry = CellRegistry.instance()
+        hub_x, hub_y = self.pos().x(), self.pos().y()
+        placed: set[str] = set()
+        # [bloom-diag a85] TEMPORARY instrumentation — find why a stacked cell
+        # isn't restored on bloom (the "second one up gets pushed out of
+        # alignment" report).  One line per member: key / has-offset / target /
+        # on-screen-gate / PINNED-or-SKIP.  Remove once diagnosed.
+        def _tail(s: object) -> str:
+            t = str(s)
+            return t[-44:] if len(t) > 44 else t
+        _log(
+            f"[bloom-diag] restore-start hub={self._id[:8]} pos=({hub_x},{hub_y}) "
+            f"move={move} members={len(self._members)} "
+            f"remembered_keys={len(self._remembered_offsets)}"
+        )
+        for mid in list(self._members.keys()):
+            m = registry.get(mid)
+            if m is None:
+                continue
+            if getattr(m, "_floating_intent", False):
+                _log(f"[bloom-diag]   {mid[:8]} SKIP floating")
+                continue  # owns its own position
+            key = _member_offset_key(m)
+            if key is None:
+                _log(
+                    f"[bloom-diag]   {mid[:8]} SKIP no-key "
+                    f"catalog={_tail(getattr(m, '_catalog_path', None))}"
+                )
+                continue
+            off = self._remembered_offsets.get(key)
+            if off is None:
+                _log(
+                    f"[bloom-diag]   {mid[:8]} SKIP no-offset key=...{_tail(key)}"
+                )
+                continue
+            tx, ty = hub_x + int(off[0]), hub_y + int(off[1])
+            sz = m._size_px
+            # Fully on-screen across ALL monitors?  Else leave for the engine
+            # (offset kept, so the cell returns to its spot when space allows).
+            vis = self._visible_area_on_any_screen(QRect(tx, ty, sz, sz))
+            if vis < sz * sz:
+                _log(
+                    f"[bloom-diag]   {mid[:8]} SKIP off-screen off={off} "
+                    f"target=({tx},{ty}) vis={vis} need={sz * sz} "
+                    f"key=...{_tail(key)}"
+                )
+                continue
+            self._members[mid] = QPoint(tx, ty)
+            self._auto_hidden.discard(mid)
+            if move:
+                prior = getattr(m, "_pos_anim", None)
+                if prior is not None:
+                    try:
+                        prior.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    m._pos_anim = None
+                m.move(tx, ty)
+                m.setVisible(True)
+            placed.add(mid)
+            _log(
+                f"[bloom-diag]   {mid[:8]} PINNED off={off} target=({tx},{ty}) "
+                f"key=...{_tail(key)}"
+            )
+        if placed:
+            _log(
+                f"_restore_remembered_offsets {self._id[:8]}: restored "
+                f"{len(placed)} member(s) to remembered offsets (move={move})"
+            )
+        return placed
+
     def _visible_area_on_any_screen(self, rect: QRect) -> int:
         """Total visible area (px²) of ``rect`` across ALL monitors — 0 if
         ``rect`` is off every screen.
@@ -10850,6 +11118,19 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
+            # [bloom-diag a85] TEMPORARY — where each cell sits at collapse-time
+            # (its stack position) + its remember-key, so we can compare against
+            # restore.  Remove once diagnosed.
+            try:
+                _ck = _member_offset_key(m)
+                _log(
+                    f"[bloom-diag] collapse-record {m._id[:8]} "
+                    f"pos=({m.pos().x()},{m.pos().y()}) "
+                    f"has_offset={(_ck in self._remembered_offsets) if _ck else False} "
+                    f"key=...{(str(_ck)[-44:]) if _ck else None}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
             # v0.6.20 — recursive cascade restored.  If this member
             # is itself a master with link-children (e.g. a ring
             # inside the forest), collapse it FIRST so its members
@@ -10972,13 +11253,47 @@ class CellWindow(QMainWindow):
             self.move(self._clamp_to_screen(self.pos()))
         except Exception as exc:  # noqa: BLE001
             _log(f"_start_expand: hub clamp raised {exc!r}")
+        # v0.8.0a83 — RESTORE the user's remembered arrangement first, then
+        # let the engine tile ONLY the remainder around the restored cells:
+        #
+        #   1. _restore_remembered_offsets(move=False): for each member whose
+        #      remembered offset from this hub is WHOLLY on-screen, write that
+        #      spot into _members[mid] (the bloom target).  Returns the placed
+        #      set; an off-screen member is skipped but KEEPS its offset (so it
+        #      returns to its spot once screen space allows).
+        #   2. Clear _slot only for members NOT restored, so the engine
+        #      re-derives a fresh free slot for them; restored members keep
+        #      their remembered _members target untouched.
+        #   3. _compute_layout(pinned=placed): the engine tiles the remainder,
+        #      treating each restored member's centre as occupied so it never
+        #      tiles onto one.  a74 full-fit / hub-centre-forbidden invariants
+        #      are preserved (no a68 overlap or off-screen regression).
+        # The bloom loop below then animates every member from the hub centre
+        # to its _members[mid] target (remembered for restored, engine for the
+        # rest).
+        placed = self._restore_remembered_offsets(move=False)
         for m in members:
+            if getattr(m, "_id", None) in placed:
+                continue
             if not getattr(m, "_floating_intent", False):
                 m._slot = None
         try:
-            self._compute_layout(instant=True)
+            self._compute_layout(instant=True, pinned=placed)
         except Exception as exc:  # noqa: BLE001
             _log(f"_start_expand: _compute_layout raised {exc!r}")
+        # [bloom-diag a85] TEMPORARY — post-engine bloom target per member:
+        # placed=True means restored to remembered spot; placed=False + a slot
+        # means the engine RE-TILED it (a diagonal honeycomb slot is the
+        # "pushed out of alignment" symptom).  Remove once diagnosed.
+        for _dm in members:
+            _dt = self._members.get(_dm._id)
+            _dcp = str(getattr(_dm, "_catalog_path", None))
+            _log(
+                f"[bloom-diag] post-engine {_dm._id[:8]} "
+                f"placed={_dm._id in placed} slot={getattr(_dm, '_slot', None)} "
+                f"target={(_dt.x(), _dt.y()) if _dt is not None else None} "
+                f"catalog={_dcp[-44:] if len(_dcp) > 44 else _dcp}"
+            )
 
         leaf_pending: list[str] = []
         for m in members:
@@ -10990,8 +11305,17 @@ class CellWindow(QMainWindow):
             # overlap").  Only the FALLBACK (a floating member, which
             # _compute_layout skips, or a member for which no free slot
             # was found) is clamped on-screen.
+            # a83 — a RESTORED (pinned) member must use its remembered target
+            # VERBATIM: _restore_remembered_offsets already proved that spot is
+            # wholly visible across ALL monitors, so it must never be run
+            # through the single-screen _clamp_to_screen (which would yank a
+            # seam-straddling / secondary-monitor member off its remembered
+            # position and could land it on an engine-tiled neighbour).  Gate
+            # the verbatim/no-clamp branch on membership in ``placed`` as well
+            # as on an engine slot (a74), since a freshly-restored member's
+            # _slot is None.
             target = self._members.get(m._id)
-            if target is not None and m._slot is not None:
+            if target is not None and (m._id in placed or m._slot is not None):
                 target = QPoint(target)
             else:
                 if target is None:
@@ -11961,6 +12285,28 @@ def _update_docked_to(a: CellWindow, b: CellWindow, registry) -> None:
     """
     a._docked_to.add(b._id)
     b._docked_to.add(a._id)
+
+
+def _member_offset_key(cell: "CellWindow") -> str | None:
+    """Stable per-cell key for a hub's ``_remembered_offsets`` dict
+    (v0.8.0a83): the cell's catalog/tree path, normalised (resolved, lower,
+    forward-slashes) the SAME way ``forest_controller._norm`` normalises
+    ``ForestItem.path`` / keys ``_spawned``.
+
+    Keying by PATH (not the runtime cell id, which regenerates every spawn)
+    is what lets a remembered offset persist in the ``.scriptreeforest`` and
+    rebind to whatever cell holds that tool/tree path next session.  Returns
+    ``None`` when the cell has no catalog path — such a cell is never
+    remembered and is always engine-tiled.
+    """
+    cp = getattr(cell, "_catalog_path", None)
+    if not cp:
+        return None
+    try:
+        from pathlib import Path as _P
+        return str(_P(cp).resolve()).lower().replace("\\", "/")
+    except (OSError, ValueError, RuntimeError):
+        return str(cp).lower().replace("\\", "/")
 
 
 def _check_undock(moved_hex: CellWindow) -> None:

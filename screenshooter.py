@@ -141,6 +141,17 @@ def _ensure_app() -> QApplication:
     """
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    # v0.8.0a88 — switch the tool runner into headless-capture mode so any
+    # ToolRunnerView we build skips the two things that block with no event
+    # loop / no user: the modal personal-config collision prompt and on-open
+    # choice providers (which shell out to SolidWorks/combridge and hang).
+    # This is the single chokepoint every render passes through before it
+    # constructs a widget, so setting it here covers cell/form/tree/tabs/etc.
+    try:
+        from scriptree.ui import tool_runner as _tr
+        _tr.HEADLESS_CAPTURE = True
+    except Exception:
+        pass  # tool_runner import failures surface later at build time
     return app
 
 
@@ -156,24 +167,52 @@ def _capture(
 ) -> None:
     """Render ``widget`` to a PNG at ``out_path``.
 
-    The widget MUST NOT be visible.  ``QWidget.grab()`` will fire
-    the necessary paint events synchronously; ``show()`` would
-    park a window on the user's desktop and defeat the whole point.
+    ## Why we use ``WA_DontShowOnScreen`` instead of a bare ``grab()``
 
-    We call ``adjustSize()`` + ``processEvents()`` a few times so
-    deferred layout settles before the grab — otherwise the first
-    capture on a fresh widget catches zero-size sub-widgets.
+    ``QWidget.grab()`` on an *unshown* top-level fires paint events
+    synchronously, but it does NOT run the full show/polish/layout
+    machinery.  For a plain widget that's fine.  For a widget with a
+    NESTED ``QTabWidget`` (e.g. the tool form's param-group tabs:
+    Input / Pipeline stages / BOM source / ...), the inner tab's
+    *current page* — a ``QStackedWidget`` page wrapped in a
+    ``QScrollArea`` — is only given its real geometry when the widget
+    is actually shown.  Grabbing unshown therefore caught the inner
+    page at zero size and produced an EMPTY current tab (the symptom:
+    a DXF-suite "Input" tab whose Assembly / Config / Output-dir
+    fields were missing while the outer chrome rendered fine).
+
+    The fix is the canonical Qt idiom: set
+    ``Qt.WA_DontShowOnScreen`` and then call ``show()``.  That drives
+    the complete show → polish → layout → resize cascade (so every
+    nested tab page lays out exactly as the user would see it) WITHOUT
+    ever parking a window on the user's desktop — which is the whole
+    point of the headless screenshooter.  We ``hide()`` again before
+    returning so nothing lingers in Qt's shown-window bookkeeping.
+
+    The widget should be UNSHOWN on entry.  ``adjustSize()`` +
+    ``processEvents()`` still run so deferred layout settles before
+    the grab — belt-and-suspenders on top of the off-screen show.
     """
     app = _ensure_app()
     # If the caller didn't size the widget themselves, ask Qt for
     # its size hint.  Safe to call on already-sized widgets.
     if widget.size().width() == 0 or widget.size().height() == 0:
         widget.adjustSize()
-    # Let Qt's event loop settle any deferred layout / sizing.
-    for _ in range(max(1, settle_ticks)):
-        app.processEvents()
 
-    pixmap: QPixmap = widget.grab()
+    # Drive the full layout cascade off-screen so nested tab pages /
+    # scroll areas get their real geometry (see docstring).  This is
+    # NOT a real on-screen show: WA_DontShowOnScreen keeps the window
+    # off every display while still exercising the show machinery.
+    widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    widget.show()
+    try:
+        # Let Qt's event loop settle any deferred layout / sizing.
+        for _ in range(max(1, settle_ticks)):
+            app.processEvents()
+
+        pixmap: QPixmap = widget.grab()
+    finally:
+        widget.hide()
     if pixmap.isNull():
         raise RuntimeError(
             f"_capture: grab() returned a null pixmap for "
@@ -187,8 +226,8 @@ def _capture(
         f"wrote {out_path} "
         f"({pixmap.width()}x{pixmap.height()} px)"
     )
-    # No show() was called, so no close() needed — Qt cleans up
-    # the unparented widget when it goes out of scope.
+    # The off-screen show()+hide() leaves nothing parked on a display;
+    # Qt cleans up the unparented widget when it goes out of scope.
 
 
 # ---------------------------------------------------------------------------

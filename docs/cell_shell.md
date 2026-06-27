@@ -644,6 +644,12 @@ Right-click any cell → **Tree Ring ▶ Auto-load on startup → For current us
 
 System-wide autostart (HKLM, all users) requires admin elevation — ScripTreeRing prompts via UAC when needed.
 
+### Forest login-autostart (v0.8.0a84)
+
+The **forest** has the same capability: right-click the forest hub → **Forest ▶ Auto-load on startup → For current user only / For all users**. This records the scope in `forest_preferences.json` (`autostart_scope`) and points the launch default at the currently-saved forest, so ScripTree starts in forest mode at login and loads exactly that forest. A transient (unsaved) forest is prompted to Save first; "all users" prompts for admin via UAC.
+
+Because ScripTree is single-instance, the ring and forest share **one** `Run` value per scope (named after the brand). A single chokepoint — `ring_io.recompute_autostart(scope)` — writes the combined command, adding `--forest` and/or `--autoload-rings` as configured (`"<exe>" -m scriptree.shell.ring_main --forest --autoload-rings`), so enabling forest autostart never clobbers ring autostart and vice-versa.
+
 ---
 
 ## CLI
@@ -655,8 +661,14 @@ run_scriptreering.bat --load-ring path/to/layout.scriptreering
 run_scriptreering.bat --autoload-rings
 run_scriptreering.bat --register-autostart-user path/to/layout.scriptreering
 run_scriptreering.bat --unregister-autostart user
+run_scriptreering.bat --forest          # start in forest mode (or set SCRIPTREE_FOREST_MODE=1)
+run_scriptreering.bat --register-forest-autostart-user path/to/forest.scriptreeforest    # (a84, elevated child)
+run_scriptreering.bat --register-forest-autostart-system path/to/forest.scriptreeforest  # (a84, elevated child)
+run_scriptreering.bat --unregister-forest-autostart-system                                # (a84, elevated child)
 run_scriptreering.bat --new-process     # opt out of single-instance handoff
 ```
+
+The `--register-forest-autostart-*` / `--unregister-forest-autostart-system` flags (a84) are normally invoked only by the UAC-elevated child that the forest's "Auto-load on startup" menu spawns — not typed by hand. They set `forest_preferences.json`'s `autostart_scope` and recompute the shared `Run` value.
 
 Positional `.scriptreering` paths and the `--load-ring` flag are equivalent — the positional form exists so a file association makes Explorer-double-click on a `.scriptreering` Just Work. Without `--new-process`, a second invocation hands off to the running primary instead of starting its own process.
 

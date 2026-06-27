@@ -595,6 +595,10 @@ class ForestController(QObject):
         for it in list(self.forest.items):
             self._spawn_item(it)
 
+        # v0.8.0a83 — load the saved remembered offsets into the hub BEFORE
+        # the canonical repack, so the repack restores the user's arrangement.
+        self._load_remembered_offsets_into_hub()
+
         # v0.6.14 — canonicalise every forest member's position at
         # startup so stale stored item.position values (from when
         # the forest was at a different location, or from a save
@@ -617,7 +621,14 @@ class ForestController(QObject):
                 # into place.  The previous 260 ms eased animation
                 # was the source of the "jumbled mess with spaces in
                 # between" report.
-                self.forest_window._repack_members(instant=True)
+                # v0.8.0a83 — restore the user's remembered arrangement first
+                # (cells whose remembered spot fits go there), then engine-tile
+                # only the remainder around them.  Falls back to pure canonical
+                # tiling when there are no remembered offsets (fresh forest).
+                _placed = self.forest_window._restore_remembered_offsets(
+                    move=True,
+                )
+                self.forest_window._compute_layout(instant=True, pinned=_placed)
                 # Recursive repack into rings.  The call above
                 # places the forest's direct members (rings + cells)
                 # at free slots around the hub, but each RING is
@@ -762,6 +773,43 @@ class ForestController(QObject):
         )
         forest_menu.addSeparator()
 
+        # v0.8.0a83 — Cell layout sub-submenu: Save / Load / Recent.  Saves
+        # the CURRENT arrangement (each cell's offset from the hub) to a named
+        # .scriptreelayout, and re-applies a saved one (reposition-existing-
+        # only: matching cells move to their saved spot, others stay put,
+        # entries with no matching cell are skipped).
+        layout_menu = QMenu("Cell layout", forest_menu)
+        layout_menu.setIcon(_bundled("forest"))
+        a_layout_save = layout_menu.addAction(
+            _std(_SP.SP_DialogSaveButton), "Save layout…",
+        )
+        a_layout_load = layout_menu.addAction(
+            _std(_SP.SP_DialogOpenButton), "Load layout…",
+        )
+        layout_menu.addSeparator()
+        recent_layout_menu = QMenu("Recent layouts", layout_menu)
+        recent_layout_menu.setIcon(_std(_SP.SP_FileDialogDetailedView))
+        try:
+            from pathlib import Path as _P
+            from scriptree.shell import recent_files as _rf
+            _recent_layouts = _rf.get_layouts()
+        except Exception:  # noqa: BLE001
+            _recent_layouts = []
+        if _recent_layouts:
+            for _lp in _recent_layouts:
+                _ra = recent_layout_menu.addAction(f"{_P(_lp).stem}  —  {_lp}")
+                _ra.triggered.connect(
+                    lambda _checked=False, p=_lp: self._apply_layout_from_path(p)
+                )
+        else:
+            _none = recent_layout_menu.addAction("(none)")
+            _none.setEnabled(False)
+        layout_menu.addMenu(recent_layout_menu)
+        a_layout_save.triggered.connect(self._on_save_layout)
+        a_layout_load.triggered.connect(self._on_load_layout)
+        forest_menu.addMenu(layout_menu)
+        forest_menu.addSeparator()
+
         # v0.8.0a52 -- Visibility sub-submenu with three checkable
         # actions.  Each toggle persists via ``update_preferences``
         # and re-applies live through the visibility manager.  The
@@ -850,6 +898,14 @@ class ForestController(QObject):
                 show_always_on_top=new_aot,
                 show_on_taskbar=new_tb,
                 show_in_system_tray=new_tr,
+                # a84: MUST carry the autostart scope through — omitting it
+                # defaults to "off", so a visibility toggle would silently
+                # reset forest login-autostart on disk while the Run-key still
+                # carries --forest (UI says Disabled but it still launches at
+                # login, with no cleanup path).  This was the #1 adversarial
+                # finding: every ForestPreferences(...) the user can reach must
+                # preserve every field it isn't deliberately changing.
+                autostart_scope=prefs_now.autostart_scope,
             )
             try:
                 self.update_preferences(new_prefs)
@@ -865,6 +921,54 @@ class ForestController(QObject):
             )
 
         forest_menu.addMenu(vis_menu)
+        forest_menu.addSeparator()
+
+        # ---- Auto-load on startup (v0.8.0a84) ----------------------------
+        # Forest analog of the tree-ring's "Auto-load on startup" submenu
+        # (cell_window.py).  Registers a Windows Run-key so ScripTree
+        # launches in forest mode at login and loads THIS forest.  Three
+        # mutually-exclusive states; only one carries a check at a time and
+        # the checks are rebuilt from prefs each time the menu opens.  The
+        # heavy lifting (save-first prompt, UAC elevation for system scope,
+        # the shared Run-key recompute) lives in ``_on_forest_autostart_set``.
+        autostart_menu = QMenu("Auto-load on startup", forest_menu)
+        autostart_menu.setIcon(_std(_SP.SP_BrowserReload))
+        _as_scope = prefs_now.autostart_scope
+
+        a_as_off = autostart_menu.addAction("Disabled")
+        a_as_off.setCheckable(True)
+        a_as_off.setChecked(_as_scope == "off")
+        a_as_off.setToolTip(
+            "Do not launch ScripTree automatically at Windows login."
+        )
+
+        a_as_user = autostart_menu.addAction("For current user only")
+        a_as_user.setCheckable(True)
+        a_as_user.setChecked(_as_scope == "user")
+        a_as_user.setToolTip(
+            "Launch ScripTree with this forest when the current user logs "
+            "in (a per-user Run-key — no admin required)."
+        )
+
+        a_as_sys = autostart_menu.addAction("For all users (requires admin)")
+        a_as_sys.setCheckable(True)
+        a_as_sys.setChecked(_as_scope == "system")
+        a_as_sys.setToolTip(
+            "Launch ScripTree with this forest for every user at login (an "
+            "all-users Run-key).  Prompts for administrator rights."
+        )
+
+        a_as_off.triggered.connect(
+            lambda _checked=False: self._on_forest_autostart_set("off")
+        )
+        a_as_user.triggered.connect(
+            lambda _checked=False: self._on_forest_autostart_set("user")
+        )
+        a_as_sys.triggered.connect(
+            lambda _checked=False: self._on_forest_autostart_set("system")
+        )
+
+        forest_menu.addMenu(autostart_menu)
         forest_menu.addSeparator()
 
         # v0.8.0a57 -- Debug sub-submenu.  Two items:
@@ -978,6 +1082,148 @@ class ForestController(QObject):
         # standard cell action.
         first = menu.actions()[0] if menu.actions() else None
         menu.insertMenu(first, forest_menu)
+
+    # ------------------------------------------------------------------
+    # Cell layout — Save / Load / apply (v0.8.0a83)
+    # ------------------------------------------------------------------
+
+    def _layouts_dir(self) -> Path:
+        """Default directory for ``.scriptreelayout`` files — a sibling of the
+        rings dir: ``<Documents>/<BRAND>/layouts/`` (created on demand)."""
+        from scriptree.shell.ring_io import _default_rings_dir
+
+        brand = (self._branding or {}).get("appName", "ScripTree")
+        d = _default_rings_dir(brand).parent / "layouts"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return d
+
+    def _on_save_layout(self) -> None:
+        """Capture the CURRENT cell arrangement (each forest member's offset
+        from the hub) and write it to a named ``.scriptreelayout``."""
+        from pathlib import Path as _P
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from scriptree.shell import recent_files as _rf
+        from scriptree.shell.cell_window import _member_offset_key
+        from scriptree.shell.layout_io import (
+            LayoutDef, LayoutEntry, save_layout,
+        )
+
+        hub = self.forest_window
+        if hub is None:
+            return
+        hub_pos = hub.pos()
+        entries: list[LayoutEntry] = []
+        for it in self.forest.items:
+            win = self._spawned.get(_norm(it.path))
+            if win is None:
+                continue
+            cp = getattr(win, "_catalog_path", None)
+            if not cp or _member_offset_key(win) is None:
+                continue  # no stable key -> can't be remembered/applied
+            entries.append(LayoutEntry(
+                catalog_path=str(cp),
+                rel_offset=(
+                    win.pos().x() - hub_pos.x(),
+                    win.pos().y() - hub_pos.y(),
+                ),
+                kind=it.kind,
+            ))
+        if not entries:
+            _log("save layout: no positionable cells")
+            return
+        chosen, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save cell layout as",
+            str(self._layouts_dir() / "layout.scriptreelayout"),
+            "ScripTree cell layouts (*.scriptreelayout);;All files (*)",
+        )
+        if not chosen:
+            return
+        p = _P(chosen)
+        if p.suffix.lower() != ".scriptreelayout":
+            p = p.with_suffix(".scriptreelayout")
+        try:
+            save_layout(LayoutDef(name=p.stem, entries=entries), p)
+            _rf.add_layout(str(p))
+            _log(f"saved cell layout: {p} ({len(entries)} cells)")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"save layout failed: {exc!r}")
+
+    def _on_load_layout(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        chosen, _ = QFileDialog.getOpenFileName(
+            None,
+            "Load cell layout",
+            str(self._layouts_dir()),
+            "ScripTree cell layouts (*.scriptreelayout);;All files (*)",
+        )
+        if chosen:
+            self._apply_layout_from_path(chosen)
+
+    def _apply_layout_from_path(self, path: str) -> None:
+        from scriptree.shell import recent_files as _rf
+        from scriptree.shell.layout_io import load_layout
+
+        try:
+            layout = load_layout(path)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"load layout failed ({path}): {exc!r}")
+            return
+        _rf.add_layout(path)
+        self._apply_layout(layout)
+
+    def _apply_layout(self, layout: Any) -> None:
+        """Reposition EXISTING forest cells to match ``layout`` (positions
+        only): cells matched by tool/tree path move to the saved offset; cells
+        not named in the layout stay put; entries with no matching cell are
+        skipped.  Never spawns or removes cells.
+        """
+        hub = self.forest_window
+        if hub is None:
+            return
+        from scriptree.shell.cell_window import _member_offset_key
+
+        # Index each spawned forest member by its offset key.
+        by_key: dict[str, Any] = {}
+        for it in self.forest.items:
+            win = self._spawned.get(_norm(it.path))
+            if win is None:
+                continue
+            k = _member_offset_key(win)
+            if k is not None:
+                by_key[k] = win
+
+        applied = 0
+        for entry in layout.entries:
+            ek = _norm(entry.catalog_path)
+            if ek not in by_key:
+                continue  # reposition-existing-only: skip unmatched entries
+            hub._remembered_offsets[ek] = (
+                int(entry.rel_offset[0]), int(entry.rel_offset[1]),
+            )
+            applied += 1
+        if applied == 0:
+            _log(
+                f"apply layout '{getattr(layout, 'name', '?')}': "
+                f"no matching cells in the current forest"
+            )
+            return
+        try:
+            placed = hub._restore_remembered_offsets(move=True)
+            hub._compute_layout(instant=True, pinned=placed)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"apply layout: restore/repack raised {exc!r}")
+        self.forestChanged.emit()
+        _log(
+            f"apply layout '{getattr(layout, 'name', '?')}': "
+            f"repositioned {applied} cell(s)"
+        )
 
     # ------------------------------------------------------------------
     # Item spawn
@@ -1910,6 +2156,10 @@ class ForestController(QObject):
     def open(self, path: str | Path) -> None:
         for it in list(self.forest.items):
             self._despawn_item(it)
+        # v0.8.0a83 — opening a DIFFERENT forest replaces the arrangement;
+        # drop the previous forest's remembered offsets before loading.
+        if self.forest_window is not None:
+            self.forest_window._remembered_offsets.clear()
         self.forest = load_forest(path)
         # v0.8.0a46+ -- do NOT stamp ``_derive_label(name)`` here;
         # see the matching note in ``__init__`` for the full
@@ -1919,9 +2169,48 @@ class ForestController(QObject):
         # ``_popup_header_text``).
         for it in list(self.forest.items):
             self._spawn_item(it)
+        # v0.8.0a83 — restore the opened forest's saved arrangement (remembered
+        # offsets), engine-tiling only the cells whose spot doesn't fit.
+        self._load_remembered_offsets_into_hub()
+        if self.forest_window is not None:
+            try:
+                _placed = self.forest_window._restore_remembered_offsets(
+                    move=True,
+                )
+                self.forest_window._compute_layout(instant=True, pinned=_placed)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"open: restore/repack raised {exc!r}")
         self.forestChanged.emit()
 
+    def _load_remembered_offsets_into_hub(self) -> None:
+        """Populate the forest hub's ``_remembered_offsets`` from the loaded
+        ``ForestItem.rel_offset`` values (v0.8.0a83), keyed by the SAME
+        per-cell key the hub uses (``_member_offset_key`` of the spawned
+        window), so a later ``_restore_remembered_offsets`` reproduces the
+        user's saved arrangement.  Inverse of ``_sync_positions_into_items``.
+        """
+        hub = self.forest_window
+        if hub is None:
+            return
+        from scriptree.shell.cell_window import _member_offset_key
+
+        for it in self.forest.items:
+            if it.rel_offset is None:
+                continue
+            win = self._spawned.get(_norm(it.path))
+            if win is None:
+                continue
+            key = _member_offset_key(win)
+            if key is not None:
+                hub._remembered_offsets[key] = (
+                    int(it.rel_offset[0]), int(it.rel_offset[1]),
+                )
+
     def _sync_positions_into_items(self) -> None:
+        from scriptree.shell.cell_window import _member_offset_key
+
+        hub = self.forest_window
+        offs = getattr(hub, "_remembered_offsets", {}) if hub is not None else {}
         for it in self.forest.items:
             win = self._spawned.get(_norm(it.path))
             if win is None:
@@ -1931,6 +2220,19 @@ class ForestController(QObject):
                 it.position = (pt.x(), pt.y())
             except Exception:  # noqa: BLE001
                 continue
+            # v0.8.0a83 — persist the REMEMBERED offset-from-hub (the user's
+            # arrangement) alongside the absolute position, keyed by the SAME
+            # per-cell key the hub's _remembered_offsets uses.  Only written
+            # when the hub actually holds an offset for this cell, so an item
+            # the user never placed keeps rel_offset=None (and the engine tiles
+            # it).
+            try:
+                key = _member_offset_key(win)
+                if key is not None and key in offs:
+                    ox, oy = offs[key]
+                    it.rel_offset = (int(ox), int(oy))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -2076,6 +2378,7 @@ class ForestController(QObject):
             show_always_on_top=self._preferences.show_always_on_top,
             show_on_taskbar=self._preferences.show_on_taskbar,
             show_in_system_tray=self._preferences.show_in_system_tray,
+            autostart_scope=self._preferences.autostart_scope,
         )
 
     def update_preferences(self, prefs: ForestPreferences) -> None:
@@ -2101,6 +2404,7 @@ class ForestController(QObject):
             show_always_on_top=prefs.show_always_on_top,
             show_on_taskbar=prefs.show_on_taskbar,
             show_in_system_tray=prefs.show_in_system_tray,
+            autostart_scope=prefs.autostart_scope,
         )
         # Apply visibility live so the user sees the result of
         # their toggle without restarting ScripTree.
@@ -2243,6 +2547,137 @@ class ForestController(QObject):
             f"<br>"
             f"File: {self.forest.loaded_from or '(unsaved)'}",
         )
+
+    # ------------------------------------------------------------------
+    # Login autostart (v0.8.0a84)
+    # ------------------------------------------------------------------
+
+    def _on_forest_autostart_set(self, scope: str) -> None:
+        """Handle "Auto-load on startup → <scope>" (a84).
+
+        Forest analog of the ring's ``_autoload_set_scope`` /
+        ``_autoload_disable``.  *scope* ∈ ``{"off","user","system"}``.
+
+        Admin / Run-key rules (the single Run-key value per scope is written by
+        ``ring_io.recompute_autostart``; HKLM writes need admin):
+          * ``"off"`` from system, not admin → drop HKLM via a UAC-elevated
+            child (``elevate_for_forest_autostart_disable_system``); else
+            ``disable_forest_autostart`` clears both scopes here.
+          * ``"user"`` / ``"system"`` → the forest must be SAVED (have a
+            ``loaded_from``) so the login ``--forest`` process has a real file;
+            prompt to Save-As if transient.
+          * ``"system"`` not admin → elevate (enable system).
+          * ``"user"`` coming FROM system, not admin → elevate (the HKLM drop
+            needs admin even though the HKCU add does not).
+          * otherwise write here via ``set_forest_autostart``.
+
+        The elevated child re-derives prefs from disk and owns the registry
+        write; the parent flips its cached scope optimistically so THIS
+        process's menu stays consistent until the next launch reloads prefs
+        (eventual consistency — same model the ring uses).
+        """
+        from pathlib import Path
+        from PySide6.QtWidgets import QMessageBox
+        from scriptree.shell.ring_io import (
+            _is_admin,
+            elevate_for_forest_autostart_system,
+            elevate_for_forest_autostart_user,
+            elevate_for_forest_autostart_disable_system,
+        )
+        from scriptree.shell.forest_io import (
+            set_forest_autostart, disable_forest_autostart, load_preferences,
+        )
+
+        if scope not in ("off", "user", "system"):
+            return
+        old_scope = self.get_preferences().autostart_scope
+        if scope == old_scope:
+            return  # re-selecting the active state — nothing to do
+
+        # ---- Disable ----------------------------------------------------
+        if scope == "off":
+            if old_scope == "system" and not _is_admin():
+                # Only flip the cached scope if the elevation actually
+                # LAUNCHED — a cancelled UAC prompt (ShellExecuteW ≤ 32 →
+                # False) wrote nothing, so flipping would make the menu lie
+                # until the next relaunch.
+                if elevate_for_forest_autostart_disable_system():
+                    self._optimistic_autostart_flip("off")
+                return
+            try:
+                disable_forest_autostart(self._branding)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"_on_forest_autostart_set(off): {exc!r}")
+                QMessageBox.warning(
+                    self.forest_window, "Auto-load on startup",
+                    f"Could not disable auto-load:\n{exc}",
+                )
+                return
+            self._preferences = load_preferences(self._branding)
+            return
+
+        # ---- Enable (user / system) — require a saved forest ------------
+        forest_path = self.forest.loaded_from
+        if not forest_path:
+            reply = QMessageBox.question(
+                self.forest_window, "Save required",
+                "Save this forest to a file first, then enable auto-load "
+                "on startup?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._on_save_as()
+                forest_path = self.forest.loaded_from
+            if not forest_path:
+                return  # cancelled or still unsaved
+
+        # ---- Elevation paths (HKLM writes need admin) -------------------
+        if scope == "system" and not _is_admin():
+            # Flip only if the elevation launched (UAC not cancelled).
+            if elevate_for_forest_autostart_system(Path(forest_path)):
+                self._optimistic_autostart_flip("system", str(forest_path))
+            return
+        if scope == "user" and old_scope == "system" and not _is_admin():
+            if elevate_for_forest_autostart_user(Path(forest_path)):
+                self._optimistic_autostart_flip("user", str(forest_path))
+            return
+
+        # ---- Write here (user, or system-with-admin) --------------------
+        try:
+            set_forest_autostart(scope, self._branding, forest_path=str(forest_path))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_forest_autostart_set({scope}): {exc!r}")
+            QMessageBox.warning(
+                self.forest_window, "Auto-load on startup",
+                f"Could not enable auto-load:\n{exc}",
+            )
+            return
+        self._preferences = load_preferences(self._branding)
+
+    def _optimistic_autostart_flip(self, scope: str, forest_path: str | None = None) -> None:
+        """Flip the CACHED autostart fields without touching disk/registry.
+
+        Used after handing a registry change to a UAC-elevated child: the child
+        owns the disk + Run-key write, but this (unelevated) process can't read
+        its result synchronously, so we update only the in-memory cache to keep
+        the menu checkmarks consistent.  The next launch reloads prefs from disk
+        (written by the child), reconciling any drift.  Deliberately does NOT
+        call ``update_preferences`` / ``save_preferences`` — that would race the
+        child and try to recompute the Run-key from an unelevated process.
+
+        For an ENABLE flip we also mirror the ``default_forest_path`` +
+        ``fallback_to_default`` the child will write, so that if the user
+        immediately clicks Save (which DOES persist the cache via
+        ``update_preferences``) the parent's write stays consistent with the
+        child's instead of clobbering the configured forest path.
+        """
+        prefs = self.get_preferences()  # a copy
+        prefs.autostart_scope = scope if scope in ("off", "user", "system") else "off"
+        if scope in ("user", "system") and forest_path:
+            from pathlib import Path
+            prefs.default_forest_path = str(Path(forest_path).expanduser().resolve())
+            prefs.fallback_to_default = True
+        self._preferences = prefs
 
     # ------------------------------------------------------------------
     # Dialog stubs

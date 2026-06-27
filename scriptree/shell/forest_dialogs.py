@@ -78,6 +78,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -713,6 +714,65 @@ class ForestSettingsDialog(QDialog):
                 self._prefs_path_edit.setText(target)
         self._prefs_path_browse.clicked.connect(_browse_default_path)
 
+        # ── Auto-load on startup (v0.8.0a84) ──────────────────────
+        # Thin reflection of the forest cell's "Auto-load on startup"
+        # submenu so the same capability is reachable from settings.
+        # The combo applies LIVE through the controller handler (which
+        # owns the save-first prompt + UAC elevation + the shared
+        # Run-key recompute) — NOT through ``_save`` — then we re-sync
+        # the combo to the controller's resulting state so a refused /
+        # cancelled change (e.g. an unsaved forest, or a declined UAC
+        # prompt) does not leave the widget showing a lie.
+        autostart_box = QGroupBox("Auto-load on startup (Windows login)")
+        al = QVBoxLayout(autostart_box)
+        al.addWidget(QLabel(
+            "Launch ScripTree with this forest automatically when Windows "
+            "starts.  'For all users' requires administrator rights."
+        ))
+        self._autostart_combo = QComboBox()
+        # (label, scope) — index order is fixed; we map via _idx_for_scope.
+        self._autostart_combo.addItem("Disabled", "off")
+        self._autostart_combo.addItem("For current user only", "user")
+        self._autostart_combo.addItem("For all users (requires admin)", "system")
+
+        def _idx_for_scope(scope: str) -> int:
+            return {"off": 0, "user": 1, "system": 2}.get(scope, 0)
+
+        # Seed from current prefs WITHOUT firing the live-apply handler.
+        self._autostart_combo.blockSignals(True)
+        self._autostart_combo.setCurrentIndex(_idx_for_scope(prefs.autostart_scope))
+        self._autostart_combo.blockSignals(False)
+        al.addWidget(self._autostart_combo)
+        layout.addWidget(autostart_box)
+
+        def _on_autostart_combo_changed(_idx: int) -> None:
+            scope = self._autostart_combo.currentData() or "off"
+            try:
+                self._controller._on_forest_autostart_set(scope)
+            except Exception as exc:  # noqa: BLE001
+                from scriptree.shell.forest_controller import _log
+                _log(f"settings: _on_forest_autostart_set failed: {exc!r}")
+            # Re-sync to the controller's resulting state (handles cancel /
+            # refusal / elevation-pending optimistic flip).
+            resulting = self._controller.get_preferences()
+            self._autostart_combo.blockSignals(True)
+            self._autostart_combo.setCurrentIndex(_idx_for_scope(resulting.autostart_scope))
+            self._autostart_combo.blockSignals(False)
+            # a84 (adversarial finding #2): enabling autostart REWROTE
+            # ``default_forest_path`` + ``fallback_to_default`` on disk + in the
+            # controller cache (``set_forest_autostart``).  The Launch-defaults
+            # widgets were seeded once at construction and would otherwise still
+            # show the stale/empty values — so a subsequent Save would write
+            # those back and clobber the forest path autostart just configured.
+            # Refresh them from the fresh prefs so the dialog stays truthful and
+            # Save is consistent with what autostart set.
+            self._prefs_fallback_cb.blockSignals(True)
+            self._prefs_fallback_cb.setChecked(resulting.fallback_to_default)
+            self._prefs_fallback_cb.blockSignals(False)
+            self._prefs_path_edit.setText(resulting.default_forest_path)
+            _sync_prefs_enable()
+        self._autostart_combo.currentIndexChanged.connect(_on_autostart_combo_changed)
+
         # Three buttons: Save (just save), Run (save + run discovery
         # immediately), Cancel.  Run is what the user asked for —
         # so the settings dialog can also kick off a discovery pass
@@ -765,6 +825,12 @@ class ForestSettingsDialog(QDialog):
             show_always_on_top=self._vis_aot_cb.isChecked(),
             show_on_taskbar=self._vis_taskbar_cb.isChecked(),
             show_in_system_tray=self._vis_tray_cb.isChecked(),
+            # a84: the autostart combo applies LIVE via the controller (with
+            # its save-first / UAC / Run-key logic), so the dialog's own Save
+            # must NOT recompute it — just carry the controller's current
+            # value through, or this constructor would silently reset it to
+            # "off" on every Save.
+            autostart_scope=self._controller.get_preferences().autostart_scope,
         )
         try:
             self._controller.update_preferences(new_prefs)

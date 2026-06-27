@@ -171,7 +171,7 @@ shell/   →   ui/   →   core/
 | Launcher | Entry point | What runs |
 |---|---|---|
 | `run_scriptree.bat` | `scriptree/main.py` (`scriptree.main:main`) | V1 — the editor / runner. Argparse CLI: `[file] [-standalone] [-configuration NAME]`. |
-| `run_scriptreering.bat` | `scriptree/shell/ring_main.py` (`scriptree.shell.ring_main:main`) | V3 — the cell shell. CLI: positional `.scriptreering` paths, `--load-ring`, `--autoload-rings`, `--register-autostart-{user,system}`, `--unregister-autostart {user,system}`, `--new-process`. |
+| `run_scriptreering.bat` | `scriptree/shell/ring_main.py` (`scriptree.shell.ring_main:main`) | V3 — the cell shell. CLI: positional `.scriptreering` paths, `--load-ring`, `--autoload-rings`, `--register-autostart-{user,system}`, `--unregister-autostart {user,system}`, `--forest`, and (a84) the forest login-autostart elevation flags `--register-forest-autostart-{user,system} <forest-path>` / `--unregister-forest-autostart-system`, `--new-process`. |
 
 Both launchers live in the same install. Users typically run the
 shell. Clicking a tool inside the shell shells out to the V1 launcher

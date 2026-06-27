@@ -77,6 +77,12 @@ from ..core.io import load_tool, load_tree
 from ..core.model import ToolDef, TreeDef, TreeNode
 
 
+def _log(msg: str) -> None:
+    """Print to stderr (captured by verbose logging when enabled)."""
+    import sys
+    print(f"[standalone_window] {msg}", file=sys.stderr)
+
+
 # Same feature set the main editor uses, kept consistent so a user
 # moving between the editor and a standalone window doesn't get
 # subtly different dock behaviour.  No DockWidgetClosable — the
@@ -316,6 +322,18 @@ class StandaloneWindow(QMainWindow):
 
         # Persist layout key for save/restore.
         win._layout_key = _standalone_settings_key(tool.name)  # type: ignore[attr-defined]
+        # v0.8.0a87 — snapshot the freshly-built DEFAULT dock arrangement BEFORE
+        # restoring any saved layout, so "Reset layout" (View menu) can return to
+        # it even when a stale/degenerate saved layout (e.g. all three docks
+        # collapsed into one tabbed area) was persisted.
+        try:
+            win._default_layout_state = dock_manager.saveState()  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            win._default_layout_state = None  # type: ignore[attr-defined]
+            _log(f"from_tool: default-layout snapshot failed: {exc!r}")
+        # The single-tool dock window otherwise has no menu bar; add a minimal
+        # View ▸ Reset layout so the user can recover a merged/rearranged layout.
+        win._build_layout_menu()
         win._restore_layout()
 
         # Listen for visibility changes from the runner so a config
@@ -551,6 +569,58 @@ class StandaloneWindow(QMainWindow):
                 dm.restoreState(blob)
         except Exception:  # noqa: BLE001 — never let restore break open
             pass
+
+    def _build_layout_menu(self) -> None:
+        """Add a minimal ``View`` menu with a ``Reset layout`` action to the
+        single-tool dock window (v0.8.0a87).
+
+        The single-tool window otherwise has no menu bar (tree mode builds its
+        own).  ``Reset layout`` restores the default dock arrangement captured
+        at construction — the recovery path for a saved layout that got the
+        three docks (Form / Output / Run controls) merged or rearranged.
+        """
+        from PySide6.QtGui import QAction
+        try:
+            mb = self.menuBar()
+            view_menu = mb.addMenu("&View")
+            act_reset = QAction("Reset layout", self)
+            act_reset.setToolTip(
+                "Restore the Form / Output / Run-controls docks to their "
+                "default arrangement (use if the panels got merged or "
+                "rearranged)."
+            )
+            act_reset.triggered.connect(self.reset_layout)
+            view_menu.addAction(act_reset)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_build_layout_menu: {exc!r}")
+
+    def reset_layout(self) -> None:
+        """Restore the dock layout to the default snapshot taken at
+        construction (v0.8.0a87).
+
+        Live recovery for a merged/rearranged or stale-restored layout.  The
+        snapshot is the pristine default built by ``from_tool`` before any saved
+        layout was applied, so restoring it un-merges the docks immediately; the
+        subsequent close-time ``_save_layout`` then persists that clean default,
+        overwriting the bad saved blob.
+        """
+        dm = getattr(self, "_dock_manager", None)
+        state = getattr(self, "_default_layout_state", None)
+        if dm is None or not state:
+            _log("reset_layout: no dock manager / default snapshot — no-op")
+            return
+        try:
+            dm.restoreState(state)
+            _log("reset_layout: restored default dock arrangement")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"reset_layout: restoreState failed: {exc!r}")
+            return
+        # Persist immediately so the clean default survives even if the window
+        # is killed before a normal close-time save.
+        try:
+            self._save_layout()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"reset_layout: save failed: {exc!r}")
 
     def _save_layout(self) -> None:
         """Persist the current QtAds layout under the per-tool key

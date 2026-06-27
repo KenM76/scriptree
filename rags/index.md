@@ -416,6 +416,18 @@ gives the per-topic slice.
   reflow was the WRONG fix (reverted a78). 3 regression tests in
   test_chaos_movement.py.
   → `rags/lessons/live_edge_reflow_races_rigid_drag.md`
+- [v3-architecture] **remembered_cell_layout_feature** (a83, pending release):
+  the forest hub remembers each cell's offset-from-hub as the user drops it
+  (captured at user drag-end only, gated on was_dragging) and restores it on
+  expand/startup/screen-rescue, engine-tiling only cells whose spot is
+  off-screen. New CellWindow._remembered_offsets (keyed by _member_offset_key =
+  normalised _catalog_path), _restore_remembered_offsets, _compute_layout(pinned=),
+  ForestItem.rel_offset persistence, .scriptreelayout (layout_io) + Cell-layout
+  Save/Load/Recent menu (reposition-existing-only). KEY GOTCHA: _start_expand's
+  verbatim bloom branch must gate on `m._id in placed`, not `_slot is not None`,
+  or a restored seam-straddling/secondary-monitor member (whose _slot is None
+  post-load) gets single-screen-clamped off its spot (caught by adversarial
+  verify). → `rags/lessons/remembered_cell_layout_a83.md`
 - [v3-architecture] **forest_cluster_multidisplay_and_reflow_undock_fixes** (a80,
   pending release): three fixes for a multi-monitor user report. (A) the live reflow's
   relocation fired _check_undock OUTSIDE the _GROUP_MOVE_IN_PROGRESS guard and ejected a
@@ -496,3 +508,58 @@ gives the per-topic slice.
   — clamping them independently stacks them at the same screen edge.
   Fix (a72).
   → `rags/lessons/group_aware_rescue_repack.md`
+- [v3-architecture] **forest_login_autostart**: the forest gained the
+  tree-ring's "Auto-load on startup" (Windows Run-key) — single
+  configured forest, 3 scopes. ScripTree is single-instance, so ring +
+  forest SHARE one Run-key value per scope, written by the unified
+  chokepoint `ring_io.recompute_autostart` (combines `--forest` /
+  `--autoload-rings`; ring-only path byte-identical to pre-a84). Three
+  gotchas: (1) every `ForestPreferences(` copy-constructor must carry a
+  new field or it silently resets (6 sites — `_on_visibility_toggle`
+  was the miss); (2) `disable_forest_autostart` must recompute ONLY the
+  old scope — recomputing "system" unelevated raises PermissionError on
+  the HKLM admin check; (3) the `runas` elevate helpers must return
+  `ret > 32` and the caller flip the cached scope only on True, else a
+  UAC-cancel makes the menu lie. Fix (a84).
+  → `rags/lessons/forest_login_autostart_a84.md`
+- [v3-architecture] **forest_cells_left_behind**: TWO independent "cells
+  left on the desktop" bugs. (A) the forest auto-hide walk
+  `_forest_descendants` followed only the LINK graph (`_members`) and
+  recursed only into masters, so a ring docked to the forest "purely
+  spatially" via Case M1 (`hub._dock_children_by_edge`, never a member)
+  was never hidden → fix: walk the DOCK graph too, recurse every node,
+  dedupe via `seen`. (B) `_compute_layout` Pass 2 auto-hid an unslottable
+  member (LIMBO, `nearest_free_slot`→None at full-fit) and only a later
+  pass un-hid it → fix: keep an on-screen limbo member visible. Gotcha
+  (adversarial-caught): keep-visible MUST collision-check via
+  `tiling.any_polygon_collides` over `occupied_centres` (limbo is entered
+  *because* slots collide), else it re-admits the a67/a74 visible-overlap
+  class. Fix (a85).
+  → `rags/lessons/forest_leftbehind_hide_walk_and_limbo_a85.md`
+- [pyside6] **draggable_qmenu_popup_gotchas**: making a QMenu draggable
+  failed 3× and was abandoned (a86, reverted a87). A QMenu popup does NOT
+  call your overridden `mouseMoveEvent` during a held-button drag (the
+  popup grab routes moves through QMenuPrivate) — overriding it to
+  `self.move()` the popup silently no-ops; the only fix is an explicit
+  `grabMouse()` (fragile in a popup). Direct-handler unit tests
+  (synthetic QMouseEvent → `menu.mouseMoveEvent(ev)`) pass while the real
+  feature fails — they test math, not popup delivery. A designated handle
+  row is undiscoverable AND a menu opening near the screen bottom grows
+  UPWARD so the cursor lands far from a top handle. `int(Qt.MouseButton)`
+  raises in PySide6 (log the enum, not int()), and a broad except hid it.
+  Meta: time-box Qt-internals fights; pivot to a simpler affordance.
+  → `rags/lessons/draggable_qmenu_popup_gotchas.md`
+- [pyside6] **screenshooter_headless_capture**: the headless screenshooter hung
+  on tools with a personal-config sidecar collision or an on-open provider —
+  `ToolRunnerView.__init__` blocks on `PersonalConfigCollisionDialog.exec()`
+  (nested modal loop, no event loop) and `_run_provider` (subprocess, e.g.
+  SolidWorks/combridge). Fix: a `tool_runner.HEADLESS_CAPTURE` module flag set
+  by the screenshooter in `_ensure_app` (the chokepoint before any widget is
+  built); the collision method returns at the prompt (→ default config) and
+  `_run_provider` returns at its top. Second defect: `grab()` on an UNSHOWN
+  top-level skips the full show/layout cascade, so a nested `QTabWidget`'s
+  current page (the param-group tabs) renders EMPTY; fix is the canonical
+  `WA_DontShowOnScreen` + `show()` in `_capture` (off-screen but fully laid
+  out). Test-isolation: `test_screenshooter.py` runs the shooter as a
+  SUBPROCESS so the global never leaks; in-process tests must save/restore it.
+  a88. → `rags/lessons/screenshooter_headless_capture_a88.md`
