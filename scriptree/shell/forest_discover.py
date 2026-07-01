@@ -213,6 +213,26 @@ def _emit_for_dir(
     return [], False
 
 
+#: Directory basenames the walker never descends into.  ``_groups`` is the
+#: synthesised-category-tree output dir — ``categorize.group_by_category``
+#: writes ``default_personal_root()/_groups/<Top>.scriptreetree``, and that dir
+#: sits UNDER the personal-apps scan root.  Without this skip the walker
+#: re-ingests its OWN synthesised output as input, which (a) makes the next
+#: group pass see an "existing" ``MSOffice`` tree and emit a duplicate
+#: ``MSOffice__auto.scriptreetree`` (``_pick_filename`` collision avoidance),
+#: and (b) can produce a circular reference when one synthesised tree is
+#: discovered as a member of another.  v0.8.0a98 — the lasting fix for the
+#: reorganize duplicate/circular bug.  (``_existing_tree_names`` in
+#: ``forest_controller`` excludes ``_groups`` the same way.)
+_SKIP_DIR_NAMES = frozenset({"_groups"})
+
+
+def _is_skipped_dir(name: str) -> bool:
+    """True for dirs the walker must not enter: dotfiles + the synthesised
+    ``_groups`` output dir."""
+    return name.startswith(".") or name in _SKIP_DIR_NAMES
+
+
 def _walk(
     root: Path,
     include: set[ItemKind],
@@ -233,8 +253,8 @@ def _walk(
         d, depth = stack.pop()
         if depth > max_depth:
             continue
-        # Skip hidden dirs (dotfiles).
-        if d.name.startswith(".") and d != root:
+        # Skip hidden dirs (dotfiles) + the synthesised ``_groups`` output dir.
+        if _is_skipped_dir(d.name) and d != root:
             continue
 
         emitted, stop = _emit_for_dir(d, include, excluded_norm)
@@ -246,7 +266,7 @@ def _walk(
         # No priority match — recurse into subdirectories.
         try:
             for sub in d.iterdir():
-                if sub.is_dir() and not sub.name.startswith("."):
+                if sub.is_dir() and not _is_skipped_dir(sub.name):
                     stack.append((sub, depth + 1))
         except OSError:
             continue

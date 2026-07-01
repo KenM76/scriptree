@@ -3,6 +3,12 @@
 A tree-of-tools launcher. Leaves reference `.scriptree` files; interior
 nodes are named folders.
 
+> **Organizing & field order:** for *where* this tree belongs (the `category`
+> taxonomy + the on-disk folder convention that mirrors it) and the recommended
+> JSON **field order** (`category` near the top, `nodes` dead last so a
+> hand-editor can `Ctrl+End` to it), see
+> [`category_authoring.md`](category_authoring.md).
+
 > **Schema version — single source of truth**
 >
 > The current `schema_version` value is the `SCHEMA_VERSION`
@@ -131,6 +137,55 @@ in the IDE tree is:
 
 Standalone mode skips subtree leaves entirely — flatten the referenced
 tree's leaves into the parent, or open each nested tree separately.
+
+### Editing a subtree in place (write-back) — v0.8.0a103
+
+In the developer editor a subtree leaf is **expandable**: clicking the
+disclosure triangle loads the referenced `.scriptreetree`'s nodes as
+children (resolved relative to *that* file's directory, not the parent's).
+As of **v0.8.0a103** those children are **editable in place** — you can
+drag a `.scriptree` tool INTO the subtree row (internal drag, or an
+external Explorer drop directly onto the row), remove a child, or rename a
+folder inside it. The subtree row is a legal **drop target** (it gains
+`ItemIsDropEnabled`) but its *label* is still read-only (the label comes
+from the referenced file's `name`/`display_name`).
+
+On **Save**, the editor performs a two-part write:
+
+1. The tree you opened is saved normally. The subtree is recorded in it as
+   a **single one-line leaf reference** — its expanded children are NOT
+   inlined/flattened into the parent (that would corrupt provenance; see
+   the forest-view rule). This is the job of `_item_to_node`, which
+   serialises a subtree row as a leaf, never recursing into its children.
+2. For **each** expanded subtree whose contents now differ from its file,
+   the editor rewrites **that referenced file's** `nodes` — preserving
+   every top-level metadata field (it re-loads the file and replaces only
+   `nodes`, the same discipline `_build_tree_def` uses for the parent),
+   with the children's leaf paths relativised against the **subtree's own**
+   directory (so a tool living beside `kit.scriptreetree` is stored as
+   `./tool.scriptree`, not a path relative to the parent tree).
+
+Guards that make this safe (a subtree is **left untouched** when any
+applies):
+
+* **Did not expand cleanly.** A circular reference or a load error marks
+  the row "not write-back-eligible", so its partial/stub view is never
+  written back. (The internal expand-cycle guard still shows
+  `(circular reference)`.)
+* **Synthesised auto-group (`_groups/…`).** Those files are *regenerated*
+  from each tool's `category` field (see `category_authoring.md`); writing
+  them directly is futile. Re-filing tools among such a group's folders is
+  handled by the **drag-to-recategorize** path (which rewrites tool
+  categories), not by this subtree write-back.
+* **Unchanged.** If the expanded children round-trip to exactly the file's
+  existing `nodes`, nothing is written — a plain Save of an unedited tree
+  never churns its subtree files' timestamps.
+
+Note that `_item_to_node` records only `type`/`name`/`children` for a
+folder (no folder-level icon/`display_name`). Real authored subtree
+folders carry no such metadata, so the round-trip is exact; a subtree that
+hand-authored folder icons would lose them if edited through the editor —
+the same limitation the parent-tree save has always had.
 
 ## Path resolution
 

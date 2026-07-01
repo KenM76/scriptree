@@ -205,8 +205,7 @@ def _inject_vendored_libs():
     # ``_socket.pyd``, ``libffi-8.dll`` etc. live.  Stripping it
     # makes ``import ctypes`` fail with
     # ``ModuleNotFoundError: No module named '_ctypes'``, which in
-    # turn makes the entire ``win_virtual_desktops`` follow-the-user
-    # logic silently no-op.  See the lesson at
+    # turn breaks any ctypes-dependent feature.  See the lesson at
     # ``rags/lessons/embed_python_sitepackages_strip_kills_ctypes.md``.
     bundled_home = None
     try:

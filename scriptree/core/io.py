@@ -67,67 +67,50 @@ from .model import (
 # --- ToolDef (.scriptree) --------------------------------------------------
 
 def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
+    # FIELD ORDER (v0.8.0a91, canonical for hand-editing): the gradient runs
+    # stable-at-top -> most-edited-at-bottom, so a person editing the JSON by
+    # hand can Ctrl+End straight to THE FORM (``argument_template`` +
+    # ``params``) — the block they tweak most while iterating a tool.
+    # ``category`` is lifted near the top (it answers "where does this
+    # belong?", set once).  See ``docs/LLM/category_authoring.md`` →
+    # "Recommended field order".
+    #
+    # Key order is COSMETIC: the loader is order-independent and the round-trip
+    # tests compare dicts (order-agnostic).  What preserves byte-identity is
+    # the omit-when-empty rule — every conditional below still honours it, so
+    # re-saving a file only ever changes key ORDER (a semantic no-op), never
+    # adds/removes keys.
     d: dict[str, Any] = {
         "schema_version": tool.schema_version,
         "name": tool.name,
-        "description": tool.description,
-        "executable": tool.executable,
-        "working_directory": tool.working_directory,
-        "argument_template": [
-            list(entry) if isinstance(entry, list) else entry
-            for entry in tool.argument_template
-        ],
-        "params": [_param_to_dict(p) for p in tool.params],
-        "source": {
-            "mode": tool.source.mode,
-            "help_text_cached": tool.source.help_text_cached,
-        },
     }
-    # Sections are only emitted when non-empty, so a legacy flat tool
-    # round-trips into the same compact JSON it was loaded from.
-    # Each section carries its own ``layout`` field; the old tool-level
-    # ``section_layout`` is no longer written.
-    if tool.sections:
-        sec_list: list[dict[str, Any]] = []
-        for s in tool.sections:
-            sd: dict[str, Any] = {"name": s.name, "collapsed": s.collapsed}
-            if s.layout != "collapse":
-                sd["layout"] = s.layout
-            sec_list.append(sd)
-        d["sections"] = sec_list
-    # Env + path_prepend are only emitted when non-empty — same compact-
-    # round-trip rule as sections. Legacy v1/v2 files without these
-    # fields load cleanly with empty defaults.
+    # --- identity & placement (set once) ---
+    # v0.8.0a25+ category taxonomy.  Omitted when empty so legacy tools
+    # round-trip byte-identical.
+    if tool.category:
+        d["category"] = tool.category
+    d["description"] = tool.description
+
+    # --- the command (rarely edited) ---
+    d["executable"] = tool.executable
+    d["working_directory"] = tool.working_directory
+    # Env + path_prepend emitted only when non-empty; legacy files without
+    # them load cleanly with empty defaults.
     if tool.env:
         d["env"] = dict(tool.env)
     if tool.path_prepend:
         d["path_prepend"] = list(tool.path_prepend)
-    if tool.menus:
-        d["menus"] = [_menu_item_to_dict(m) for m in tool.menus]
-    # Action buttons (V3 v0.8.0a11+).  Same compactness rule as
-    # ``menus`` -- omitted entirely when no actions are declared so
-    # every legacy ``.scriptree`` round-trips byte-identical.
-    if tool.actions:
-        d["actions"] = [_action_to_dict(a) for a in tool.actions]
-    # v0.8.0a22+ — per-OS overrides.  Same compactness rule as
-    # ``actions`` / ``menus``: the block is omitted entirely when
-    # ``tool.platforms`` is empty, preserving byte-identical
-    # round-trip for every legacy ``.scriptree`` written before
-    # this feature.  Each individual override entry's own
-    # serialiser further skips fields that aren't actively
-    # overriding the default, so a "supported but identical"
-    # entry shows up as ``{}`` (vs an omitted key, which means
-    # "no explicit support claim").
+    # v0.8.0a22+ per-OS overrides.  Omitted entirely when empty (each entry's
+    # own serialiser further skips non-overriding fields).
     if tool.platforms:
         d["platforms"] = _platforms_to_dict(tool.platforms)
-    # v0.8.0a25+ category taxonomy.  Omitted from the JSON when
-    # empty so legacy tools round-trip byte-identical.
-    if tool.category:
-        d["category"] = tool.category
-    # Cell-shell visual settings (V3, optional).  Each emitted only
-    # when set so legacy tools round-trip byte-identical.  A "cell"
-    # sub-object groups them so the top-level ToolDef JSON stays
-    # uncluttered for the common case where no cell metadata exists.
+    # Interactive stdin (V3 v0.3.0) — emitted only when True.
+    if tool.interactive:
+        d["interactive"] = True
+
+    # --- cell appearance (cosmetic, set once) ---
+    # A "cell" sub-object groups the visual settings, each emitted only when
+    # set so legacy tools round-trip byte-identical.
     cell_d: dict[str, Any] = {}
     if tool.cell_icon:
         cell_d["icon"] = tool.cell_icon
@@ -141,12 +124,10 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         cell_d["icon_scale"] = float(tool.cell_icon_scale)
     if tool.cell_label_opacity != 1.0:
         cell_d["label_opacity"] = float(tool.cell_label_opacity)
-    # Superimpose text over icon (V3 v0.6.9+).  Emitted only when
-    # True so pre-v0.6.9 catalogs round-trip byte-identical.
+    # Superimpose text over icon (V3 v0.6.9+).  Emitted only when True.
     if tool.cell_text_over_icon:
         cell_d["text_over_icon"] = True
-    # Cell click action (V3 v0.3.5+).  Emitted only when off the
-    # default ("menu") so legacy tools round-trip byte-identical.
+    # Cell click action (V3 v0.3.5+).  Emitted only when off the default.
     if tool.cell_click_action and tool.cell_click_action != "menu":
         cell_d["click_action"] = str(tool.cell_click_action)
     if (
@@ -154,20 +135,43 @@ def tool_to_dict(tool: ToolDef) -> dict[str, Any]:
         and tool.cell_click_run_mode != "sequential"
     ):
         cell_d["click_run_mode"] = str(tool.cell_click_run_mode)
-    # Cell fill colour (V3 v0.3.6+).  Empty string is the default
-    # (branding fill) and stays out of the JSON for byte-identical
-    # round-trip with legacy catalogs.
+    # Cell fill / text colour (V3 v0.3.6+ / v0.3.8+).  Default-omit rule.
     if tool.cell_fill_color:
         cell_d["fill_color"] = str(tool.cell_fill_color)
-    # Cell text colour (V3 v0.3.8+).  Same default-omit rule.
     if tool.cell_text_color:
         cell_d["text_color"] = str(tool.cell_text_color)
     if cell_d:
         d["cell"] = cell_d
-    # Interactive stdin (V3 v0.3.0) — emitted only when True so legacy
-    # tools round-trip byte-identical.
-    if tool.interactive:
-        d["interactive"] = True
+
+    # --- provenance (machine, never hand-edited) ---
+    d["source"] = {
+        "mode": tool.source.mode,
+        "help_text_cached": tool.source.help_text_cached,
+    }
+
+    # --- extras (occasional) ---
+    if tool.menus:
+        d["menus"] = [_menu_item_to_dict(m) for m in tool.menus]
+    # Action buttons (V3 v0.8.0a11+) — omitted when none declared.
+    if tool.actions:
+        d["actions"] = [_action_to_dict(a) for a in tool.actions]
+
+    # --- THE FORM (most edited — kept LAST so Ctrl+End lands here) ---
+    # Sections are only emitted when non-empty; each carries its own
+    # ``layout`` field (the old tool-level ``section_layout`` is not written).
+    if tool.sections:
+        sec_list: list[dict[str, Any]] = []
+        for s in tool.sections:
+            sd: dict[str, Any] = {"name": s.name, "collapsed": s.collapsed}
+            if s.layout != "collapse":
+                sd["layout"] = s.layout
+            sec_list.append(sd)
+        d["sections"] = sec_list
+    d["argument_template"] = [
+        list(entry) if isinstance(entry, list) else entry
+        for entry in tool.argument_template
+    ]
+    d["params"] = [_param_to_dict(p) for p in tool.params]
     return d
 
 
@@ -801,25 +805,31 @@ def param_load_warnings(raw: dict[str, Any], p: ParamDef) -> list[str]:
 # --- TreeDef (.scriptreetree) ----------------------------------------------
 
 def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
+    # FIELD ORDER (v0.8.0a91): stable identity at the top, the most-edited
+    # block — ``nodes`` (the folders + leaves you add / move / remove) — at
+    # the very BOTTOM so a hand-editor can Ctrl+End straight to it.
+    # ``category`` is lifted near the top.  Key order is cosmetic (loader
+    # order-independent; round-trip tests compare dicts); omit-when-empty
+    # preserves byte-identity.
     d: dict[str, Any] = {
         "schema_version": tree.schema_version,
         "name": tree.name,
-        "nodes": [_node_to_dict(n) for n in tree.nodes],
     }
-    if tree.menus:
-        d["menus"] = [_menu_item_to_dict(m) for m in tree.menus]
-    # Only emit folder_layout when it's the non-default ("tabs") so
-    # existing flat-mode trees stay byte-identical on save.
-    if tree.folder_layout and tree.folder_layout != "flat":
-        d["folder_layout"] = tree.folder_layout
-    # Only emit path_prepend when non-empty — preserves byte-identical
-    # JSON for trees that don't use it.
-    if tree.path_prepend:
-        d["path_prepend"] = list(tree.path_prepend)
-    # v0.8.0a25+ category taxonomy.  Same convention as ToolDef --
-    # omitted when empty so legacy trees round-trip byte-identical.
+    # --- identity & placement (set once) ---
+    # v0.8.0a25+ category taxonomy.  Omitted when empty so legacy trees
+    # round-trip byte-identical.
     if tree.category:
         d["category"] = tree.category
+    # folder_layout emitted only when non-default ("tabs"); flat trees stay
+    # byte-identical on save.
+    if tree.folder_layout and tree.folder_layout != "flat":
+        d["folder_layout"] = tree.folder_layout
+    # --- chrome (occasional) ---
+    if tree.menus:
+        d["menus"] = [_menu_item_to_dict(m) for m in tree.menus]
+    # path_prepend emitted only when non-empty.
+    if tree.path_prepend:
+        d["path_prepend"] = list(tree.path_prepend)
     # Cell-shell visual settings — same shape as ToolDef.cell_*
     # (grouped under a "cell" sub-object, omitted when all-default
     # so legacy trees stay byte-identical).
@@ -916,6 +926,8 @@ def tree_to_dict(tree: TreeDef) -> dict[str, Any]:
         d["auto_discover"] = ad_d
     if tree.excluded:
         d["excluded"] = list(tree.excluded)
+    # --- THE TREE (most edited — kept LAST so Ctrl+End lands on it) ---
+    d["nodes"] = [_node_to_dict(n) for n in tree.nodes]
     return d
 
 
@@ -998,7 +1010,66 @@ def tree_from_dict(data: dict[str, Any]) -> TreeDef:
     )
 
 
+def _strip_sibling_group_refs(tree: TreeDef, target: Path) -> TreeDef:
+    """v0.8.0a105 — WRITE-CHOKEPOINT guard against the recurring `_groups`
+    circular reference.
+
+    A synthesised auto-group file under ``_groups/`` must NEVER reference a
+    SIBLING group in the same directory — that is the circular reference the
+    user kept hitting (``Demo`` ⊃ ``./MSOffice.scriptreetree`` and vice-versa).
+    Every higher-level writer is already supposed to avoid it (editor
+    ``_is_synthesised_group`` / write-back Guard 2 / subtree-properties; merged
+    ``push_back_to_origins``'s whole-file refusal), but those are spread across
+    code paths and versions.  Enforcing the invariant HERE — at the single
+    ``save_tree`` chokepoint every writer funnels through — makes it
+    writer-agnostic: no editor save, push-back, or future path can persist the
+    cross-ref, period.
+
+    Only a leaf that resolves to a DIRECT neighbour ``*.scriptreetree`` in the
+    SAME ``_groups`` dir is dropped; an external/nested sub-tree reference (a
+    legitimate node type, incl. a group built from categorised sub-trees) is
+    preserved.  Files outside ``_groups`` are returned untouched — the cheap
+    ``parts`` check short-circuits the common case with no walk.
+    """
+    try:
+        resolved = target.resolve()
+    except (OSError, ValueError):
+        return tree
+    if "_groups" not in resolved.parts:
+        return tree
+    base = resolved.parent
+
+    def _is_sibling_group(node: TreeNode) -> bool:
+        p = node.path
+        if not (node.type == "leaf" and isinstance(p, str)
+                and p.lower().endswith(".scriptreetree")):
+            return False
+        try:
+            pp = Path(p)
+            tgt = pp if pp.is_absolute() else (base / pp)
+            return tgt.resolve().parent == base
+        except (OSError, ValueError):
+            return False
+
+    from dataclasses import replace
+
+    def _filter(nodes: list[TreeNode]) -> list[TreeNode]:
+        out: list[TreeNode] = []
+        for n in nodes:
+            if _is_sibling_group(n):
+                continue  # drop the sibling-group cross-ref
+            if n.type == "folder" and n.children:
+                n = replace(n, children=_filter(n.children))
+            out.append(n)
+        return out
+
+    return replace(tree, nodes=_filter(tree.nodes))
+
+
 def save_tree(tree: TreeDef, path: str | Path) -> None:
+    # a105 — strip any sibling-group cross-ref before writing a `_groups` file
+    # (no-op for every other path); see _strip_sibling_group_refs.
+    tree = _strip_sibling_group_refs(tree, Path(path))
     Path(path).write_text(
         json.dumps(tree_to_dict(tree), indent=2), encoding="utf-8"
     )

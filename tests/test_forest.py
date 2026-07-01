@@ -1301,7 +1301,9 @@ class TestDialogs:
 
         from scriptree.shell.forest_dialogs import ExcludedItemsDialog
         dlg = ExcludedItemsDialog(ctrl)
-        dlg._reinclude(path)
+        # a89: tree-based dialog — select the row(s) then act on the selection.
+        dlg._tree.selectAll()
+        dlg._reinclude_selected()
         assert len(ctrl.forest.excluded) == 0
         assert len(ctrl.forest.items) == 1
 
@@ -1353,7 +1355,9 @@ class TestDialogs:
         ctrl.remove_item(path, exclude=True)
         from scriptree.shell.forest_dialogs import ExcludedItemsDialog
         dlg = ExcludedItemsDialog(ctrl)
-        dlg._forget(path)
+        # a89: tree-based dialog — select the row(s) then act on the selection.
+        dlg._tree.selectAll()
+        dlg._forget_selected()
         # Forget → path leaves excluded list, but is NOT re-added.
         assert len(ctrl.forest.excluded) == 0
         assert len(ctrl.forest.items) == 0
@@ -2173,21 +2177,15 @@ class TestForestAutoHideModalGuard:
         forest_window.close(); outside.close()
 
 
-class TestRestoreDescendantsDesktopOrder:
-    """v0.8.0a61: _restore_descendants (the taskbar-entry restore
-    path) must SHOW each tracked cell before moving it to the user's
-    current virtual desktop.
-
-    Pre-a61 it moved while the cells were still hidden, and
-    ``MoveWindowToDesktop`` rejects hidden windows
-    (TYPE_E_ELEMENTNOTFOUND) -- the same defect a59 fixed for the
-    hub in ``show_hub`` -- so cells reappeared on the forest's old
-    desktop instead of beside the restored hub.
+class TestRestoreDescendantsShow:
+    """v0.8.0a108: ``_reveal_hidden_descendants`` (the shared reveal helper that
+    replaced the old ``_restore_descendants``) shows each tracked cell, rescues
+    any off-screen, and clears the tracking list.  Every show path (tray click,
+    taskbar-entry restore via the unified ``show_hub``) funnels through it.
     """
 
-    def test_cells_shown_before_move(self, monkeypatch: Any) -> None:
+    def test_cells_shown_and_list_cleared(self) -> None:
         from PySide6.QtWidgets import QWidget
-        from scriptree.shell import win_virtual_desktops as wvd
         from scriptree.shell.forest_visibility import (
             ForestVisibilityManager,
         )
@@ -2205,30 +2203,14 @@ class TestRestoreDescendantsDesktopOrder:
 
         forest_window = QWidget()
         mgr = ForestVisibilityManager(forest_window, FakeRegistry())
-        mgr._hidden_descendant_ids = ["c1", "c2"]
+        mgr._state.hidden_descendant_ids = ["c1", "c2"]
 
-        sentinel = object()
-        visible_at_move: dict[str, bool] = {}
-        monkeypatch.setattr(wvd, "is_supported", lambda: True)
-        monkeypatch.setattr(wvd, "get_current_desktop_id", lambda: sentinel)
+        mgr._reveal_hidden_descendants()
 
-        def _record_move(hwnd, desktop_id):
-            assert desktop_id is sentinel
-            for cid, w in cells.items():
-                if int(w.winId()) == hwnd:
-                    visible_at_move[cid] = w.isVisible()
-            return True
-
-        monkeypatch.setattr(wvd, "move_window_to_desktop", _record_move)
-
-        mgr._restore_descendants()
-
-        # Both cells were shown, and were ALREADY visible at the
-        # moment MoveWindowToDesktop was called (move-after-show).
+        # Both cells were shown; the tracking list is cleared so a second
+        # reveal is a no-op.
         assert cells["c1"].isVisible() and cells["c2"].isVisible()
-        assert visible_at_move == {"c1": True, "c2": True}
-        # Tracking list is cleared so a second restore is a no-op.
-        assert mgr._hidden_descendant_ids == []
+        assert mgr._state.hidden_descendant_ids == []
 
         forest_window.close()
         for w in cells.values():
@@ -2302,9 +2284,8 @@ class TestRevealRescuesOffscreenCells:
         assert len(off.clamp_calls) == 1 and len(onscreen.clamp_calls) == 1
         forest_window.close()
 
-    def test_restore_descendants_rescues_offscreen(self, monkeypatch: Any) -> None:
+    def test_restore_descendants_rescues_offscreen(self) -> None:
         from PySide6.QtWidgets import QWidget
-        from scriptree.shell import win_virtual_desktops as wvd
         from scriptree.shell.forest_visibility import (
             ForestVisibilityManager,
         )
@@ -2318,12 +2299,9 @@ class TestRevealRescuesOffscreenCells:
 
         forest_window = QWidget()
         mgr = ForestVisibilityManager(forest_window, FakeRegistry())
-        mgr._hidden_descendant_ids = ["off"]
-        # Virtual-desktop support off so the test exercises only the
-        # show + on-screen-rescue path.
-        monkeypatch.setattr(wvd, "is_supported", lambda: False)
+        mgr._state.hidden_descendant_ids = ["off"]
 
-        mgr._restore_descendants()
+        mgr._reveal_hidden_descendants()
 
         assert off.isVisible()
         assert (off.pos().x(), off.pos().y()) == (50, 50)  # rescued on-screen
@@ -2611,8 +2589,8 @@ class TestForestHubOnScreenClamp:
     """v0.8.0a69 (user-reported "the forest lost its icon and
     disappeared"): every PROGRAMMATIC hub move must clamp on-screen.
     Only live mouse-drag clamped before; show_hub's restore of a stale
-    _last_hub_position and the startup restore of a persisted
-    window_position could strand the hub off the visible desktop.
+    stored hub position (``_state.hub_position``) and the startup restore of a
+    persisted window_position could strand the hub off the visible desktop.
     """
 
     def _hub(self):
@@ -2626,15 +2604,13 @@ class TestForestHubOnScreenClamp:
     ) -> None:
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QGuiApplication
-        from scriptree.shell import win_virtual_desktops as wvd
         from scriptree.shell.forest_visibility import ForestVisibilityManager
 
-        monkeypatch.setattr(wvd, "is_supported", lambda: False)
         hub = self._hub()
         hub.show()
         mgr = ForestVisibilityManager(hub, CellRegistry.instance())
-        mgr._taskbar_on = True
-        mgr._last_hub_position = QPoint(-9000, -9000)
+        mgr._state.taskbar = True
+        mgr._state.hub_position = QPoint(-9000, -9000)
 
         mgr.show_hub()
 
@@ -2646,15 +2622,13 @@ class TestForestHubOnScreenClamp:
     ) -> None:
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QGuiApplication
-        from scriptree.shell import win_virtual_desktops as wvd
         from scriptree.shell.forest_visibility import ForestVisibilityManager
 
-        monkeypatch.setattr(wvd, "is_supported", lambda: False)
         hub = self._hub()
         hub.hide()  # tray-mode restore branch requires the hub hidden
         mgr = ForestVisibilityManager(hub, CellRegistry.instance())
-        mgr._taskbar_on = False
-        mgr._last_hub_position = QPoint(-9000, -9000)
+        mgr._state.taskbar = False
+        mgr._state.hub_position = QPoint(-9000, -9000)
 
         mgr.show_hub()
 
@@ -2685,60 +2659,6 @@ class TestForestHubOnScreenClamp:
         ctrl.start(forest=forest, suppress_first_run=True)
 
         assert QGuiApplication.screenAt(ctrl.forest_window.pos()) is not None
-
-
-class TestVirtualDesktopFollowGuards:
-    """v0.8.0a70: the virtual-desktop follow (the verified "forest
-    disappeared, cells left behind" cause) must be DEBOUNCED so a
-    focus-churn burst fires one COM move, and must NEVER move the hub
-    across desktops while it is being dragged.
-    """
-
-    def _mgr(self):
-        from scriptree.shell.forest_visibility import ForestVisibilityManager
-        from scriptree.shell.cell_window import CellWindow
-
-        _fresh_registry()
-        hub = CellWindow(load_branding())
-        hub.show()
-        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
-        return mgr, hub
-
-    def test_focus_change_debounces_follow(self) -> None:
-        mgr, hub = self._mgr()
-        calls: list = []
-        mgr._watcher._on_focus_changed_for_follow = lambda: calls.append(1)
-
-        mgr._watcher._on_focus_changed(None)
-
-        # Debounced -- not called synchronously.
-        assert calls == []
-        assert mgr._watcher._follow_debounce.isActive()
-        hub.close()
-
-    def test_skip_follow_while_dragging(self, monkeypatch: Any) -> None:
-        from scriptree.shell import win_virtual_desktops as wvd
-
-        mgr, hub = self._mgr()
-        moves: list = []
-        monkeypatch.setattr(wvd, "is_supported", lambda: True)
-        monkeypatch.setattr(wvd, "is_window_on_current_desktop", lambda h: False)
-        monkeypatch.setattr(wvd, "get_current_desktop_id", lambda: object())
-        monkeypatch.setattr(
-            wvd, "move_window_to_desktop",
-            lambda h, d: (moves.append(h), True)[1],
-        )
-
-        # Dragging the hub -> the follow must NOT move it across desktops.
-        hub._drag_started = True
-        mgr._follow_user_across_desktops()
-        assert moves == []
-
-        # Not dragging -> the move fires normally.
-        hub._drag_started = False
-        mgr._follow_user_across_desktops()
-        assert len(moves) >= 1
-        hub.close()
 
 
 class TestFlagSwapReassertsChrome:
@@ -2789,6 +2709,744 @@ class TestFlagSwapReassertsChrome:
 
         assert not hub.mask().isEmpty(), "hex mask must be restored"
         hub.close()
+
+
+class TestFlagSwapPreservesPositionWhenHidden:
+    """v0.8.0a108 (user-reported "jumped to the top-left corner, lost its icon,
+    wasn't mobile after loading"): ``setWindowFlags`` recreates the native HWND
+    and resets the window to (0,0), dropping the hex mask.  The forest hub's
+    flags are applied at startup BEFORE the first show, so the pre-a108
+    ``if was_visible`` gate skipped the position-restore + chrome-reassert,
+    leaving the hub at (0,0), blank, and unmovable until a manual hide/show.
+    The flag helpers must now preserve the pre-swap position and reassert the
+    chrome even when the window is hidden; only the actual re-show stays gated.
+    """
+
+    def _cell(self):
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        return CellWindow(load_branding())
+
+    def test_always_on_top_swap_preserves_hidden_position(self) -> None:
+        from PySide6.QtCore import QPoint
+
+        cell = self._cell()
+        cell.show()
+        cell.move(QPoint(180, 160))
+        cell.hide()  # hidden, exactly like the hub before its first show
+        cell._apply_always_on_top_flag(False)
+        # Without the a108 fix this would be (0,0) (HWND recreation reset).
+        assert (cell.pos().x(), cell.pos().y()) == (180, 160)
+        cell.close()
+
+    def test_taskbar_swap_preserves_hidden_position_and_chrome(self) -> None:
+        from PySide6.QtCore import QPoint
+
+        cell = self._cell()
+        cell.show()
+        cell.move(QPoint(210, 190))
+        cell.hide()
+        calls: list = []
+        orig = cell._reassert_window_chrome
+        cell._reassert_window_chrome = lambda: (calls.append(1), orig())[1]
+
+        cell._apply_taskbar_flag(True)
+
+        assert (cell.pos().x(), cell.pos().y()) == (210, 190)
+        assert calls, "chrome must be reasserted even when the cell is hidden"
+        cell.close()
+
+
+class TestApplyStateUnifiedShow:
+    """v0.8.0a108: every show path funnels through the ONE model
+    (``ForestHubState``) and the single ``apply_state`` render pass.  The hub
+    appears WHEREVER THE USER LAST LEFT IT -- ``state.hub_position``, kept live
+    by the drag-capture in ``forest_controller`` -- NOT at a stale show-time
+    coordinate.  This locks the user-reported bug "I move the forest then click
+    the tray icon and it jumps back to where it was when shown".
+    """
+
+    def _hub(self):
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        return CellWindow(load_branding())
+
+    def test_show_reads_live_hub_position(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+        hub = self._hub()
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._state.taskbar = False  # tray / always-on-top show branch
+
+        # First show at one position.
+        mgr._state.hub_position = QPoint(100, 100)
+        mgr.show_hub()
+        assert (hub.pos().x(), hub.pos().y()) == (100, 100)
+
+        # Simulate the user dragging the hub: the drag-capture updates the
+        # model's ONE position store.  A subsequent show must land THERE, not
+        # snap back to the first position (the core a108 fix).
+        mgr._state.hub_position = QPoint(200, 150)
+        mgr.show_hub()
+        assert (hub.pos().x(), hub.pos().y()) == (200, 150)
+        hub.close()
+
+    def test_hide_then_show_round_trip_preserves_position(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+        hub = self._hub()
+        hub.show()
+        hub.move(QPoint(150, 120))
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._state.taskbar = False
+
+        mgr.hide_hub()  # apply_state captures the live position into the model
+        assert mgr._state.hub_position is not None
+        assert (
+            mgr._state.hub_position.x(),
+            mgr._state.hub_position.y(),
+        ) == (150, 120)
+        assert not hub.isVisible()
+
+        mgr.show_hub()  # restores it from the model
+        assert hub.isVisible()
+        assert (hub.pos().x(), hub.pos().y()) == (150, 120)
+        hub.close()
+
+    def test_show_hub_sets_shown_flag(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+        hub = self._hub()
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._state.taskbar = False
+        mgr._state.hub_position = QPoint(120, 130)
+
+        mgr.hide_hub()
+        assert mgr._state.shown is False
+        mgr.show_hub()
+        assert mgr._state.shown is True
+        hub.close()
+
+
+# ---------------------------------------------------------------------------
+# a108 ADVERSARIAL-REVIEW FIXES — the two runtime bugs the review found, plus
+# the coverage gaps it flagged (drag-capture guard, eventFilter parity, apply()
+# transition, hide-with-real-descendants, hide_descendants_only).
+# ---------------------------------------------------------------------------
+
+class _FakeHub:
+    """Deterministic stand-in for the forest hub window so the apply_state
+    show/hide LOGIC can be tested without depending on the offscreen platform's
+    minimise/visibility fidelity.  Records position + visible/minimised state."""
+
+    def __init__(self) -> None:
+        from PySide6.QtCore import QPoint
+        self._v = True
+        self._m = False
+        self._p = QPoint(100, 100)
+        self.id = "fake-hub"
+
+    def installEventFilter(self, *a) -> None: ...
+    def isVisible(self) -> bool: return self._v
+    def isMinimized(self) -> bool: return self._m
+    def show(self) -> None: self._v = True; self._m = False
+    def showNormal(self) -> None: self._v = True; self._m = False
+    def showMinimized(self) -> None: self._v = True; self._m = True
+    def hide(self) -> None: self._v = False
+
+    def move(self, *a) -> None:
+        from PySide6.QtCore import QPoint
+        self._p = a[0] if len(a) == 1 else QPoint(a[0], a[1])
+
+    def pos(self): return self._p
+    def raise_(self) -> None: ...
+    def activateWindow(self) -> None: ...
+    def _clamp_to_screen(self, p): return p  # identity (on-screen)
+
+
+class _FakeCell:
+    """A forest descendant with controllable visibility."""
+
+    def __init__(self, cid: str, visible: bool = True) -> None:
+        from PySide6.QtCore import QPoint
+        self._id = cid
+        self._v = visible
+        self._p = QPoint(10, 10)
+
+    def show(self) -> None: self._v = True
+    def hide(self) -> None: self._v = False
+    def isVisible(self) -> bool: return self._v
+    def pos(self): return self._p
+    def move(self, *a) -> None: ...
+    def _clamp_to_screen(self, p): return p
+
+
+def _mgr_with_cells(cells, *, taskbar: bool):
+    """Build a ForestVisibilityManager on a _FakeHub whose descendant walk
+    returns exactly ``cells``."""
+    from scriptree.shell.forest_visibility import ForestVisibilityManager
+
+    by_id = {c._id: c for c in cells}
+
+    class FakeRegistry:
+        def get(self, cid): return by_id.get(cid)
+
+    hub = _FakeHub()
+    mgr = ForestVisibilityManager(hub, FakeRegistry())
+    mgr._state.taskbar = taskbar
+    mgr._forest_descendants = lambda: list(cells)
+    return mgr, hub
+
+
+class TestA108HideIdempotent:
+    """[review HIGH fix] apply_state's hide branch must be IDEMPOTENT.  A second
+    hide while already hidden (two focus-left events >80ms apart in auto-hide
+    mode, or the hide's own focus churn) must NOT wipe hidden_descendant_ids by
+    re-deriving from the already-hidden descendants -- else the next show
+    reveals NOTHING ('forest comes back empty / cells left behind').
+    """
+
+    def test_double_hide_then_show_still_reveals_cells_tray(self) -> None:
+        d1, d2 = _FakeCell("d1"), _FakeCell("d2")
+        mgr, hub = _mgr_with_cells([d1, d2], taskbar=False)
+
+        mgr.hide_hub()  # first hide: folds + records d1,d2, hides hub
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+        assert not d1.isVisible() and not d2.isVisible()
+        assert not hub.isVisible()
+
+        mgr.hide_hub()  # second hide while ALREADY hidden -> must be a no-op
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"], (
+            "double-hide wiped the reveal set (the HIGH review finding)"
+        )
+
+        mgr.show_hub()  # must reveal exactly d1,d2
+        assert d1.isVisible() and d2.isVisible()
+
+    def test_double_hide_then_show_still_reveals_cells_taskbar(self) -> None:
+        d1, d2 = _FakeCell("d1"), _FakeCell("d2")
+        mgr, hub = _mgr_with_cells([d1, d2], taskbar=True)
+
+        mgr.hide_hub()  # showMinimized -> isMinimized True
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+        assert hub.isMinimized()
+
+        mgr.hide_hub()  # already minimised -> no-op, set preserved
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+
+        mgr.show_hub()
+        assert d1.isVisible() and d2.isVisible()
+
+
+class TestA108HideRecordsOnlyVisible:
+    """[review LOW gap] The hide branch must record EXACTLY the descendants it
+    folded (the ones visible at hide time), leaving user-collapsed / already-
+    hidden cells out -- so a previously-collapsed cell doesn't spuriously
+    reappear on the next show.  Also locks hide_descendants_only."""
+
+    def test_hide_records_only_visible_descendants(self) -> None:
+        d1 = _FakeCell("d1", visible=True)
+        d2 = _FakeCell("d2", visible=True)
+        d3 = _FakeCell("d3", visible=False)  # user already collapsed this one
+        mgr, hub = _mgr_with_cells([d1, d2, d3], taskbar=False)
+
+        mgr.hide_hub()
+
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+        assert "d3" not in mgr._state.hidden_descendant_ids
+        # On the next show, only d1,d2 are revealed; d3 stays collapsed.
+        mgr.show_hub()
+        assert d1.isVisible() and d2.isVisible()
+        assert not d3.isVisible()
+
+    def test_hide_descendants_only_seeds_and_leaves_hub(self) -> None:
+        d1 = _FakeCell("d1", visible=True)
+        d2 = _FakeCell("d2", visible=True)
+        mgr, hub = _mgr_with_cells([d1, d2], taskbar=True)
+
+        mgr.hide_descendants_only()
+
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+        assert not d1.isVisible() and not d2.isVisible()
+        # The hub itself is untouched (still visible/not-minimised).
+        assert hub.isVisible() and not hub.isMinimized()
+
+
+class TestA108DragCaptureGuard:
+    """[review MEDIUM fix + gap] forest_controller._on_hex_moved writes
+    state.hub_position ONLY for a real user drag: it must NOT capture during a
+    programmatic minimise/hide (the isVisible/isMinimized guard) NOR during
+    apply_state's own clamp-on-show move (the _applying_state guard).  The
+    latter is the fix for 'showing an off-screen hub overwrites the stored
+    position with the clamped value and persists it'.
+    """
+
+    def _started_ctrl(self, tmp_path, monkeypatch):
+        from scriptree.shell import forest_controller as fc_mod
+        from scriptree.shell import forest_io as io_mod
+        from scriptree.shell.forest_controller import ForestController
+
+        monkeypatch.setattr(
+            io_mod, "default_preferences_path",
+            lambda b: tmp_path / "forest_preferences.json",
+        )
+        monkeypatch.setattr(
+            fc_mod, "default_autoload_path",
+            lambda b: tmp_path / "default.scriptreeforest",
+        )
+        _fresh_registry()
+        ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+        ctrl.set_autosave_enabled(False)
+        ctrl.start(forest=ForestDef(name="F"), suppress_first_run=True)
+        return ctrl
+
+    def test_user_drag_updates_model_position(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+        ctrl = self._started_ctrl(tmp_path, monkeypatch)
+        hub = ctrl.forest_window
+        hub.show()
+        hub.move(QPoint(220, 240))
+        # Simulate a drag move arriving while the hub is visible+not-minimised
+        # and apply_state is NOT running -> the model captures it.
+        CellRegistry.instance().hexagonMoved.emit(hub._id)
+        assert ctrl._visibility._state.hub_position is not None
+        assert (
+            ctrl._visibility._state.hub_position.x(),
+            ctrl._visibility._state.hub_position.y(),
+        ) == (220, 240)
+
+    def test_move_during_applying_state_is_ignored(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+        ctrl = self._started_ctrl(tmp_path, monkeypatch)
+        hub = ctrl.forest_window
+        vis = ctrl._visibility
+        hub.show()
+        vis._state.hub_position = QPoint(300, 300)
+        # Pretend we're mid-render: a programmatic clamp move must NOT capture.
+        vis._applying_state = True
+        hub.move(QPoint(7, 7))
+        CellRegistry.instance().hexagonMoved.emit(hub._id)
+        assert (
+            vis._state.hub_position.x(),
+            vis._state.hub_position.y(),
+        ) == (300, 300)
+        # Once the render pass is over, a genuine drag captures again.
+        vis._applying_state = False
+        hub.move(QPoint(180, 190))
+        CellRegistry.instance().hexagonMoved.emit(hub._id)
+        assert (
+            vis._state.hub_position.x(),
+            vis._state.hub_position.y(),
+        ) == (180, 190)
+
+    def test_offscreen_show_preserves_real_stored_position(
+        self, tmp_path: Path, monkeypatch: Any,
+    ) -> None:
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+        ctrl = self._started_ctrl(tmp_path, monkeypatch)
+        hub = ctrl.forest_window
+        vis = ctrl._visibility
+        vis._state.taskbar = False
+        # The user's real position is off every screen (e.g. monitor unplugged).
+        vis._state.hub_position = QPoint(-9000, -9000)
+        vis._state.shown = False
+
+        vis.show_hub()  # clamps the WINDOW on-screen via apply_state
+
+        # The window is reachable...
+        assert QGuiApplication.screenAt(hub.pos()) is not None
+        # ...but the MODEL still holds the user's real off-screen intent (the
+        # clamp must not have re-entered _on_hex_moved and overwritten it).
+        assert (
+            vis._state.hub_position.x(),
+            vis._state.hub_position.y(),
+        ) == (-9000, -9000)
+
+
+class TestA108EventFilterTaskbarRestore:
+    """[review MEDIUM gap] The eventFilter taskbar-restore branch is what
+    delivers tray<->taskbar parity (the a108 headline).  It must route through
+    the SAME show_hub the tray uses, and only when auto-hide + taskbar + the hub
+    is restored (visible, not minimised)."""
+
+    def _hub_mgr(self, *, aot: bool, taskbar: bool):
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        mgr._state.always_on_top = aot
+        mgr._state.taskbar = taskbar
+        return hub, mgr
+
+    def _send_state_change(self, mgr, hub):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+        calls: list = []
+        mgr.show_hub = lambda: calls.append(1)
+        mgr.eventFilter(hub, QEvent(QEvent.Type.WindowStateChange))
+        QApplication.processEvents()  # flush the singleShot(0, show_hub)
+        return calls
+
+    def test_taskbar_restore_calls_show_hub(self) -> None:
+        # auto_hide (aot False) + taskbar + model HIDDEN -> a restore (hub now
+        # not-minimised/visible) routes through show_hub.
+        hub, mgr = self._hub_mgr(aot=False, taskbar=True)
+        assert mgr._state.auto_hide is True
+        mgr._state.shown = False  # forest was hidden; this WindowStateChange = restore
+        calls = self._send_state_change(mgr, hub)
+        assert calls == [1]
+        hub.close()
+
+    def test_no_restore_when_already_shown(self) -> None:
+        # a111: if the model already says shown (e.g. the echo of our own
+        # showNormal), the restore branch must NOT re-fire show_hub.
+        hub, mgr = self._hub_mgr(aot=False, taskbar=True)
+        mgr._state.shown = True
+        calls = self._send_state_change(mgr, hub)
+        assert calls == []
+        hub.close()
+
+    def test_no_restore_when_not_taskbar(self) -> None:
+        # auto_hide via tray only (taskbar False) -> the taskbar-entry filter
+        # must NOT fire (there is no taskbar entry to restore from).
+        hub, mgr = self._hub_mgr(aot=False, taskbar=False)
+        mgr._state.tray = True
+        mgr._state.shown = False
+        calls = self._send_state_change(mgr, hub)
+        assert calls == []
+        hub.close()
+
+    def test_no_restore_when_always_on_top(self) -> None:
+        # always-on-top (auto_hide False) -> filter is inert.
+        hub, mgr = self._hub_mgr(aot=True, taskbar=True)
+        assert mgr._state.auto_hide is False
+        mgr._state.shown = False
+        calls = self._send_state_change(mgr, hub)
+        assert calls == []
+        hub.close()
+
+    def test_minimize_folds_descendants(self) -> None:
+        # a111: clicking the taskbar entry of a SHOWN forest minimises the hub;
+        # the eventFilter must fold the cells too (they're separate windows the
+        # OS leaves on screen) and flip the model to hidden.
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+        hub, mgr = self._hub_mgr(aot=False, taskbar=True)
+        mgr._state.shown = True
+        folded: list = []
+        mgr.hide_descendants_only = lambda: folded.append(1)
+        # Simulate the OS having minimised the hub.
+        hub.showMinimized()
+        mgr.eventFilter(hub, QEvent(QEvent.Type.WindowStateChange))
+        QApplication.processEvents()  # flush the singleShot(0, hide_descendants_only)
+        assert mgr._state.shown is False
+        assert folded == [1]
+        hub.close()
+
+
+class TestA108ApplyTransition:
+    """[review LOW gap] apply(prefs) re-derives the model from the three flags,
+    wires the watcher to the derived auto_hide, and immediately folds a visible
+    hub when the new mode is auto-hide -- so the user sees a flag toggle take
+    effect at once.  Locks the 'flag toggle' entry point (design §5)."""
+
+    def _hub_mgr(self):
+        from scriptree.shell.cell_window import CellWindow
+        from scriptree.shell.forest_visibility import ForestVisibilityManager
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub.show()
+        mgr = ForestVisibilityManager(hub, CellRegistry.instance())
+        set_calls: list = []
+        mgr._watcher.set_enabled = lambda v: set_calls.append(v)
+        hide_calls: list = []
+        mgr.hide_hub = lambda: hide_calls.append(1)
+        return hub, mgr, set_calls, hide_calls
+
+    def test_taskbar_mode_derives_autohide_and_folds(self) -> None:
+        from scriptree.shell.forest_io import ForestPreferences
+        hub, mgr, set_calls, hide_calls = self._hub_mgr()
+        mgr.apply(ForestPreferences(
+            show_always_on_top=False,
+            show_on_taskbar=True,
+            show_in_system_tray=False,
+        ))
+        assert mgr._state.always_on_top is False
+        assert mgr._state.taskbar is True
+        assert mgr._state.auto_hide is True
+        assert set_calls and set_calls[-1] is True
+        assert hide_calls == [1]  # visible hub + auto_hide -> immediate fold
+        hub.close()
+
+    def test_always_on_top_mode_does_not_fold(self) -> None:
+        from scriptree.shell.forest_io import ForestPreferences
+        hub, mgr, set_calls, hide_calls = self._hub_mgr()
+        mgr.apply(ForestPreferences(
+            show_always_on_top=True,
+            show_on_taskbar=False,
+            show_in_system_tray=False,
+        ))
+        assert mgr._state.always_on_top is True
+        assert mgr._state.auto_hide is False
+        assert set_calls and set_calls[-1] is False
+        assert hide_calls == []  # always-on-top never folds
+        hub.close()
+
+
+class TestA111ToggleHub:
+    """v0.8.0a111: a SECOND tray/taskbar click HIDES the forest (hub + bloomed
+    cells), not the old show-only behaviour.  ``toggle_hub`` reads the one model
+    flag ``state.shown``."""
+
+    def test_toggle_hides_then_shows(self) -> None:
+        d1, d2 = _FakeCell("d1"), _FakeCell("d2")
+        mgr, hub = _mgr_with_cells([d1, d2], taskbar=False)
+        assert mgr._state.shown is True  # starts shown
+
+        mgr.toggle_hub()  # second click -> HIDE everything
+        assert mgr._state.shown is False
+        assert not hub.isVisible()
+        assert not d1.isVisible() and not d2.isVisible()
+
+        mgr.toggle_hub()  # next click -> SHOW everything
+        assert mgr._state.shown is True
+        assert d1.isVisible() and d2.isVisible()
+
+
+class TestA113CaptureUsesSettledPosition:
+    """v0.8.0a113: ``_capture_remembered_offset`` must record the SETTLED resting
+    spot (the in-flight settle animation's ``endValue``), NOT the mid-flight
+    ``pos()``.  ``mouseReleaseEvent`` runs ``_settle_no_overlap`` (which
+    relocates an overlapping/edge drop via an ASYNC animation) BEFORE the
+    capture, so reading ``pos()`` stores a stale offset that relocates the cell
+    on the next bloom -- the intermittent 'stacked cell moves even though its
+    space is free' bug.
+    """
+
+    def _hub_and_member(self):
+        from scriptree.shell.cell_window import CellWindow
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub._is_forest_master = True
+        hub.move(24, 719)
+        member = CellWindow(load_branding())
+        member._group_master_id = hub._id
+        member._catalog_path = "C:/apps/ffmpeg/ffmpeg.scriptree"
+        return hub, member
+
+    def test_capture_prefers_animation_endvalue(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.cell_window import _member_offset_key
+
+        hub, member = self._hub_and_member()
+        member.move(500, 500)  # STALE pre-settle position
+
+        class _FakeAnim:
+            def endValue(self):
+                return QPoint(300, 200)  # the SETTLED destination
+        member._pos_anim = _FakeAnim()
+
+        member._capture_remembered_offset()
+
+        key = _member_offset_key(member)
+        off = hub._remembered_offsets[key]
+        # must be settled(300,200) - hub(24,719), NOT stale(500,500) - hub.
+        assert off == (300 - 24, 200 - 719)
+        hub.close(); member.close()
+
+    def test_capture_uses_pos_when_no_animation(self) -> None:
+        from scriptree.shell.cell_window import _member_offset_key
+        hub, member = self._hub_and_member()
+        member._pos_anim = None
+        member.move(310, 640)
+
+        member._capture_remembered_offset()
+
+        key = _member_offset_key(member)
+        assert hub._remembered_offsets[key] == (310 - 24, 640 - 719)
+        hub.close(); member.close()
+
+
+class TestA113HomePinsOnBloom:
+    """v0.8.0a113: a re-bloom must PIN every member at its current on-screen home
+    (not just user-dragged ones), so a cell the user never dragged doesn't get
+    re-tiled to a different slot -- the true cause of the reported relocation
+    (`[reloc-diag] NOT restored: <id>=no-offset`).
+    """
+
+    def test_pins_onscreen_undragged_only(self) -> None:
+        from PySide6.QtCore import QPoint
+        from scriptree.shell.cell_window import CellWindow
+
+        _fresh_registry()
+        hub = CellWindow(load_branding())
+        hub._is_forest_master = True
+
+        class M:
+            def __init__(self, mid: str, floating: bool = False) -> None:
+                self._id = mid
+                self._floating_intent = floating
+                self._size_px = 56
+
+        onscreen = M("onscreen")
+        offscreen = M("offscreen")
+        floating = M("floating", floating=True)
+        dragged = M("dragged")  # already pinned by a remembered offset
+        hub._members = {
+            "onscreen": QPoint(120, 130),      # valid on-screen home -> PIN
+            "offscreen": QPoint(-9000, -9000),  # off-screen -> engine
+            "floating": QPoint(200, 200),       # owns its own pos -> skip
+            "dragged": QPoint(300, 300),        # already placed -> skip
+        }
+        pins = hub._current_home_pins(
+            [onscreen, offscreen, floating, dragged],
+            already_placed={"dragged"},
+        )
+        assert pins == {"onscreen"}
+        hub.close()
+
+
+class TestA114FirstRunFold:
+    """v0.8.0a114: cells added AFTER the forest was folded (the FIRST-RUN case:
+    the empty forest folds nothing at startup, then discovery populates it via
+    add_item) must be folded too -- APPENDING to the hidden set, never wiping
+    it -- so the next reveal brings the whole forest back and nothing is left
+    visible on the desktop while the hub is hidden.
+    """
+
+    def test_fold_new_appends_without_wiping(self) -> None:
+        d1, d2 = _FakeCell("d1"), _FakeCell("d2")
+        mgr, hub = _mgr_with_cells([d1, d2], taskbar=True)
+        mgr._state.shown = False
+        # d1 already folded + recorded (startup fold); d2 just spawned (visible).
+        d1.hide()
+        mgr._state.hidden_descendant_ids = ["d1"]
+        assert d2.isVisible()
+
+        mgr.fold_new_visible_descendants()
+
+        assert not d2.isVisible()  # newly-added cell folded
+        # d1 preserved (append, not reset) + d2 added.
+        assert sorted(mgr._state.hidden_descendant_ids) == ["d1", "d2"]
+
+    def test_noop_when_forest_shown(self) -> None:
+        d1 = _FakeCell("d1")
+        mgr, hub = _mgr_with_cells([d1], taskbar=True)
+        mgr._state.shown = True
+        mgr.fold_new_visible_descendants()
+        assert d1.isVisible()  # forest shown -> a new cell stays on screen
+
+
+class TestRescueAutoHideAware:
+    """v0.8.0a110 (user-reported): a display-settings change (e.g. 1->2->1
+    screens) must NOT reveal a forest that is auto-hidden (always-on-top OFF).
+
+    ``screen_watcher.rescue_all_cells`` repacks a forest hub via
+    ``_restore_remembered_offsets`` / ``_compute_layout``, both of which call
+    ``setVisible(True)`` on the members.  Before a110 a display change therefore
+    POPPED the folded cells back onto the screen (and left them scattered, not
+    following the hub when it was later revealed).  The rescue now skips a
+    hidden forest cluster entirely; it is re-placed only when the user reveals
+    the forest via ``apply_state``.
+    """
+
+    def _fake_forest(self, *, hub_minimized: bool, hub_visible: bool):
+        from PySide6.QtCore import QPoint
+
+        class FakeHub:
+            def __init__(self) -> None:
+                self._id = "forest-hub"
+                self.role = "master"
+                self._is_forest_master = True
+                self._members = {"m1": None, "m2": None}
+                self._group_master_id = None
+                self._p = QPoint(200, 200)
+                self.repacked = False
+                self.restored = False
+
+            def isVisible(self): return hub_visible
+            def isMinimized(self): return hub_minimized
+            def pos(self): return self._p
+            def move(self, p): self._p = p
+            def _clamp_to_screen(self, p): return p
+            def _restore_remembered_offsets(self, move=True):
+                self.restored = True
+                return set()
+            def _compute_layout(self, instant=True, pinned=None):
+                self.repacked = True
+
+        class FakeMember:
+            def __init__(self, cid: str) -> None:
+                self._id = cid
+                self.role = "standalone"
+                self._is_forest_master = False
+                self._group_master_id = "forest-hub"
+                self._p = QPoint(-9000, -9000)  # off-screen while folded
+                self._v = False                 # hidden (auto-hide folded it)
+                self.was_shown = False
+
+            def isVisible(self): return self._v
+            def isMinimized(self): return False
+            def pos(self): return self._p
+            def move(self, p): self._p = p
+            def setVisible(self, v):
+                self._v = v
+                if v:
+                    self.was_shown = True
+            def _clamp_to_screen(self, p): return p
+
+        return FakeHub(), FakeMember("m1"), FakeMember("m2")
+
+    def _run_rescue(self, cells, monkeypatch):
+        from scriptree.shell.cell_registry import CellRegistry
+        from scriptree.shell import screen_watcher
+        reg = CellRegistry.instance()
+        monkeypatch.setattr(reg, "all", lambda: list(cells))
+        return screen_watcher.rescue_all_cells()
+
+    def test_hidden_taskbar_forest_not_revealed(
+        self, monkeypatch: Any,
+    ) -> None:
+        # Taskbar auto-hide: hub minimised, members folded (hidden).
+        hub, m1, m2 = self._fake_forest(hub_minimized=True, hub_visible=True)
+        self._run_rescue([hub, m1, m2], monkeypatch)
+        # The rescue skipped the whole cluster: no repack, no reveal.
+        assert not hub.repacked and not hub.restored
+        assert not m1.was_shown and not m2.was_shown
+        assert not m1.isVisible() and not m2.isVisible()
+
+    def test_hidden_tray_forest_not_revealed(
+        self, monkeypatch: Any,
+    ) -> None:
+        # Tray auto-hide: hub hidden (not visible), members folded.
+        hub, m1, m2 = self._fake_forest(hub_minimized=False, hub_visible=False)
+        self._run_rescue([hub, m1, m2], monkeypatch)
+        assert not hub.repacked and not hub.restored
+        assert not m1.was_shown and not m2.was_shown
+
+    def test_visible_forest_IS_repacked(
+        self, monkeypatch: Any,
+    ) -> None:
+        # When the forest IS shown, a display change must still repack it.
+        hub, m1, m2 = self._fake_forest(hub_minimized=False, hub_visible=True)
+        m1._v = True
+        m2._v = True  # members visible (forest revealed)
+        self._run_rescue([hub, m1, m2], monkeypatch)
+        assert hub.repacked, "a VISIBLE forest must still be repacked on a screen change"
 
 
 class TestGroupAwareRescue:

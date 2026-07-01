@@ -124,10 +124,14 @@ from typing import Iterable
 # launcher sweep never runs.
 _MERGED_STALE_SECONDS = 24 * 3600
 _MERGED_GLOB = "scriptreering_merged_*.scriptreetree"
+#: v0.8.0a99 — the provenance-visible forest/master view temp files (see
+#: ``build_forest_view``).  Swept by the same janitor as merged trees.
+_FOREST_VIEW_PREFIX = "scriptreeforest_view_"
+_FOREST_VIEW_GLOB = "scriptreeforest_view_*.scriptreetree"
 
 
 def _sweep_stale_merged_files() -> None:
-    """Delete merged temp files older than ``_MERGED_STALE_SECONDS``.
+    """Delete merged / forest-view temp files older than ``_MERGED_STALE_SECONDS``.
 
     Self-contained, exception-safe: a locked/in-use file (another
     live master still reading it) just gets skipped — it's younger
@@ -136,12 +140,13 @@ def _sweep_stale_merged_files() -> None:
     try:
         tmp = Path(tempfile.gettempdir())
         cutoff = time.time() - _MERGED_STALE_SECONDS
-        for f in tmp.glob(_MERGED_GLOB):
-            try:
-                if f.is_file() and f.stat().st_mtime < cutoff:
-                    f.unlink()
-            except OSError:
-                continue  # in use / permission — leave it
+        for glob in (_MERGED_GLOB, _FOREST_VIEW_GLOB):
+            for f in tmp.glob(glob):
+                try:
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        f.unlink()
+                except OSError:
+                    continue  # in use / permission — leave it
     except OSError:
         pass  # %TEMP% itself unreadable — nothing we can do
 
@@ -477,6 +482,89 @@ def build_merged_tree(catalog_paths: Iterable[str | Path]) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Provenance-visible forest/master view (v0.8.0a99)
+# ---------------------------------------------------------------------------
+
+def build_forest_view(
+    catalog_paths: Iterable[str | Path], *, forest_name: str = "Forest",
+) -> Path:
+    """Build a PROVENANCE-VISIBLE temp ``.scriptreetree`` for a forest / master.
+
+    Unlike :func:`build_merged_tree` — which loads each member, INLINES its
+    subtree refs, and wraps it as an anonymous top-level folder (flattening away
+    the file provenance) — this renders each member as a top-level **leaf
+    pointing at the member's own catalog file**.  The editor then shows it as a
+    linked SUBTREE (``.scriptreetree``, expandable, naming its source file on
+    hover) or a tool leaf (``.scriptree``).  So the user can always tell which
+    file underlies a given folder, and editing a member is done in the member's
+    OWN file (right-click → Open today; a100 wires inline edit + drag-to-
+    recategorize).  No inlining, no origins sidecar, no back-propagation.
+
+    Returns the absolute ``Path`` of the temp file.  Raises ``ValueError`` when
+    no valid catalog is supplied.
+    """
+    from scriptree.core.io import save_tree
+    from scriptree.core.model import TreeDef, TreeNode
+
+    sources = [Path(p).resolve() for p in catalog_paths]
+    seen: set[str] = set()
+    sources = [p for p in sources if not (str(p) in seen or seen.add(str(p)))]
+
+    nodes: list = []
+    for src in sources:
+        if not src.is_file():
+            _log(f"forest_view: skipping missing source: {src}")
+            continue
+        if src.suffix.lower() not in (".scriptree", ".scriptreetree"):
+            _log(f"forest_view: unknown extension {src.suffix!r} for {src}")
+            continue
+        # A bare leaf carrying the member's ABSOLUTE catalog path.  The editor's
+        # _add_node_item routes a .scriptreetree leaf to a SUBTREE item (file
+        # tooltip, expandable, read-only children) and a .scriptree leaf to a
+        # tool item — both naming their source.  Label is derived from the
+        # member's own name at render time.
+        nodes.append(TreeNode(type="leaf", path=str(src)))
+
+    if not nodes:
+        raise ValueError("build_forest_view: no valid catalogs supplied")
+
+    view = TreeDef(name=forest_name, nodes=nodes)
+    sig = hashlib.sha1(
+        "\n".join(str(p) for p in sources).encode("utf-8")
+    ).hexdigest()[:12]
+    out = Path(tempfile.gettempdir()) / f"{_FOREST_VIEW_PREFIX}{sig}.scriptreetree"
+    _sweep_stale_merged_files()
+    save_tree(view, str(out))
+    _log(f"wrote forest view {out}  ({len(nodes)} member(s))")
+    return out
+
+
+def build_forest_view_for_master(master) -> Path:  # noqa: ANN001 — CellWindow
+    """Provenance-visible counterpart to :func:`build_merged_tree_for_master`.
+
+    Resolves each member's catalog the same way (``master._members`` ids →
+    ``CellRegistry`` → ``_catalog_path``) but renders them as linked subtrees
+    rather than a flattened merge.  Raises ``ValueError`` when no member has a
+    catalog bound (the caller falls back to a blank editor, same as the merged
+    path)."""
+    from scriptree.shell.cell_registry import CellRegistry
+
+    members = getattr(master, "_members", None) or {}
+    member_ids = list(members.keys()) if isinstance(members, dict) else list(members)
+    registry = CellRegistry.instance()
+    paths: list[str] = []
+    for mid in member_ids:
+        member = registry.get(mid) if isinstance(mid, str) else mid
+        if member is None:
+            continue
+        cp = getattr(member, "_catalog_path", None)
+        if cp:
+            paths.append(str(cp))
+    forest_name = getattr(master, "_text_label", None) or "Forest"
+    return build_forest_view(paths, forest_name=forest_name)
+
+
+# ---------------------------------------------------------------------------
 # Origins sidecar + back-propagation (v0.8.0a31+)
 # ---------------------------------------------------------------------------
 
@@ -650,6 +738,37 @@ def _restore_relative_leaf_paths(
             _restore_relative_leaf_paths(child, origin_dir)
 
 
+def _refs_groups_tree(node, source_dir: Path) -> bool:
+    """True when ``node`` is a leaf pointing at a ``.scriptreetree`` AND we are
+    writing into a synthesised group (``source_dir`` under ``_groups``).
+
+    A synthesised category group's legitimate children are TOOL leaves
+    (``.scriptree``) only — it is regenerated from tool ``category`` fields and
+    must never list another tree.  So while writing into a ``_groups`` source,
+    ANY ``.scriptreetree`` leaf child is a bogus sibling-group reference (e.g.
+    ``./MSOffice.scriptreetree`` inside ``Demo.scriptreetree``) that would
+    persist a circular reference.  For non-``_groups`` sources (ring members)
+    this is always False, so legitimate subtree refs are untouched.
+    """
+    if "_groups" not in Path(source_dir).parts:
+        return False
+    if getattr(node, "type", None) != "leaf":
+        return False
+    p = getattr(node, "path", None)
+    return bool(p) and str(p).lower().endswith(".scriptreetree")
+
+
+def _strip_groups_tree_refs(node, source_dir: Path) -> None:
+    """Recursively drop any descendant leaf that :func:`_refs_groups_tree`
+    flags (a bogus sibling-group reference), in place.  Folders only."""
+    kids = getattr(node, "children", None)
+    if not kids:
+        return
+    node.children = [c for c in kids if not _refs_groups_tree(c, source_dir)]
+    for c in node.children:
+        _strip_groups_tree_refs(c, source_dir)
+
+
 def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
     """Push edits in a merged tree back to its originating source files.
 
@@ -781,6 +900,36 @@ def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
         src = Path(src_path)
         ext = src.suffix.lower()
 
+        # v0.8.0a104 — NEVER push-back-write a synthesised auto-group
+        # (``_groups/*.scriptreetree``).  Such a tree is REGENERATED from its
+        # member tools' Category fields on every forest re-organise, so writing
+        # it from a merged/forest save is always wrong — and is precisely how a
+        # CIRCULAR reference got persisted (Demo ⊃ ``./MSOffice.scriptreetree``
+        # and vice-versa): the merged tree transiently nests one group under
+        # another, and the save relativises + writes that sibling-group leaf into
+        # the file.  The a100 per-child strip (``_strip_groups_tree_refs``,
+        # below) neutralises the cross-ref CONTENT, but this whole-file refusal
+        # is the stronger, marker-independent guarantee — it matches the posture
+        # already taken by the editor (``_is_synthesised_group`` / write-back
+        # Guard 2): a ``_groups`` file is owned by ``categorize``, never by a
+        # push-back.  Leaving it untouched lets the next re-organise rebuild it
+        # cleanly from categories.
+        try:
+            in_groups = "_groups" in src.resolve().parts
+        except (OSError, ValueError):
+            in_groups = "_groups" in src.parts
+        if in_groups:
+            result.skipped.append((
+                str(src),
+                "synthesised _groups tree — regenerated from tool categories, "
+                "never push-back-written",
+            ))
+            _log(
+                f"push_back: refusing to write synthesised group {src} "
+                f"(regenerated from categories)"
+            )
+            continue
+
         if ext == ".scriptreetree":
             # Re-load the existing source so we preserve top-level
             # metadata (TreeDef.name, etc.).  If load fails, fall
@@ -794,9 +943,25 @@ def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
                 )
                 existing = TreeDef(name=folder.name, nodes=[])
 
+            # v0.8.0a100 — DEFENSIVE: never write a child that points at a
+            # sibling synthesised group tree (a ``_groups/*.scriptreetree``).
+            # A synthesised group is regenerated by ``categorize`` and is NEVER
+            # a legitimate child of another group; when the merged/inline path
+            # nests one group inside another, persisting that produces a
+            # CIRCULAR ref (e.g. Demo ⊃ ``./MSOffice.scriptreetree``).  Strip
+            # such refs (recursively) BEFORE relativising/writing.  The primary
+            # cure is that forest hubs no longer take the merged push-back path
+            # at all (a100, v1_launcher.show_composite_for); this is the
+            # belt-and-suspenders that also protects ring masters.
+            kept_children = [
+                c for c in folder.children
+                if not _refs_groups_tree(c, src.parent)
+            ]
+            for child in kept_children:
+                _strip_groups_tree_refs(child, src.parent)
             # Restore relative leaf paths so the source file
             # doesn't carry the merged tree's absolutes.
-            for child in folder.children:
+            for child in kept_children:
                 _restore_relative_leaf_paths(child, src.parent)
 
             # Build a new TreeDef preserving the source's name +
@@ -804,7 +969,7 @@ def push_back_to_origins(merged_path: str | Path) -> PushBackResult:
             # as the new node list.
             new_tree = TreeDef(
                 name=existing.name or folder.name,
-                nodes=list(folder.children),
+                nodes=kept_children,
             )
             try:
                 save_tree(new_tree, str(src))

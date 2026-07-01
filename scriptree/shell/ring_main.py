@@ -663,6 +663,27 @@ def main() -> int:
     app.setApplicationName(app_name)
     app.setApplicationVersion("0.0.1-demo")
 
+    # Portable mode: the recent-files / dock-layout / menu-appearance settings
+    # are written through a bare ``QSettings()`` which, on Windows, lands in the
+    # REGISTRY — invisible to a folder-copy.  Flip the default QSettings format
+    # to an INI under the install-local data root so those settings travel too.
+    # MUST run before the first bare ``QSettings()`` is constructed (the cell
+    # shell builds them lazily, well after this point).  ``app_settings`` uses
+    # an explicit ``QSettings(path, IniFormat)`` and is unaffected.
+    try:
+        from scriptree.core.portable import is_portable, portable_data_root
+        if is_portable():
+            from PySide6.QtCore import QSettings
+            QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+            QSettings.setPath(
+                QSettings.Format.IniFormat,
+                QSettings.Scope.UserScope,
+                str(portable_data_root()),
+            )
+            _log(f"portable mode ON — settings/state under {portable_data_root()}")
+    except Exception as e:  # noqa: BLE001 — never let portable wiring block boot
+        _log(f"portable QSettings redirect skipped: {e}")
+
     _log(f"Starting {branding.get('appNameLong', app_name)} — phase-1 demo")
 
     # ---- Test-harness (two-gate check — ADR-002) ------------------------

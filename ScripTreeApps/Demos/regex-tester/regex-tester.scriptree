@@ -1,9 +1,14 @@
 {
   "schema_version": 3,
   "name": "Regex tester",
+  "category": "Demos",
   "description": "Demo of the v0.8.0a48+ 'regex' widget. Type a pattern in the Pattern field and watch the validity badge turn green / red as you type. Click the box icon to open the regex helper (Test / Library / Reference). When you Run, the tool applies the pattern to the Sample text and prints every match plus its captures.",
   "executable": "python",
   "working_directory": ".",
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  },
   "argument_template": [
     "regex_tester.py",
     "{pattern}",

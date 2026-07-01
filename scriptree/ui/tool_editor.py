@@ -201,6 +201,13 @@ class ToolEditorView(QWidget):
         self._category_edit.textChanged.connect(
             self._on_category_changed
         )
+        # v0.8.0a112 -- autocomplete from the canonical category catalog so the
+        # user converges on the blessed vocabulary instead of a near-duplicate.
+        try:
+            from scriptree.ui.category_completer import attach_category_completer
+            attach_category_completer(self._category_edit)
+        except Exception:  # noqa: BLE001 -- completer is a nicety, never fatal
+            pass
         top_form.addRow("Category:", self._category_edit)
 
         # Tool-level environment editor. Opens a popup that edits

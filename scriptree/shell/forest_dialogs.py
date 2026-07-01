@@ -595,6 +595,21 @@ class ForestSettingsDialog(QDialog):
             controller.forest.auto_discover.update_mode
         )
         ml.addWidget(self._mode)
+        # v0.8.0a101 — fold even single-item categories into their own folder.
+        self._fold_single_cb = QCheckBox(
+            "Fold single-item categories into their own folder"
+        )
+        self._fold_single_cb.setChecked(
+            controller.forest.auto_discover.fold_single_item_categories
+        )
+        self._fold_single_cb.setToolTip(
+            "Off (default): a category with only one tool stays at the top "
+            "level (no one-item folder).\nOn: every categorised tool gets its "
+            "category folder even when it's the only one — e.g. a lone "
+            "'Media/ffmpeg' tool lands under a 'Media' folder.\n"
+            "Re-organise (or reload) to apply."
+        )
+        ml.addWidget(self._fold_single_cb)
         layout.addWidget(mode_box)
 
         # ── Visibility (v0.8.0a52+) ──────────────────────────────
@@ -801,6 +816,9 @@ class ForestSettingsDialog(QDialog):
         f.auto_discover.roots = self._roots.values()
         f.auto_discover.include = self._include.values()
         f.auto_discover.update_mode = self._mode.value()
+        f.auto_discover.fold_single_item_categories = (
+            self._fold_single_cb.isChecked()
+        )
         # v0.8.0a46+ -- the forest settings dialog used to call
         # ``apply_label_change(text_label=_derive_label(f.name))``
         # here so renaming the forest also retouched the cell's
@@ -867,83 +885,145 @@ class ForestSettingsDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class ExcludedItemsDialog(QDialog):
-    """List of excluded paths with per-row Re-include + Forget buttons.
+    """TREE of excluded (ignored) paths with subtree Re-include / Forget.
 
-    "Forget" removes a path from the excluded list **without**
-    re-adding it — useful when an item was never relevant in the
-    first place and the user just wants the dialog clean.
+    v0.8.0a89 — rebuilt from a flat list into a ``QTreeWidget`` grouped by the
+    items' on-disk folders, so an app you ignored shows as a folder node with
+    its catalog(s) beneath it.  Select ANY node and:
+
+      * **Re-include** — bring back every excluded catalog at-or-under the
+        selection.  Select a single file → restore just it; select a folder →
+        restore it AND its children.  (This is the "restore one, or one and its
+        children" granularity the design called for.)
+      * **Forget** — drop the selection's subtree from the excluded list WITHOUT
+        re-adding (future discovery passes may surface them again).
+
+    It is the restore surface for :meth:`ForestController.ignore_copy`.
+    "Re-include" goes through ``add_item`` (which strips the path from
+    ``excluded``); "Forget" goes through ``forget_excluded``.
     """
+
+    #: Per-node data role: the list[str] of excluded paths in that subtree.
+    _PATHS = Qt.ItemDataRole.UserRole
 
     def __init__(self, controller: "ForestController") -> None:
         super().__init__(controller.forest_window)
         self._controller = controller
         self.setWindowTitle("Excluded items")
-        self.setMinimumWidth(620)
-        self.setMinimumHeight(420)
+        self.setMinimumWidth(660)
+        self.setMinimumHeight(460)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            "<b>Items previously removed from this forest.</b><br>"
-            "Auto-discovery skips these even when they exist on disk.  "
-            "Use <b>Re-include</b> to bring one back, or <b>Forget</b> "
-            "to drop it from the list (so future discovery passes can "
-            "consider it again)."
+            "<b>Items previously ignored / removed from this forest.</b><br>"
+            "Auto-discovery skips these even when they exist on disk.  Select a "
+            "row and use <b>Re-include</b> to bring it back (selecting a folder "
+            "brings back everything under it), or <b>Forget</b> to drop it from "
+            "the list so future discovery can consider it again."
         ))
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        inner_layout = QVBoxLayout(inner)
-
-        if not controller.forest.excluded:
-            inner_layout.addWidget(QLabel(
-                "<i>No excluded items yet.  Right-click a cell or "
-                "ring → Remove from forest to add it here.</i>"
-            ))
-
-        self._rows: list[tuple[str, QPushButton, QPushButton]] = []
-        for path in list(controller.forest.excluded):
-            row = QHBoxLayout()
-            label = QLabel(path)
-            label.setWordWrap(True)
-            label.setSizePolicy(label.sizePolicy().horizontalPolicy(),
-                                label.sizePolicy().verticalPolicy())
-            row.addWidget(label, stretch=1)
-            btn_re = QPushButton("Re-include")
-            btn_forget = QPushButton("Forget")
-            row.addWidget(btn_re)
-            row.addWidget(btn_forget)
-            wrapper = QWidget()
-            wrapper.setLayout(row)
-            inner_layout.addWidget(wrapper)
-            btn_re.clicked.connect(
-                lambda _checked=False, p=path: self._reinclude(p)
+        self._tree = QTreeWidget()
+        self._tree.setHeaderLabels(["Ignored item", "Path"])
+        self._tree.setColumnWidth(0, 300)
+        self._tree.setSelectionMode(
+            QTreeWidget.SelectionMode.ExtendedSelection
+        )
+        excluded = list(controller.forest.excluded)
+        if not excluded:
+            QTreeWidgetItem(
+                self._tree,
+                ["(no excluded items — right-click a cell → Ignore this copy)",
+                 ""],
             )
-            btn_forget.clicked.connect(
-                lambda _checked=False, p=path: self._forget(p)
-            )
-            self._rows.append((path, btn_re, btn_forget))
-        inner_layout.addStretch(1)
-        scroll.setWidget(inner)
-        layout.addWidget(scroll, stretch=1)
+        else:
+            self._build_tree(excluded)
+            self._tree.expandAll()
+        layout.addWidget(self._tree, stretch=1)
 
+        row = QHBoxLayout()
+        self._btn_re = QPushButton("Re-include")
+        self._btn_forget = QPushButton("Forget")
+        self._btn_re.clicked.connect(self._reinclude_selected)
+        self._btn_forget.clicked.connect(self._forget_selected)
+        row.addWidget(self._btn_re)
+        row.addWidget(self._btn_forget)
+        row.addStretch(1)
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         btn_box.rejected.connect(self.reject)
         btn_box.accepted.connect(self.accept)
-        layout.addWidget(btn_box)
+        row.addWidget(btn_box)
+        layout.addLayout(row)
 
-    def _reinclude(self, path: str) -> None:
-        from scriptree.shell.forest_io import kind_for_suffix
-        kind = kind_for_suffix(path) or "tool"
-        # add_item already strips path from `excluded`.
-        self._controller.add_item(path, kind)
-        self._controller.save()
-        self.accept()  # close + open afresh if user wants more
+    # ---- directory-trie construction ------------------------------------
+    def _build_tree(self, paths: list[str]) -> None:
+        """Render ``paths`` as a folder tree, each node carrying the list of
+        excluded paths in its subtree (so a folder node restores/forgets all of
+        them).  A common leading-directory prefix is collapsed so the tree
+        starts at the first folder where the excluded items diverge."""
+        import os
 
-    def _forget(self, path: str) -> None:
-        self._controller.forest.excluded = [
-            e for e in self._controller.forest.excluded if e != path
+        split = [
+            (os.path.abspath(p).replace("\\", "/").split("/"), p)
+            for p in paths
         ]
-        self._controller.forestChanged.emit()
+        # Longest common DIRECTORY prefix (never consume a final filename).
+        common = 0
+        if split:
+            seqs = [s for s, _ in split]
+            limit = min(len(s) for s in seqs)
+            for i in range(limit):
+                col = {s[i] for s in seqs}
+                if len(col) == 1 and all(i < len(s) - 1 for s in seqs):
+                    common = i + 1
+                else:
+                    break
+
+        root: dict = {"kids": {}, "paths": [], "leaf": ""}
+        for seq, p in split:
+            node = root
+            for depth, seg in enumerate(seq[common:]):
+                if p not in node["paths"]:
+                    node["paths"].append(p)
+                node = node["kids"].setdefault(
+                    seg, {"kids": {}, "paths": [], "leaf": ""}
+                )
+            if p not in node["paths"]:
+                node["paths"].append(p)
+            node["leaf"] = p  # this terminal node IS an excluded catalog
+
+        def render(node: dict, parent) -> None:  # noqa: ANN001
+            for seg, child in sorted(node["kids"].items()):
+                # Show the catalog path in column 2 whenever this node IS an
+                # excluded path (``leaf`` set), even if it also has children.
+                item = QTreeWidgetItem(parent, [seg, child["leaf"]])
+                item.setData(0, self._PATHS, list(child["paths"]))
+                render(child, item)
+
+        render(root, self._tree)
+
+    def _selected_paths(self) -> list[str]:
+        out: list[str] = []
+        for it in self._tree.selectedItems():
+            for p in (it.data(0, self._PATHS) or []):
+                if p not in out:
+                    out.append(p)
+        return out
+
+    def _reinclude_selected(self) -> None:
+        from scriptree.shell.forest_io import kind_for_suffix
+        paths = self._selected_paths()
+        if not paths:
+            return
+        for p in paths:
+            # add_item already strips the path from `excluded`.
+            self._controller.add_item(p, kind_for_suffix(p) or "tool")
+        self._controller.save()
+        self.accept()
+
+    def _forget_selected(self) -> None:
+        paths = self._selected_paths()
+        if not paths:
+            return
+        self._controller.forget_excluded(paths)
         self._controller.save()
         self.accept()

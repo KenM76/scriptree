@@ -7,6 +7,42 @@ more schema, more invariants.
 
 If you are a human reader, start at [`../README.md`](../README.md) instead.
 
+## Organization & placement — read this first
+
+Before you design any form, decide **where the tool/tree lives** in the forest.
+This is the single most-overlooked authoring step.
+
+- **`category`** (slash-delimited, e.g. `MSOffice/Word`, `SolidWorks/Export`)
+  is the organizing field. When **≥ 2** tools share a top segment, the forest
+  auto-folds them into one grouped cell; a solo tool stays a flat cell. Put
+  `category` **near the top** of the file (right after `name`).
+- **Mirror it on disk.** Lay the tool out so its folder path matches its
+  category — `category: "SolidWorks/Export"` → `…/SolidWorks/Export/<tool>/`.
+  The on-disk folder and `category` should never disagree.
+- **Folder-vs-loose rule:** a domain with ≥ 2 tools becomes a folder; a true
+  one-off stays loose; **never** wrap a single tool in a same-named folder.
+- **Depth:** N levels work (no cap), but keep it to ~3–4 for usable menus.
+
+Full rules — vocabulary, the ≥2-to-group threshold, the on-disk folder
+convention, and the **recommended JSON field order** — are in
+[`category_authoring.md`](category_authoring.md). **Read it before placing a
+new tool.**
+
+### JSON field order (hand-editing ergonomics)
+
+Emit keys **stable-at-top → most-edited-at-bottom**, so a human editing the
+JSON can `Ctrl+End` straight to the part they change most:
+
+- **Top:** `schema_version`, `name`, **`category`**, `description`.
+- **Middle:** the command (`executable` …), cell appearance, `source`,
+  `menus` / `actions`.
+- **Bottom — THE FORM:** `sections`, `argument_template`, **`params`** (in a
+  `.scriptree`) / **`nodes`** (in a `.scriptreetree`) — dead last.
+
+The writers (`tool_to_dict` / `tree_to_dict`) already emit this order; match it
+when hand-authoring. Order is cosmetic (the loader is order-independent) — it
+exists purely for editing comfort.
+
 ## Audit the underlying CLI before designing the form
 
 The most common failure mode for AI-generated `.scriptree` files is
@@ -108,6 +144,11 @@ the declared sections.
 
 ## Orientation
 
+- [`category_authoring.md`](category_authoring.md) — **start here for
+  organizing.** The `category` taxonomy field (slash-delimited grouping), the
+  ≥2-to-group rule, the on-disk folder convention that mirrors it, the
+  folder-vs-loose rule, and the recommended JSON field order. Read before
+  deciding where a new tool/tree lives.
 - [`architecture.md`](architecture.md) — package layout, the `core` vs
   `ui` split, the cross-platform seam, the hot-loops you should not
   cross.

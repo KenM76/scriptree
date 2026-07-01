@@ -129,6 +129,17 @@ TRIM_KEEP_MODULES = {
     "QtCore",
     "QtGui",
     "QtWidgets",
+    # v0.8.0a111 — QtNetwork is REQUIRED by
+    # ``scriptree/shell/single_instance.py`` (QLocalServer / QLocalSocket for
+    # the single-instance / second-launch handoff).  It was missing from the
+    # keep-list, so ``--trim`` stripped ``QtNetwork.pyd`` + ``Qt6Network.dll``
+    # from every portable build, silently disabling single-instance ("handoff
+    # errored ... falling through to start a primary anyway") and breaking the
+    # released zip.  Keeping it here is what makes the fix survive an
+    # ``update_lib.py --trim`` / ``--upgrade --trim`` and reach the release.
+    # The canonical audit: every ``from PySide6.Qt* import`` in scriptree/ must
+    # have its module in this set.  As of a111 that is exactly these four.
+    "QtNetwork",
 }
 
 # Extra files/directories always kept regardless of trim. These are
@@ -274,8 +285,14 @@ TRIM_REMOVE_GLOBS = {
     "libQt6Svg*.so*",
     "Qt6Xml*.dll",
     "libQt6Xml*.so*",
-    "Qt6Network*.dll",
-    "libQt6Network*.so*",
+    # v0.8.0a111 — Qt6Network was REMOVED from this explicit strip-list.  It is
+    # required by single_instance.py (QLocalServer); ``QtNetwork`` is now in
+    # ``TRIM_KEEP_MODULES``, which keeps both ``QtNetwork.pyd`` AND
+    # ``Qt6Network.dll`` via ``_iter_module_related``.  Having the DLL ALSO in
+    # this glob list overrode the keep-list (this glob sweep runs first and is
+    # not keep-list-aware), so the DLL was stripped while the .pyd survived ->
+    # an unimportable QtNetwork.  Keep-list is now the single source of truth
+    # for Network.
     "Qt6VirtualKeyboard*.dll",
     "libQt6VirtualKeyboard*.so*",
     # FFmpeg (audio/video codecs used by Qt Multimedia).

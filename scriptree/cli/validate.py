@@ -187,6 +187,34 @@ def validate_one(path: Path) -> tuple[bool, str]:
 _VALIDATABLE_SUFFIXES = (".scriptree", ".scriptreetree")
 
 
+def _collect_run_categories(targets: list[Path]) -> dict[Path, str]:
+    """Best-effort ``{path: category}`` for every loadable target (tool OR
+    tree) in a validate run.
+
+    v0.8.0a112 — feeds the cross-file *near-duplicate category* check: two
+    tools whose categories differ only by case / plural / a typo
+    (``Demo`` vs ``Demos``) fold into SEPARATE forest cells, so we warn to
+    consolidate.  Never raises — a file that fails to load is simply skipped
+    (its load failure is already reported by ``validate_one``).
+    """
+    from scriptree.core.io import load_tool, load_tree
+    out: dict[Path, str] = {}
+    for p in targets:
+        if not p.is_file() or p.suffix.lower() not in _VALIDATABLE_SUFFIXES:
+            continue
+        try:
+            obj = (
+                load_tree(p) if p.suffix.lower() == ".scriptreetree"
+                else load_tool(p)
+            )
+            cat = (getattr(obj, "category", "") or "").strip()
+            if cat:
+                out[p] = cat
+        except Exception:  # noqa: BLE001 -- lint collection is never fatal
+            continue
+    return out
+
+
 def validate_tree(root: Path) -> tuple[int, int, int]:
     """Walk ``root`` and validate every ``.scriptree`` and
     ``.scriptreetree`` underneath.
@@ -205,6 +233,9 @@ def validate_tree(root: Path) -> tuple[int, int, int]:
     scanned = 0
     failed = 0
     warned = 0
+    # v0.8.0a112 — pre-scan every target's category so the lint pass can flag
+    # cross-file near-duplicates (e.g. one tool ``Demo`` + another ``Demos``).
+    run_cats = _collect_run_categories(targets)
     # ASCII markers — Windows consoles often run cp1252 which
     # can't encode ✓/✗.  Stick to OK / FAIL / WARN so output
     # renders cleanly everywhere.
@@ -221,11 +252,15 @@ def validate_tree(root: Path) -> tuple[int, int, int]:
             failed += 1
             continue
 
-        # Lint pass (v0.8.0a25+) -- non-blocking advisory warnings.
-        # Only run on .scriptree files; trees have a different shape
-        # and the section-count guidance doesn't apply.  Loading the
-        # tool a second time is cheap (JSON parse for a few KB) and
-        # keeps ``validate_one``'s public 2-tuple contract intact.
+        # Lint pass -- non-blocking advisory warnings.  ``lints`` accumulates
+        # form-ergonomics advice (tools only) PLUS category advice (tools AND
+        # trees, v0.8.0a112).
+        lints: list[str] = []
+
+        # Form-ergonomics lints -- only .scriptree (trees have a different
+        # shape and the section-count guidance doesn't apply).  Loading the
+        # tool a second time is cheap (JSON parse for a few KB) and keeps
+        # ``validate_one``'s public 2-tuple contract intact.
         if p.suffix.lower() == ".scriptree":
             try:
                 from scriptree.core.io import load_tool, param_load_warnings
@@ -256,10 +291,24 @@ def validate_tree(root: Path) -> tuple[int, int, int]:
                     pass
             except Exception:  # noqa: BLE001
                 lints = []
-            for w in lints:
-                print(f"[WARN] {p}: {w}")
-            if lints:
-                warned += 1
+
+        # Category lints (v0.8.0a112) -- applies to BOTH .scriptree and
+        # .scriptreetree.  Warns when this file's category is a near-duplicate
+        # of a canonical catalog entry (suggest the blessed spelling) or of
+        # another category in THIS run (consolidate the two cells into one).
+        cat = run_cats.get(p, "")
+        if cat:
+            try:
+                from scriptree.core import category_catalog as _cc
+                siblings = [c for q, c in run_cats.items() if q != p and c]
+                lints.extend(_cc.lint_category(cat, siblings=siblings))
+            except Exception:  # noqa: BLE001 -- category lint never fatal
+                pass
+
+        for w in lints:
+            print(f"[WARN] {p}: {w}")
+        if lints:
+            warned += 1
     return scanned, failed, warned
 
 

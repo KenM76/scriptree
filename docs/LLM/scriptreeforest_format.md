@@ -71,10 +71,25 @@ travels with the source); absolute paths are stored verbatim.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `path` | string | required | Path to the source file (`.scriptreering`, `.scriptreetree`, or `.scriptree`). |
+| `path` | string | required | Path to the source file (`.scriptreering`, `.scriptreetree`, or `.scriptree`). When `root` is present this is **relative to that named root**; otherwise it is the legacy relative-or-absolute form. |
+| `root` | string | absent | **Named-root tag (v0.8.0a92, option #2).** When set, `path` is resolved as `known_roots()[root] / path`, with the root's base recomputed per machine / mode — so the reference survives a folder move, a portable↔normal toggle, and a cross-machine copy. Known ids: `install` (`<install>/ScripTreeApps`, travels with a folder-copy), `apps` (the sibling deploy tree), `personal` (per-user app-data, or install-local under portable mode). An unknown id falls back to the legacy path resolver. **Omit it and the loader treats `path` as a legacy bare path — old forests load unchanged.** |
 | `kind` | `"ring"` \| `"tree"` \| `"tool"` | derived from suffix | Identifies how the controller spawns this entry — rings load via `load_ring`; trees and tools become a single bound cell. |
 | `position` | `[x, y]` | `null` (let layout choose) | On-screen position for the master cell / standalone cell. |
-| `catalog_path` | string | absent | Used internally for trees/tools when the bound catalog differs from `path` — usually omitted. |
+| `catalog_path` | string | absent | Used internally for trees/tools when the bound catalog differs from `path` — usually omitted. Rooted the same way as `path` via a sibling `catalog_root` tag when applicable. |
+| `catalog_root` | string | absent | Named-root tag for `catalog_path` (same rules as `root`). |
+
+> **Excluded list (v0.8.0a92):** entries in `excluded[]` are rooted the same
+> way — each is either a `{ "root": …, "path": <rel> }` object or a legacy
+> string — so an ignored copy keeps matching after a move/portable-toggle.
+>
+> **Downgrade hazard:** a v0.8.0a92+ forest stores rooted items with the
+> `ScripTreeApps/` prefix STRIPPED (`path` is relative to the named root). A
+> *pre-a92* build has no `root` awareness, reads `path` as a bare relative
+> string, and will mis-resolve it — stranding those cells. This only bites on a
+> **downgrade / rollback** to an older build (or a second machine still on an
+> older version); within a single up-to-date deployment it never occurs. Don't
+> hand-edit a rooted `path` to re-add the prefix — the loader strips it against
+> the named base.
 
 ### `auto_discover` config
 

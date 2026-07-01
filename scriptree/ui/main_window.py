@@ -227,6 +227,10 @@ class MainWindow(QMainWindow):
         self._launcher.uninstallRequested.connect(
             self._on_tree_uninstall_requested
         )
+        # v0.8.0a100 — "Open in editor" on a linked-subtree row loads that
+        # .scriptreetree as the editable root tree (so the user can set its
+        # Category / properties and Save).
+        self._launcher.openTreeRequested.connect(self._load_file_into_ui)
         self._launcher.treeModified.connect(self._on_tree_modified)
 
         self._tools_dock = ads.CDockWidget(self._dock_manager, "Tools")
@@ -340,23 +344,17 @@ class MainWindow(QMainWindow):
 
         m_file.addSeparator()
 
-        act_open_tool = QAction("&Open .scriptree...", self)
-        act_open_tool.setShortcut("Ctrl+O")
-        act_open_tool.triggered.connect(self._open_tool)
-        m_file.addAction(act_open_tool)
-
-        act_open_tree = QAction("Open .scriptree&tree...", self)
-        act_open_tree.triggered.connect(self._open_tree)
-        m_file.addAction(act_open_tree)
-
-        # Combined filter — opens the same dialog but defaults to
-        # the "files and trees" filter so the user sees both types.
-        # All three filters are available in the filter dropdown of
-        # every Open dialog regardless of which menu item was used.
-        act_open_any = QAction("Open &any...", self)
-        act_open_any.setShortcut("Ctrl+Shift+O")
-        act_open_any.triggered.connect(self._open_any_file)
-        m_file.addAction(act_open_any)
+        # v0.8.0a97 — a SINGLE "Open…" (was three: tool / tree / any).  One
+        # dialog whose filter dropdown carries every ScripTree type — tool,
+        # tree, AND forest — and the chosen file's extension picks the handler.
+        act_open = QAction("&Open...", self)
+        act_open.setShortcut("Ctrl+O")
+        act_open.setToolTip(
+            "Open a tool, tree, or forest "
+            "(.scriptree / .scriptreetree / .scriptreeforest)"
+        )
+        act_open.triggered.connect(self._open_file_dialog)
+        m_file.addAction(act_open)
 
         act_new_tree = QAction("New scriptree &tree", self)
         act_new_tree.triggered.connect(self._new_tree)
@@ -986,14 +984,30 @@ class MainWindow(QMainWindow):
     #: are always available in the dropdown; the ``default`` argument to
     #: ``_open_any`` just picks which one the dialog opens on.
     _OPEN_FILTERS = (
-        "ScripTree files (*.scriptree)"
-        ";;ScripTree trees (*.scriptreetree)"
-        ";;ScripTree files and trees (*.scriptree *.scriptreetree)"
+        "All ScripTree files (*.scriptree *.scriptreetree *.scriptreeforest)"
+        ";;Tools (*.scriptree)"
+        ";;Trees (*.scriptreetree)"
+        ";;Forests (*.scriptreeforest)"
         ";;All files (*)"
     )
     _FILTER_TOOL = "ScripTree files (*.scriptree)"
     _FILTER_TREE = "ScripTree trees (*.scriptreetree)"
     _FILTER_BOTH = "ScripTree files and trees (*.scriptree *.scriptreetree)"
+
+    def _open_file_dialog(self) -> None:
+        """Single File → Open (v0.8.0a97).
+
+        One dialog with every ScripTree type in the filter dropdown; the chosen
+        file's extension routes it (``_load_file_into_ui``).  Defaults to the
+        "All ScripTree files" filter so the user sees tools, trees, and forests
+        together.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open", "", self._OPEN_FILTERS,
+        )
+        if not path:
+            return
+        self._load_file_into_ui(path)
 
     def _open_any(self, title: str, default_filter: str) -> None:
         """Shared File -> Open dialog.
@@ -1014,6 +1028,9 @@ class MainWindow(QMainWindow):
     def _load_file_into_ui(self, path: str) -> None:
         """Route an opened path to the appropriate handler and record
         it in the correct recent-files list."""
+        if path.lower().endswith(".scriptreeforest"):
+            self._open_forest(path)
+            return
         if self._is_tree_path(path):
             if not self._confirm_discard_tree():
                 return
@@ -1027,6 +1044,59 @@ class MainWindow(QMainWindow):
             return
         self._show_runner(tool, path)
         self._add_recent_file(path)
+
+    def _open_forest(self, path: str) -> None:
+        """Open a ``.scriptreeforest`` in the editor.
+
+        v0.8.0a99 — renders the forest's saved members as a PROVENANCE-VISIBLE
+        view (``build_forest_view``): each member is a linked subtree
+        (``.scriptreetree``) or tool leaf (``.scriptree``) that names its source
+        file on hover — NOT the old flattened merge that hid which file backed
+        each folder.  Edit a member via right-click → Open on its row (a100
+        wires inline edit + drag-to-recategorize).
+        """
+        if not self._confirm_discard_tree():
+            return
+        from scriptree.shell import forest_io
+        from scriptree.shell.merged_tree import build_forest_view
+        try:
+            forest = forest_io.load_forest(path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Open forest", f"Couldn't load the forest:\n{e}",
+            )
+            return
+        # Only tool/tree members render as a tree view; rings are runtime cell
+        # layouts, not editable here.
+        catalogs = [
+            it.path for it in forest.items
+            if it.path and it.path.lower().endswith(
+                (".scriptree", ".scriptreetree")
+            )
+        ]
+        if not catalogs:
+            QMessageBox.information(
+                self, "Open forest",
+                "This forest has no saved tool/tree members to open.\n\n"
+                "(Auto-discovered items aren't stored in the forest file, so "
+                "only explicitly-added members appear here.)",
+            )
+            return
+        try:
+            view = build_forest_view(
+                catalogs, forest_name=forest.name or Path(path).stem,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Open forest",
+                f"Couldn't build the forest view:\n{e}",
+            )
+            return
+        self._launcher.load(str(view))
+        self.statusBar().showMessage(
+            f"Opened forest: {Path(path).name} "
+            f"({len(catalogs)} member(s))", 5000,
+        )
 
     def _open_tool(self) -> None:
         self._open_any("Open .scriptree", self._FILTER_TOOL)

@@ -501,6 +501,39 @@ class ForestController(QObject):
                 if self.forest.window_position != new_pos:
                     self.forest.window_position = new_pos
                     self._mark_dirty()
+                # v0.8.0a108 — keep the visibility model's ONE position store
+                # current on every hub drag.  This is the core of the a108
+                # unification: ``apply_state`` (every show path) reads
+                # ``state.hub_position``, so a tray click / taskbar restore now
+                # lands the hub where the user LAST LEFT IT rather than snapping
+                # back to a stale show-time coordinate.  The manager may not
+                # exist yet on the very first move (constructed just after this
+                # slot is wired) -- guard for None.
+                #
+                # CRITICAL: ``moveEvent`` emits ``hexagonMoved`` on EVERY move,
+                # including the programmatic minimise / hide transitions
+                # apply_state drives.  Only capture when the hub is in a normal
+                # interactive state (visible + not minimised) so a spurious
+                # transition move can't overwrite the good position with a
+                # minimise-time (0,0).  A real user drag always satisfies this;
+                # apply_state captures the hide-time position itself before it
+                # minimises.
+                vis = self._visibility
+                if (
+                    vis is not None
+                    and getattr(vis, "_state", None) is not None
+                    # [review fix] Ignore moves that apply_state itself is making
+                    # (the clamp-on-show).  Without this, showing a hub whose
+                    # stored position is off-screen would clamp it on-screen,
+                    # and this slot would then overwrite state.hub_position with
+                    # the CLAMPED value (and persist it) -- silently losing the
+                    # user's real off-screen position.  apply_state holds
+                    # _applying_state True for the duration of its render pass.
+                    and not getattr(vis, "_applying_state", False)
+                    and self.forest_window.isVisible()
+                    and not self.forest_window.isMinimized()
+                ):
+                    vis._state.hub_position = QPoint(p)
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -546,6 +579,19 @@ class ForestController(QObject):
         except Exception as exc:  # noqa: BLE001
             _log(f"start: visibility.apply failed: {exc!r}")
 
+        # v0.8.0a108 — seed the visibility model's ONE position store from the
+        # hub's just-placed startup position, so EVERY later show path
+        # (apply_state via tray click / taskbar restore) lands the hub where it
+        # actually is rather than at (0,0) / a stale spot / None.  Before a108
+        # the position store (then ``_last_hub_position``) was written ONLY by
+        # ``hide_hub``, so a tray click BEFORE any hide moved the hub to a
+        # never-set coordinate -- the "jumped to the top-left corner on first
+        # click" symptom.  Seeding here closes that gap.
+        try:
+            self._visibility._state.hub_position = QPoint(position)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"start: could not seed hub_position into model: {exc!r}")
+
         # Initial show.  Always-on-top wins; otherwise taskbar
         # gets a minimised hex; otherwise the hub stays hidden
         # (tray-only mode -- user clicks the tray icon).
@@ -561,6 +607,13 @@ class ForestController(QObject):
             else "tray_only_hidden"
         )
         if self._preferences.show_always_on_top:
+            # Model agrees: the forest is REVEALED at startup in always-on-top
+            # mode.  We keep the explicit show()+fade here (rather than routing
+            # through apply_state) because the Win11 first-map flag timing +
+            # soft fade-in is delicate and live-tuned; apply_state owns every
+            # LATER show.  Seeding state.shown keeps the model truthful so a
+            # subsequent auto-hide flip / tray round-trip reads the right state.
+            self._visibility._state.shown = True
             self.forest_window.show()
             # v0.6.10 macify: soft fade-in for the forest hub.
             try:
@@ -573,7 +626,16 @@ class ForestController(QObject):
             # this, a hidden Qt.Window has no taskbar button --
             # the user would have no surface to click and the
             # forest would be unreachable until they restarted.
+            # Model: the forest starts in its HIDDEN (auto-hide) state -- the
+            # hub is minimised to its taskbar entry and the cells fold away
+            # (the "Decide initial visibility" tail).  shown=False so the first
+            # taskbar-entry click runs apply_state's show path.
+            self._visibility._state.shown = False
             self.forest_window.showMinimized()
+        else:
+            # Tray-only: the forest starts hidden; the tray icon's click runs
+            # apply_state's show path.  Keep the model truthful.
+            self._visibility._state.shown = False
         _log(f"[forest_startup] mode={_startup_mode} initial show issued")
         try:
             from PySide6.QtCore import QTimer
@@ -974,9 +1036,9 @@ class ForestController(QObject):
         # v0.8.0a57 -- Debug sub-submenu.  Two items:
         #   * "Enable verbose logging" -- checkable toggle that
         #     tees stderr to %APPDATA%/ScripTree/logs/ AND flips
-        #     win_virtual_desktops verbose output on.  Persisted
-        #     in QSettings so it survives the restart that's
-        #     usually needed to reproduce a startup-only bug.
+        #     module verbose output on.  Persisted in QSettings so
+        #     it survives the restart that's usually needed to
+        #     reproduce a startup-only bug.
         #   * "Open debug folder" -- pops Explorer at the log
         #     directory so the user can grab the file to send.
         from scriptree.shell import debug_logging as _dbg
@@ -1017,6 +1079,32 @@ class ForestController(QObject):
         )
         a_excluded = forest_menu.addAction(
             _bundled("filter"), "Manage excluded items…",
+        )
+        # v0.8.0a93 — Portable submenu: gather tools that live OUTSIDE the
+        # install tree (the sibling 'apps' deploy tree or per-user 'personal'
+        # root) INTO <install>/ScripTreeApps, so the install folder is
+        # self-contained and travels.  Both reduce to the consolidate
+        # primitive (scriptree.shell.portable_consolidate).
+        from scriptree.core import portable as _portable
+        a_make_copy = forest_menu.addAction(
+            _bundled("package"),
+            "Make a portable copy (incl. local tools)…",
+        )
+        a_make_copy.triggered.connect(
+            self._on_make_portable_copy_with_tools,
+        )
+        a_convert = forest_menu.addAction(
+            _bundled("package"),
+            "Convert this install to portable (copy local tools here)…",
+        )
+        a_convert.triggered.connect(
+            self._on_convert_install_to_portable_with_tools,
+        )
+        # In-place convert only when NOT already portable and the forest has a
+        # file on disk to re-save (loaded_from set).  Make-a-copy is always
+        # available (it never touches the running install).
+        a_convert.setEnabled(
+            (not _portable.is_portable()) and bool(self.forest.loaded_from)
         )
         forest_menu.addSeparator()
         a_about = forest_menu.addAction(
@@ -1880,6 +1968,20 @@ class ForestController(QObject):
         item = ForestItem(path=path, kind=kind, position=position)
         self.forest.items.append(item)
         self._spawn_item(item)
+        # v0.8.0a114 [first-run fold] -- if the forest is currently AUTO-HIDDEN
+        # (always-on-top OFF; hub minimised/hidden), fold the cell we just
+        # spawned.  This is the FIRST-RUN bug: at startup the forest is EMPTY,
+        # so the post-spawn ``hide_descendants_only`` folds nothing; the
+        # first-run discovery then populates the forest through ``add_item``,
+        # and each new cell would otherwise stay VISIBLE on the desktop while
+        # the hub is hidden ("hub disappeared, cells left behind").  The
+        # visibility manager appends the new cell(s) to the folded set (never
+        # resetting it) so the next reveal brings the whole forest back.
+        if self._visibility is not None:
+            try:
+                self._visibility.fold_new_visible_descendants()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"add_item: fold_new_visible_descendants raised {exc!r}")
         self.forestChanged.emit()
 
     def remove_item(self, path: str, *, exclude: bool = True) -> None:
@@ -1902,6 +2004,72 @@ class ForestController(QObject):
             _norm(e) for e in self.forest.excluded
         }:
             self.forest.excluded.append(path)
+        self.forestChanged.emit()
+
+    def ignore_copy(self, path: str) -> list[str]:
+        """Ignore a discovered *copy* — the dual-source "I have a local AND a
+        server copy, hide this one" action (v0.8.0a89).
+
+        Excludes ``path`` so auto-discovery won't re-add it and drops its
+        forest item.  **"Plus children":** when ``path`` is a tree/folder
+        catalog (``.scriptreetree``), every OTHER forest item whose catalog
+        lives UNDER the same app folder is excluded too — so an app that
+        surfaced as several items (or a folder dropped as a set of tools) is
+        ignored as a unit.  A single-tool leaf (``.scriptree``) ignores only
+        itself.
+
+        Path-keyed (via ``_norm``), so it suppresses exactly THIS physical copy
+        and leaves a same-named copy at a different path untouched.  Returns the
+        list of newly-excluded paths.  Idempotent; the caller persists via
+        :meth:`save` (the dialogs/menu handlers do).
+        """
+        npath = _norm(path)
+        app_dir = None
+        if path.lower().endswith(".scriptreetree"):
+            # Resolve the app folder through the SAME ``_norm`` (Path.resolve +
+            # lower + forward-slash) used for the excluded set and by the
+            # discovery layer — otherwise child-matching here and
+            # discovery-suppression later could disagree on a symlinked /
+            # junctioned tree, letting an "ignored" child reappear.  The
+            # trailing "/" stops a sibling folder whose name shares a prefix
+            # (e.g. ``SolidWorks/`` vs ``SolidWorksTools/``) from matching.
+            app_dir = _norm(str(Path(path).parent)).rstrip("/") + "/"
+
+        def _is_child(itpath: str) -> bool:
+            if app_dir is None:
+                return False
+            return _norm(itpath).startswith(app_dir)
+
+        keep: list[ForestItem] = []
+        dropped: list[str] = []
+        for it in self.forest.items:
+            if _norm(it.path) == npath or _is_child(it.path):
+                self._despawn_item(it)
+                dropped.append(it.path)
+            else:
+                keep.append(it)
+        self.forest.items = keep
+
+        # Always exclude the clicked path (even if it had no live item), plus
+        # every child item that was dropped.
+        have = {_norm(e) for e in self.forest.excluded}
+        newly: list[str] = []
+        for p in [path, *dropped]:
+            if _norm(p) not in have:
+                self.forest.excluded.append(p)
+                have.add(_norm(p))
+                newly.append(p)
+        self.forestChanged.emit()
+        return newly
+
+    def forget_excluded(self, paths: list[str]) -> None:
+        """Drop ``paths`` from the excluded list WITHOUT re-adding them — the
+        "stop tracking these as ignored" action behind the Excluded-items
+        dialog's *Forget*.  Future discovery passes may surface them again."""
+        drop = {_norm(p) for p in paths}
+        self.forest.excluded = [
+            e for e in self.forest.excluded if _norm(e) not in drop
+        ]
         self.forestChanged.emit()
 
     # ------------------------------------------------------------------
@@ -2000,10 +2168,18 @@ class ForestController(QObject):
 
         groups_dir = default_personal_root() / "_groups"
 
+        # v0.8.0a101 — per-forest opt-in: fold even SINGLE-item categories into
+        # their own folder (min_items_to_synthesise=1).  Default 2 keeps the
+        # "don't make a one-item folder" rule, so a lone ``Media/ffmpeg`` tool
+        # stays top-level unless the user turns this on.
+        min_items = (
+            1 if self.forest.auto_discover.fold_single_item_categories else 2
+        )
         outcomes = group_by_category(
             candidates,
             output_dir=groups_dir,
             existing_tree_names=self._existing_tree_names(),
+            min_items_to_synthesise=min_items,
         )
 
         # Translate outcomes back to DiscoveredItem-shaped records.
@@ -2045,9 +2221,15 @@ class ForestController(QObject):
         return new_discovered
 
     def _existing_tree_names(self) -> set[str]:
-        """Stems of every ``.scriptreetree`` currently in the
-        forest's roots, so the synth pass can avoid colliding
-        with a user-authored tree of the same name."""
+        """Stems of every USER-AUTHORED ``.scriptreetree`` in the forest's
+        roots, so the synth pass can avoid colliding with one of the same name.
+
+        v0.8.0a98 — EXCLUDE anything under a ``_groups`` dir.  Those are the
+        synth pass's OWN output; counting them as "existing" made the next pass
+        rename its fresh ``MSOffice.scriptreetree`` to ``MSOffice__auto`` to dodge
+        the (self-inflicted) collision — the duplicate-group bug.  Synthesised
+        output must never feed back into the synth decision.
+        """
         from pathlib import Path
         names: set[str] = set()
         for root in self.forest.auto_discover.roots:
@@ -2058,6 +2240,8 @@ class ForestController(QObject):
                     rp = (_project_root() / rp).resolve()
                 if rp.is_dir():
                     for tree in rp.rglob("*.scriptreetree"):
+                        if "_groups" in tree.parts:
+                            continue  # synthesised output, not user-authored
                         names.add(tree.stem)
             except Exception:  # noqa: BLE001
                 continue
@@ -2110,6 +2294,357 @@ class ForestController(QObject):
             self.apply_diff(diff)
         elif cfg.update_mode == "prompt":
             self._show_diff_dialog(diff)
+
+    # ------------------------------------------------------------------
+    # Portable consolidation (v0.8.0a93)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _private_tool_warning(plan) -> str:
+        """Return a SolidWorks/private-tool caution for items that WOULD be
+        copied, or '' if none.
+
+        Consolidating private SolidWorks automation (``.csx`` scripts,
+        ``sw_bridge``, anything under ``SolidWorksTools``, SOLIDWORKS interop
+        DLLs) INTO the install tree is fine for personal use, but the install
+        folder may later be zipped or shared — and those tools must never be
+        published.  We surface them so the user can review before confirming
+        (matching the global "SolidWorks tools are PRIVATE" rule).
+
+        IMPORTANT: we inspect the actual folder CONTENTS, not just the tool's
+        folder name — a neutrally-named folder (``MyMacros/``) can still hold
+        ``sw_bridge.exe`` + ``*.csx``.  (A name-only check would also let the
+        ``.csx`` token go dead, since the tool's ``rel`` is a directory path,
+        never a ``.csx`` filename.)  The detection helpers live in
+        ``portable_export`` so the make-a-copy path can reuse them to also scan
+        the install's own ScripTreeApps.
+        """
+        from pathlib import Path
+        from scriptree.shell.portable_export import (
+            file_is_private, folder_has_private_tools,
+        )
+
+        hits: list[str] = []
+        for p in plan:
+            if p.status not in ("copy", "collision"):
+                continue
+            try:
+                if getattr(p, "single_file", False):
+                    target = Path(p.item.path)
+                    if file_is_private(target):
+                        hits.append(target.name)
+                elif p.src_folder and folder_has_private_tools(p.src_folder):
+                    hits.append(p.rel or Path(p.item.path).name)
+            except Exception:  # noqa: BLE001
+                continue
+        hits = sorted(set(hits))
+        if not hits:
+            return ""
+        shown = "\n  - ".join(hits[:12])
+        more = f"\n  …and {len(hits) - 12} more" if len(hits) > 12 else ""
+        return (
+            "\n\n⚠ PRIVATE TOOLS — these contain SolidWorks/private automation "
+            "(.csx, sw_bridge, SOLIDWORKS interop); they will be copied into the "
+            "install tree.  Never publish or share a copy that contains them:"
+            f"\n  - {shown}{more}"
+        )
+
+    def _on_make_portable_copy_with_tools(self) -> None:
+        """Build a NEW self-contained portable ScripTree at a chosen folder.
+
+        Copies the app (and its install tools) into an EMPTY destination, pulls
+        every forest tool living OUTSIDE the install into ``<dest>/ScripTreeApps``,
+        and writes a dest-rooted portable forest + sentinel — all WITHOUT touching
+        the running install or the live forest (the forest is rebased on a deep
+        copy).  See :mod:`scriptree.shell.portable_export` for the primitive.
+        """
+        import copy as _copy
+        from pathlib import Path
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from scriptree.shell import forest_io as fio
+        from scriptree.shell import portable_consolidate as pcz
+        from scriptree.shell import portable_export as pex
+
+        parent = self.forest_window
+        dest_s = QFileDialog.getExistingDirectory(
+            parent, "Choose an EMPTY folder for the portable copy",
+        )
+        if not dest_s:
+            return
+        dest = Path(dest_s).resolve()
+        install_root = fio._project_root().resolve()
+        cur_apps = install_root / "ScripTreeApps"
+        dest_apps = dest / "ScripTreeApps"
+
+        # Refuse a dest inside (or a parent of) the current install — copytree
+        # would recurse / the copy would be incoherent.
+        try:
+            if (dest == install_root or dest.is_relative_to(install_root)
+                    or install_root.is_relative_to(dest)):
+                QMessageBox.warning(
+                    parent, "Make portable copy",
+                    "Pick a folder OUTSIDE the current install (and not a parent "
+                    "of it).",
+                )
+                return
+        except Exception:  # noqa: BLE001 — is_relative_to is best-effort here
+            pass
+        if dest.exists() and dest.is_dir() and any(dest.iterdir()):
+            QMessageBox.warning(
+                parent, "Make portable copy",
+                f"{dest}\n\nis not empty.  Choose an empty or new folder.",
+            )
+            return
+
+        # Plan the OUTSIDE-tool consolidation against the DEST's apps root.
+        plan = pcz.plan_consolidation(self.forest, install_apps_root=dest_apps)
+        n_copy = sum(1 for p in plan if p.status in ("copy", "collision"))
+        n_outside = sum(1 for p in plan if p.status == "outside")
+        extra = ""
+        if n_outside:
+            extra = (
+                f"\n\n({n_outside} tool(s) live under no known root and can't be "
+                "bundled — they'll be left out of the copy.)"
+            )
+        # Private-tool caution: the OUTSIDE tools being consolidated AND the
+        # install's own ScripTreeApps (copied wholesale) may hold private
+        # SolidWorks automation — and this copy is explicitly shareable.
+        priv_install = ""
+        if pex.folder_has_private_tools(cur_apps):
+            priv_install = (
+                "\n\n⚠ Your install's own tools (ScripTreeApps) include "
+                "SolidWorks/private automation — it will be copied into this "
+                "shareable folder too.  Do NOT publish or hand it to anyone "
+                "outside your control."
+            )
+        msg = (
+            f"Build a self-contained portable ScripTree at:\n  {dest}\n\n"
+            f"It will include the app, your install tools, and {n_copy} tool(s) "
+            "from outside the install.  Your current install and forest are NOT "
+            "changed."
+            + extra
+            + self._private_tool_warning(plan)
+            + priv_install
+            + "\n\nNote: this copies the app exactly as installed.  For a copy "
+            "with bundled Python for a clean machine, run "
+            "`make_portable.py --bundle-python` from the dev tree."
+        )
+        if QMessageBox.question(
+            parent, "Make a portable copy", msg,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Ok:
+            return
+
+        dropped: list[str] = []
+        QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            # 1. Copy the app (+ install tools) into the empty dest.  Nothing
+            #    else has been written yet, so a failure here is clean.
+            try:
+                pex.copy_install_tree(install_root, dest)
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.warning(
+                    parent, "Make portable copy",
+                    f"Couldn't copy the app to {dest}:\n{e}",
+                )
+                return
+            # 2-4. Consolidate + rebase + write the portable forest/sentinel.
+            #      Guarded as ONE unit: once step 1 has written a full app tree,
+            #      ANY failure below leaves an INCOMPLETE dest (app present, but
+            #      no portable forest/sentinel — it would boot non-portable), so
+            #      we tell the user it's incomplete and safe to delete.
+            try:
+                # 2. Consolidate OUTSIDE tools into <dest>/ScripTreeApps.
+                result = pcz.execute_consolidation(
+                    plan, install_apps_root=dest_apps, on_collision="rename",
+                )
+                # 3. Rebase a DEEP COPY of the forest onto the dest (live
+                #    untouched): apps/personal -> dest copies; install -> dest
+                #    mirror; then DROP anything that didn't land under the dest
+                #    (a failed copy, or a tool under no known root) so the
+                #    exported forest never references an off-tree dangling root.
+                work = _copy.deepcopy(self.forest)
+                pcz.rebase_forest_items(work, result)
+                pex.rebase_install_items_to_external(
+                    work, current_install_apps=cur_apps, dest_apps=dest_apps,
+                )
+                dropped = pex.prune_items_outside_external(work, dest_apps)
+                # 4. Save the dest-rooted forest at the portable autoload path +
+                #    mark the copy portable.
+                out = pex.external_autoload_path(dest)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pex.save_forest_for_external_install(work, out, dest)
+                (dest / "portable").write_text(
+                    "ScripTree portable marker.\n", encoding="utf-8",
+                )
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.warning(
+                    parent, "Make portable copy",
+                    f"The app was copied to:\n  {dest}\n\nbut finishing the "
+                    f"portable copy failed:\n{e}\n\nThat folder is INCOMPLETE "
+                    "(it would not run as a portable copy) — you can delete it "
+                    "and try again.  Your current install is unchanged.",
+                )
+                return
+        finally:
+            QGuiApplication.restoreOverrideCursor()
+
+        errs = ""
+        if result.errors:
+            errs = "\n\nSome tool copies failed:\n  - " \
+                + "\n  - ".join(result.errors[:6])
+        if dropped:
+            errs += (
+                f"\n\n{len(dropped)} tool(s) couldn't be bundled (under no "
+                "known root, or a copy failed) and were left out of the copy's "
+                "forest."
+            )
+        QMessageBox.information(
+            parent, "Portable copy ready",
+            f"Built a self-contained portable ScripTree at:\n  {dest}\n\n"
+            f"Included the app + {result.copied} outside tool(s)"
+            + (f" (+{result.collisions} renamed for a name clash)" if result.collisions else "")
+            + ".  Launch ScripTree from that folder to use it — your current "
+            "install is unchanged." + errs,
+        )
+
+    def _on_convert_install_to_portable_with_tools(self) -> None:
+        """Convert THIS install to portable, pulling every outside tool in first.
+
+        For each forest tool whose catalog lives OUTSIDE the install tree (under
+        the sibling ``apps`` deploy tree or the per-user ``personal`` root), copy
+        its folder into ``<install>/ScripTreeApps`` at the same root-relative
+        sub-path and re-point the forest item at the install copy (so the next
+        save tags it ``root: "install"`` and it travels with a folder-copy).
+        Then flip Portable mode on via the same proven ``migrate_for_toggle``
+        path the Settings toggle uses.
+
+        Order is load-bearing and non-destructive:
+
+          1. ``execute_consolidation`` — pure COPY (sources never moved/deleted).
+          2. re-key ``self._spawned`` (live cells stay open; only their
+             path-key changes) so ``save`` still finds each window by its NEW
+             path.  We deliberately do NOT close/respawn the cells — closing a
+             member fires ``_on_cell_closed`` which would prune the very item we
+             are re-rooting.
+          3. ``rebase_forest_items`` — point items at the install copy.
+          4. ``save`` — persist the re-rooted forest (now ``root: "install"``).
+          5. ``migrate_for_toggle(True)`` — flip portable + carry state LAST, so
+             a failure anywhere above leaves a fully-working non-portable install
+             with the tools merely *also* present under the install tree.
+        """
+        from PySide6.QtWidgets import QMessageBox
+        from scriptree.core import portable as portmod
+        from scriptree.shell import portable_consolidate as pcz
+        from scriptree.shell import portable_migrate
+
+        parent = self.forest_window
+        if portmod.is_portable():
+            QMessageBox.information(
+                parent, "Convert to portable",
+                "This install is already running in portable mode — nothing to "
+                "convert.",
+            )
+            return
+
+        plan = pcz.plan_consolidation(self.forest)
+        to_copy = [p for p in plan if p.status in ("copy", "collision")]
+        n_outside = sum(1 for p in plan if p.status == "outside")
+        if not to_copy:
+            QMessageBox.information(
+                parent, "Convert to portable",
+                "Every forest tool already lives inside the install tree — "
+                "there is nothing to copy.  Use Settings ▸ Portable mode to "
+                "switch this install to portable.",
+            )
+            return
+
+        extra = ""
+        if n_outside:
+            extra = (
+                f"\n\n({n_outside} tool(s) live under no known root and will be "
+                "left where they are — they won't travel with the portable "
+                "folder.)"
+            )
+        msg = (
+            f"Copy {len(to_copy)} tool folder(s) from outside the install into "
+            "<install>/ScripTreeApps, re-point the forest at those copies, then "
+            "switch this install to portable mode?\n\n"
+            "Your originals are NOT moved or deleted — this is a copy.  A "
+            "name clash inside the install tree is kept as <name>-2.  A restart "
+            "is required afterwards."
+            + extra
+            + self._private_tool_warning(plan)
+        )
+        if QMessageBox.question(
+            parent, "Convert this install to portable", msg,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Ok:
+            return
+
+        # 1. COPY (pure; never deletes a source).
+        result = pcz.execute_consolidation(plan, on_collision="rename")
+
+        # 2. Re-key live windows: old path-key -> new install path-key, SAME
+        #    window object (no close, so no _on_cell_closed prune).
+        for old_norm, new_path in result.rebasing.items():
+            win = self._spawned.pop(old_norm, None)
+            if win is not None:
+                self._spawned[_norm(new_path)] = win
+
+        # 3. Re-root the forest items (and drop now-stale exclusions).
+        n = pcz.rebase_forest_items(self.forest, result)
+        self.forestChanged.emit()
+
+        # 4. Persist the re-rooted forest BEFORE flipping (so the on-disk forest
+        #    the current loaded_from points at is already install-rooted).
+        self.save()
+
+        # 5. Flip portable + migrate state LAST.
+        mig = portable_migrate.migrate_for_toggle(True, self._branding)
+        if not mig.get("ok"):
+            QMessageBox.warning(
+                parent, "Portable mode",
+                f"Copied and re-rooted {n} tool(s) into the install tree, but "
+                "could NOT write the portable marker (the install folder may be "
+                "read-only).  Portable mode was NOT enabled — your forest is "
+                "intact and the tools are now also under the install tree.",
+            )
+            return
+
+        # Make the just-consolidated forest the one portable mode autoloads, so
+        # the restart comes up exactly as it is now.  (Best-effort — migrate
+        # already copied the configured default; this pins THIS active forest.)
+        try:
+            from scriptree.shell.forest_io import (
+                default_autoload_path, save_forest,
+            )
+            save_forest(self.forest, default_autoload_path(self._branding))
+        except Exception as exc:  # noqa: BLE001
+            _log(f"convert-to-portable: autoload pin failed: {exc!r}")
+
+        errs = ""
+        if result.errors:
+            errs = "\n\nSome copies failed (left at their original location):\n  - " \
+                + "\n  - ".join(result.errors[:6])
+        if result.catalog_relinked:
+            errs += (
+                f"\n\n{len(result.catalog_relinked)} item(s) had a catalog file "
+                "outside their tool folder; it was re-pointed at the new install "
+                "copy so the reference travels."
+            )
+        QMessageBox.information(
+            parent, "Converted to portable",
+            f"Copied {result.copied} tool folder(s)"
+            + (f" (+{result.collisions} renamed for a name clash)" if result.collisions else "")
+            + f", re-rooted {n} forest item(s) to the install tree, and enabled "
+            "portable mode.\n\nRestart ScripTree for portable mode to take "
+            "effect." + errs,
+        )
 
     # ------------------------------------------------------------------
     # Save / open

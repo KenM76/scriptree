@@ -549,6 +549,207 @@ gives the per-topic slice.
   raises in PySide6 (log the enum, not int()), and a broad except hid it.
   Meta: time-box Qt-internals fights; pivot to a simpler affordance.
   → `rags/lessons/draggable_qmenu_popup_gotchas.md`
+- [v3-architecture] **portable_mode_and_ignore_copy** (a89): TWO features. (3)
+  "Truly portable" — a `portable` sentinel / `SCRIPTREE_PORTABLE` env redirects
+  ALL per-user/registry state under `<install>/_portable_data` (+ personal apps
+  under `<install>/ScripTreeApps`). Redirect `default_personal_root` and it
+  CASCADES to `_groups` + the forest's 3rd discover root; the rest
+  (`default_autoload_path`, the easily-missed `shared_autoload_path`,
+  `ring_io._appdata_dir`/`_programdata_dir`-with-`/system`-subdir/
+  `_default_rings_dir`, and a `QSettings.setDefaultFormat(IniFormat)+setPath`
+  in `ring_main` before the first bare QSettings) each need patching. A 3-agent
+  adversarial review caught 5 real gaps (missed shared twin, collapsed
+  user/system scope, travelling-ini override defeating portability, success-toast
+  on read-only write failure, a falsified "zero registry" doc claim). (4)
+  "Ignore this copy" — dual-source both-copies-show is ALREADY the default
+  (path-only dedup); built the suppress-one inverse on the existing path-keyed
+  `excluded[]` substrate (`ignore_copy`/`forget_excluded` + per-item popup
+  button + `ExcludedItemsDialog` rebuilt as a directory `QTreeWidget`). Gotcha:
+  match `_norm`/`Path.resolve` between the child-folder test and the excluded
+  set or junctioned trees disagree; trailing `/` on app_dir stops
+  `SolidWorks/`-vs-`SolidWorksTools/` prefix false-matches.
+  → `rags/lessons/portable_mode_and_ignore_copy_a89.md`
+- [v3-architecture] **named_root_path_portability** (a92, option #2): forest
+  item/catalog/excluded paths are stored as `(root-id, rel-to-that-root)` for
+  the portable-aware roots `install`/`apps`/`personal` (`forest_io.known_roots`)
+  instead of machine-pinned absolutes — so a reference survives a move /
+  portable toggle / cross-machine copy (bases recomputed each load;
+  serialization-only, `ForestItem.path` stays absolute in memory; legacy
+  bare-path forests still load). A 3-agent review caught 5 real gaps: (1)
+  `excluded[]` left absolute desyncs from rooted items → ignored copy reappears
+  (root it too, but NO existence-gate so it stays canonical for matching); (2)
+  the `_rooted_to_abs(...) or fallback` was DEAD (non-None sentinel) so a
+  co-located zipped workspace stranded — gate on `.exists()`; (3) de-dup-by-base
+  dropped the `personal` id from reverse lookup under portable mode — keep every
+  id; (4)+(5) stale `portable_migrate` doc + undocumented downgrade hazard.
+  Foundation for "portable copy incl. local tools" (re-tag root→install) and
+  local-vs-network dual-source (different root-ids, same rel).
+  → `rags/lessons/named_root_path_portability_a92.md`
+- [v3-architecture] **portable_consolidate_feature_a** (a93): "Convert this
+  install to portable (copy local tools here)" — copy every forest tool living
+  OUTSIDE the install (under `apps`/`personal`) into `<install>/ScripTreeApps`,
+  re-root the item (`save_forest` then tags it `root: "install"` because
+  `known_roots` lists install FIRST — implicit, no schema field), then
+  `migrate_for_toggle(True)` LAST. Primitive = `plan`/`execute`(pure copy, never
+  deletes source)/`rebase` in `shell/portable_consolidate.py`. KEY: the handler
+  **re-keys `self._spawned`** (old path→new path on the SAME live window) instead
+  of close+respawn — closing fires `_on_cell_closed` which would PRUNE the item
+  being re-rooted, and `save`'s `_sync_positions_into_items` looks the window up
+  by the NEW path. A 3-lens review caught 3 real bugs: (1) private-tool warning
+  matched the folder NAME not its CONTENTS (neutral `MyMacros/` of `.csx` slipped
+  through; `\.csx` token dead on a dir path) → walk `os.walk` contents; (2) a
+  loose tool in a root base (rel `"."`, not `""`) made `dest==dest_root` →
+  copytree'd the WHOLE root into `ScripTreeApps-2` → single-file copy into a
+  per-tool folder + dedup key = copy SOURCE not `src_folder`; (3) `catalog_path`
+  outside the copied folder dangled cross-machine → relink to the new install
+  catalog. Deferred: A1 (make NEW portable copy elsewhere) + Feature B (network
+  roots / dual-source) — NOT interleaved.
+  → `rags/lessons/portable_consolidate_feature_a_a93.md`
+- [v3-architecture] **portable_make_copy_feature_a1** (a94): "Make a portable copy
+  (incl. local tools)" — build a NEW self-contained portable ScripTree at a chosen
+  EMPTY folder (app + install tools + outside tools), live install/forest
+  untouched (deep-copy rebase).  New `shell/portable_export.py`: `copy_install_tree`
+  (refuses non-empty dest, never rmtree's user data), `rebase_install_items_to_external`,
+  `prune_items_outside_external`, `save_forest_for_external_install`.  KEY trick:
+  rooting a forest for a DIFFERENT install location — temporarily point
+  `forest_io._project_root` at dest for the save so paths tag `root:install` and
+  resolve when the copy runs from dest (A1 can't reuse `make_portable.py` — it's
+  dev-only and absent from the runtime tree).  A 3-lens review caught 4 real bugs:
+  (1) `scriptree.ini` (recent files/layouts/machine paths/SW tool names) copied
+  into the shareable copy → exclude it; (2) steps 2-4 unguarded + a cursor
+  double-restore (nested except + finally) → one guarded unit, single restore; (3)
+  a copy-FAILED personal item serialised `root:personal` and dangled on the dest →
+  `prune_items_outside_external` drops anything not under dest/ScripTreeApps; (4)
+  install-resident private SW tools travelled un-warned → also scan cur_apps.
+  Deferred: bundled-Python USB copy, Feature B, threaded copy progress.
+  → `rags/lessons/portable_make_copy_feature_a1_a94.md`
+- [authoring][forest-discovery] **uncategorised_wrapper_tree_floats_to_top** (a94):
+  a wrapper `.scriptreetree` that represents a folder MUST carry its OWN
+  `category` — the discovery priority rule (`forest_discover`) represents a
+  folder-with-a-tree BY the tree and STOPS, so the loose `.scriptree` leaves'
+  categories are invisible to grouping; only the tree's category counts. An
+  uncategorised tree → `group_by_category` passthrough → stand-alone TOP-LEVEL
+  cell, re-added every discovery pass.  Real case: `OutlookMigration.scriptreetree`
+  had no category → floated to top while its 7 leaves (cat `MSOffice/Outlook`)
+  would have folded; fix = add `"category": "MSOffice/Outlook"` to the TREE.
+  Caveats: re-organise/restart to apply; an explicitly-pinned `items[]` entry
+  beats grouping until removed.
+  → `rags/lessons/uncategorised_wrapper_tree_floats_to_top_a94.md`
+- [v3-architecture][editor] **tree_editor_root_node_and_metadata** (a95+a96): the
+  tree editor's save (`TreeLauncherView._build_tree_def`) rebuilt
+  `TreeDef(name, nodes)` only — silently RESET the other 18 of 20 TreeDef fields
+  (category, all cell_* icon fields, menus, path_prepend, folder_layout, …) to
+  defaults on EVERY save (a95 data-loss fix: `dataclasses.replace(self._tree,
+  name=, nodes=)`).  a96 added a clickable ROOT row (`_ROLE_IS_ROOT`) with nodes
+  nested under it + a `_TreePropertiesDialog` (name/category/path_prepend via
+  toolbar + context menu) so tree metadata is editable in-app at last.  Drag-drop
+  keeps a single root via a post-drop `_sweep_strays_under_root`; root not
+  draggable/removable/launchable; serialisation walks `root.children`.  KEY
+  lesson: rebuild a dataclass from UI with `replace(orig, …)`, never
+  `Cls(only,two,fields)` — a constructor silently defaults every omitted field.
+  Review caught 1 LOW (blank root inline-rename desync → restore label).
+  → `rags/lessons/tree_editor_root_node_and_metadata_a95_a96.md`
+- [v3-architecture][forest-discovery] **groups_discovery_feedback_loop** (a98):
+  Re-organise duplicated MSOffice (`MSOffice.scriptreetree` + `__auto`) + made a
+  circular ref because category grouping writes synthesised trees to
+  `default_personal_root()/_groups/` which sits UNDER the personal-apps SCAN
+  root — so the synth OUTPUT re-ingests as INPUT.  Bit in TWO places (both
+  fixed): the discovery walker `_walk` descended into `_groups`, AND
+  `_existing_tree_names`'s `rglob` counted synthesised trees as "existing" →
+  `_pick_filename` renamed the fresh synthesis to `__auto` (the duplicate).  Fix:
+  skip `_groups` in `_walk` (`_is_skipped_dir`) and in `_existing_tree_names`
+  (`"_groups" in tree.parts`).  Groups still show (added from group-pass
+  outcomes, not re-discovered).  Lasting fix for the item-5 corruption.
+  → `rags/lessons/groups_discovery_feedback_loop_a98.md`
+- [v3-architecture][editor][ui] **forest_view_provenance** (a99): opening a forest
+  in the editor used `build_merged_tree` which FLATTENED each member into an
+  anonymous folder (provenance hidden in an `_origins` sidecar) — so the user
+  couldn't tell a real folder from a linked `.scriptreetree` from a synthesised
+  `_groups` group.  Fix: `build_forest_view` renders each member as a bare LEAF
+  carrying its catalog path → the editor's existing subtree/tool rendering shows
+  the file on hover.  Wired into File→Open (`_open_forest`, same process) AND the
+  cell-hub double-click (`_open_full_editor_for`, separate editor process → must
+  write a temp file).  GATE the cell-hub rewire on `_is_forest_master` (forest
+  hub) so RING masters keep the merged view (no regression).  Provenance tooltips
+  per row: in-memory folder / 'Linked tree: <path>' / 'Auto-group · category X'
+  (synth detected by `"_groups" in Path.parts` — `synthesised_by` is dropped by
+  `load_tree`).  Sets up a100 edit routing.
+  → `rags/lessons/forest_view_provenance_a99.md`
+- [v3-architecture][editor][data-loss] **forest_editor_circular_pushback** (a100):
+  two regressions found after a98/a99.  (A) The circular
+  `Demo ⊃ ./MSOffice.scriptreetree` came BACK because the forest hub opened via
+  the flattened MERGED path → `_inline_subtree_refs` nested groups → Save →
+  `merged_tree.push_back_to_origins` wrote a sibling-group ref (RELATIVE `./`
+  path = written by a save, NOT the synthesis; a98 guards only the READ side).
+  Fix: `show_composite_for` branches on `_is_forest_master` → forest view (no
+  push-back); + push-back GUARD strips `.scriptreetree` leaves when writing into
+  a `_groups` source (rings untouched).  (B) "can't right-click edit":
+  double-LEFT→popup, double-RIGHT→`show_composite_for` was not forest-aware (a99
+  only rewired the □ button), subtree rows had no edit action.  Fix: forest-aware
+  `show_composite_for` + subtree "Open in editor" → `openTreeRequested` → load
+  linked tree editable.  Lessons: read-axis guard ≠ write-axis fix; wire ALL
+  gestures; never ingest a regenerated artifact as a merge member.  Review: 0
+  findings.  Drag-to-recategorize/inline-edit still pending.
+  → `rags/lessons/forest_editor_circular_pushback_a100.md`
+- [v3-architecture][editor][data-mutation] **drag_to_recategorize** (a102): editing
+  a synthesised auto-group's folder LAYOUT in the editor + Save re-files each
+  member by position into the member's own `category` (the source of truth) via a
+  targeted JSON edit — NOT writing the regenerated group file.  A 2-lens review
+  caught 4 (all fixed): (MED) removing a member was silently lost + reported
+  success → clear category of dropped members so removal sticks; (MED) empty
+  folders can't persist (regenerate-from-categories) → surface in the dialog;
+  (LOW) un-normalised stored category churned → compare `_normalise_category`;
+  (LOW) a folder renamed with `/` exploded into nesting → scrub separators.
+  Lessons: a view over a DERIVED artifact translates edits to the source, not the
+  artifact; honest partial-success feedback; compare normalised forms; scrub
+  separators when a layout label becomes a category segment.  Inline subtree edit
+  still deferred (Open-in-editor covers it).
+  → `rags/lessons/drag_to_recategorize_a102.md`
+- [editor][data-mutation] **inline_subtree_edit_writeback**: a103 makes a linked
+  subtree's children editable in place + writes each CHANGED subtree back to its
+  own file on Save (re-load + `dataclasses.replace` keeps top-level metadata;
+  child paths relativised against the SUBTREE's dir; parent keeps a one-line ref,
+  never flattens). THE LESSON: a LOSSY editor round-trip is both a metadata STRIP
+  and a CHURN engine — `_item_to_node` dropped icon/icon_data/icon_format (all
+  nodes), folder display_name, subtree-ref configuration, so a field-wise `==`
+  over that lossy projection rewrote + stripped any metadata-bearing subtree on a
+  plain NO-OP Save (subtrees auto-expand at load). Two adversarial Workflow passes:
+  pass 1 found 10/10 real (2 HIGH silent data-loss); fixes = (A) carry EVERY
+  persisted field onto items + re-emit (`_store_node_metadata`, icon roles +6/7/8,
+  `_icon_kwargs_from_item`) — also fixes pre-existing parent-save loss; (B)
+  `_churn_key` folds `./`-prefix + `\`→`/` so bare/backslash on-disk path FORM
+  (our own shipped management tree uses bare) doesn't false-diff; (C) `written_keys`
+  de-dupe so a duplicate row can't clobber an edit; (D) gate drops on
+  `_ROLE_EXPAND_OK` so a tool can't vanish into a failed-expand subtree.
+  Reusable: carry every model field onto the UI item before you diff on it;
+  "real files don't have field X" needs a metadata-bearing fixture to prove;
+  normalise the comparison to the dimension the file author owns (path form);
+  reconcile both ends of a gesture (accept-drop vs refuse-writeback).
+  → `rags/lessons/inline_subtree_edit_writeback_a103.md`
+- [forest][data-mutation][self-heal] **groups_circular_ref_unprunable_residue**:
+  the `_groups` circular ref (Demo ⊃ ./MSOffice.scriptreetree and vice-versa) that
+  "kept coming back" was UN-HEALABLE RESIDUE, not an active re-write — all a98/a100
+  guards still hold (couldn't reproduce on live code without disabling one). A
+  pre-a100 push-back wrote the sibling-group leaf AND stripped the `synthesised_by`
+  marker, so `prune_orphan_synthesised` (marker-keyed) could never delete it → it
+  sat on disk, re-shown every startup. a104 fixes: (1) `push_back_to_origins`
+  REFUSES any `_groups/` source whole-file (marker-independent, stronger than the
+  a100 per-child strip); (2) `prune_orphan_synthesised` SELF-HEALS — deletes a
+  `_groups` file containing any `.scriptreetree` leaf (structurally illegal) even
+  without the marker, so residue is reclaimed + regenerated clean. Forensics: the
+  relative `./` leaf form + missing marker fingerprint `save_tree`/push-back, NOT
+  `categorize` (which writes marker + leaf name + ABSOLUTE paths). Reusable: a
+  "recurring" bug with all guards intact is often un-healed residue — check what
+  CLEANS the bad state, not just what writes it; recognise corruption by STRUCTURE
+  when the corrupting path strips your marker; guard the whole artifact, not each
+  child. → `rags/lessons/groups_circular_ref_unprunable_residue_a104.md`
+- [editor][forest] **subtree_tree_properties_a104**: a104 adds "Tree properties…"
+  to a LINKED SUBTREE row (was root-row-only), so a forest member like ffmpeg can
+  have its name/category/path_prepend edited + written back to its own file
+  (`_open_subtree_properties`, `dataclasses.replace` preserves nodes) WITHOUT first
+  "Open in editor". A synthesised `_groups` member is exempt (regenerated → info
+  dialog, no write). The forest-as-root editor case had no way to set a member's
+  Category from its row. Tests: `tests/test_subtree_properties_a104.py` (3).
 - [pyside6] **screenshooter_headless_capture**: the headless screenshooter hung
   on tools with a personal-config sidecar collision or an on-open provider —
   `ToolRunnerView.__init__` blocks on `PersonalConfigCollisionDialog.exec()`
@@ -563,3 +764,96 @@ gives the per-topic slice.
   out). Test-isolation: `test_screenshooter.py` runs the shooter as a
   SUBPROCESS so the global never leaks; in-process tests must save/restore it.
   a88. → `rags/lessons/screenshooter_headless_capture_a88.md`
+- [shutdown][process-lifecycle][single-instance] **lingering_process_quit_on_empty**:
+  a ScripTree `pythonw.exe` lingered after "exit" — and THAT stale primary kept
+  re-writing the `_groups` file AND owning the single-instance pipe, so every
+  redeploy silently handed off to the OLD process (the reason fixes "didn't take").
+  Killing it in Task Manager is what let new code run. Root cause: app sets
+  `setQuitOnLastWindowClosed(False)`, but `CellWindow.closeEvent` (the [X] button)
+  unregistered + closed WITHOUT `QApplication.quit()`, so closing the last window
+  left a headless process; `_close_this`'s `is_last` checked standalones-only
+  (missed a last MASTER; prematurely quit a last standalone while a master
+  remained). a106 fix: `closeEvent` → `_quit_if_app_empty()` quits iff the registry
+  has no standalones AND no masters; `_close_this` defers to it. Safe vs premature
+  quit: auto-hide uses `hide()`/`showMinimized()` (cells stay REGISTERED), so a tray
+  forest isn't quit — only a truly empty registry quits. Reusable: with
+  quitOnLastWindowClosed False, EVERY full-close path (incl. closeEvent) must quit;
+  a lingering single-instance primary silently defeats deploys; key quit-on-empty on
+  REGISTRATION, not visibility. → `rags/lessons/lingering_process_quit_on_empty_a106.md`
+- [forest][windows][removal] **removed_virtual_desktop_subsystem**: a107 deleted the
+  a55–a70 Windows virtual-desktop "follow the user across desktops" feature at the
+  user's request — it stranded the hub ("forest disappeared, cells left behind") and
+  complicated basic GUI behaviour. Deleted `win_virtual_desktops.py` + the follow
+  plumbing in `forest_visibility.py`; removed 2 vdesktop test classes; archived
+  everything to `docs/archive/removed_virtual_desktop_a107/` for a future re-attempt.
+  KEPT multi-MONITOR (physical screens) — only multi-DESKTOP removed. Gotchas for the
+  re-do: `MoveWindowToDesktop` rejects a HIDDEN window (TYPE_E_ELEMENTNOTFOUND) but
+  accepts a MINIMISED one; per-focus-event moves are racy (needed a debounce +
+  never-move-mid-drag guard). Reusable: archive-before-delete; name the axis precisely
+  (monitor≠desktop); strip shared funcs surgically + delete pure ones wholesale.
+  → `rags/lessons/removed_virtual_desktop_subsystem_a107.md`
+- [forest][windows][refactor][model-apply] **forest_visibility_model_apply_refactor**:
+  a108 collapsed the THREE divergent forest show paths (tray `show_hub` forced a stored
+  pos; taskbar `eventFilter`→`_restore_descendants` trusted the OS; startup did its own
+  show) + THREE disagreeing position stores into ONE model→apply design (Ken: "they call
+  different code... don't add more patches to fix an underlying issue"). `ForestHubState`
+  dataclass = single truth; one idempotent `apply_state()`; `show_hub`/`hide_hub` are thin
+  wrappers; `_restore_descendants` DELETED → shared `_reveal_hidden_descendants`; the
+  taskbar restore now calls `show_hub` (same code as tray). Drag-capture in
+  `forest_controller._on_hex_moved` writes `state.hub_position` (gated visible+not-min) →
+  kills "tray click snaps back to show-time pos". TWO gotchas: (1) `setWindowFlags` on
+  Win11 recreates the HWND → resets pos to (0,0) + drops mask; old code only repaired it
+  `if was_visible`, but the hub's flags apply at startup BEFORE the first show → (0,0)/
+  blank/not-draggable. Fix: capture pos before, restore after, reassert chrome
+  UNCONDITIONALLY. (2) `moveEvent` fires `hexagonMoved` on programmatic moves too → guard
+  the drag-capture on visible+not-minimised. Docking engine PRESERVED (design §6a).
+  Headless can't verify window behaviour — design §8 manual matrix is the gate.
+  a109 = adversarial-review hardening: a 37-agent Workflow found TWO real bugs in
+  the a108 code — (HIGH) the hide branch wasn't idempotent (a 2nd hide while
+  hidden wiped hidden_descendant_ids -> next show revealed no cells, the exact
+  "forest comes back empty" bug); fixed by an already-hidden no-op early-return.
+  (MEDIUM) clamp-on-show re-entered _on_hex_moved and overwrote the saved
+  off-screen position with the clamped value; fixed by an _applying_state
+  re-entrancy flag. Both with regression tests (109->121 forest). Meta-lesson: a
+  render pass must be idempotent on BOTH transitions, and the same move-signal
+  carries user intent AND the render pass's own programmatic moves (gate the
+  capture). → `rags/lessons/forest_visibility_model_apply_refactor_a108.md`
+- [packaging][pyside6][vendored-deps][release] **portable_bundle_trim_strips_required_qt_module**:
+  a111 — the portable bundle is minimal; `lib/update_lib.py --trim` deletes every Qt submodule
+  not in `TRIM_KEEP_MODULES`, and `make_portable.py` requires a trimmed lib before zipping.
+  `QtNetwork` (needed by single_instance.py's QLocalServer) was MISSING from the keep-list AND
+  `Qt6Network*.dll` was in the explicit `TRIM_REMOVE_GLOBS` strip-list, so every release zip
+  shipped without it → single-instance silently disabled ("handoff errored ... falling through").
+  The surviving `QtNetwork.pyi` stub (kept by `*.pyi` in TRIM_ALWAYS_KEEP) made the dir LOOK
+  complete. Fix needs BOTH: add "QtNetwork" to TRIM_KEEP_MODULES + remove the two `Qt6Network*`
+  globs from TRIM_REMOVE_GLOBS (two independent removal paths). Durable guard: TRIM_KEEP_MODULES
+  must == `grep -rhoE "from PySide6\.(Qt[A-Za-z]+)" scriptree/` (a111 = Core/Gui/Widgets/Network).
+  → `rags/lessons/portable_bundle_trim_strips_required_qt_module_a111.md`
+- [v3-architecture][taxonomy][validate][ux] **canonical_category_catalog**: a112 — there was NO
+  controlled vocabulary for the `.scriptree` `category` field (free-form, unenforced), and
+  `Demo`/`Demos` had already fragmented the forest into 2 cells. Built: (1) an extensive canonical
+  catalog — 799 categories / 185 top-levels across CAD/Office/Media/DevTools/Data/Security/etc.,
+  generated by a 27-agent Workflow (one agent per software domain + guide synthesis); synced
+  `docs/LLM/category_catalog.md` + `scriptree/resources/category_catalog.json` (test enforces
+  doc⊇json). (2) a soft near-dup matcher `scriptree/core/category_catalog.py` (stdlib difflib;
+  classifies case/plural/typo; ADVISORY, never rejects). (3) wired into `scriptree validate`
+  (per-file + cross-file sibling `[WARN]`, both .scriptree + .scriptreetree). (4) QCompleter
+  autocomplete on the Category field in tool_editor.py + tree_view.py. Gotcha: the de-dupe of
+  sibling-vs-canonical warnings fell through an if/else into a spurious top-level warning — a
+  canonical near-dup must consume the branch. Reusable: Workflow fan-out (1 agent/domain) +
+  synthesis is ideal for "make a very extensive list"; pair any generated vocabulary with a soft
+  validator + autocomplete so it's used, not drifted.
+  → `rags/lessons/canonical_category_catalog_a112.md`
+- [v3-architecture][forest][layout][async-race] **bloom_relocation_capture_race**: a113 — the
+  intermittent "a bloomed forest cell relocates even though its space is free" bug. Root cause
+  (found via a 19-agent RCA Workflow): in mouseReleaseEvent, `_settle_no_overlap()` runs BEFORE
+  `_capture_remembered_offset()` in the same synchronous turn; settle relocates an overlapping/
+  edge drop via `_smooth_move` -> an ASYNC QPropertyAnimation whose target `self.pos()` isn't
+  reached until later turns, so capture stored the PRE-settle STALE offset. On bloom that stale
+  spot fails `_restore_remembered_offsets`' on-screen fit-test -> the member is engine-tiled to a
+  different slot. Intermittent because a clean drop hits settle's `if _ok(0,0): return` (no anim ->
+  correct capture); only overlap/edge drops trip the spiral. FIX: capture the animation's
+  `endValue()` (settled destination) not the live pos, for member AND hub. Takeaway: a
+  QPropertyAnimation is a WRITE-LATER — reading widget.pos() in the same turn you started a pos
+  animation gives the OLD value; read endValue() or defer past the animation duration.
+  → `rags/lessons/bloom_relocation_capture_race_a113.md`

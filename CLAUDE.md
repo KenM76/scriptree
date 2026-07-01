@@ -55,6 +55,10 @@ cross-project rules.  Particularly relevant to ScripTree:
 
 Catalog format specs live at `D:\Dev\ScripTree\docs\LLM\`:
 
+* `category_authoring.md` — **read first for organizing**: the `category`
+  taxonomy (where a tool/tree belongs), the on-disk folder convention that
+  mirrors it, the folder-vs-loose rule, and the recommended JSON **field
+  order** (category near the top, the form/`nodes` dead last).
 * `scriptree_format.md` — single-tool `.scriptree`.
 * `scriptreetree_format.md` — tree-of-tools `.scriptreetree`.
 * `scriptreering_format.md` — cell layout `.scriptreering`.

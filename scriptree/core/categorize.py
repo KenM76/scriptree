@@ -472,11 +472,16 @@ def prune_orphan_synthesised(
     or got renamed) and we delete it so the forest doesn't keep
     showing a stale cell.
 
-    Safety: we only delete files whose JSON has a
-    ``synthesised_by`` field starting with
-    ``marker_version_prefix``.  This protects any user-authored
-    ``.scriptreetree`` that the user dropped into ``output_dir``
-    by mistake -- it stays untouched.
+    Safety: we delete a file only when it is EITHER (a) marked as
+    auto-organised (``synthesised_by`` starting with
+    ``marker_version_prefix``) OR (b) the v0.8.0a104 self-heal case —
+    a marker-ABSENT file that references a SIBLING group in this same
+    ``output_dir`` (the circular-reference residue a pre-a100
+    push-back left, which also stripped the marker).  A user-authored
+    ``.scriptreetree`` that the user dropped into ``output_dir`` —
+    even one that legitimately references an EXTERNAL or NESTED
+    sub-tree — is NOT touched (a sub-tree leaf is a perfectly valid
+    node type; only a same-dir sibling-group ref is corruption).
 
     Returns the list of paths actually deleted, for logging.
     """
@@ -495,9 +500,27 @@ def prune_orphan_synthesised(
             continue
         marker = data.get("synthesised_by", "")
         if not isinstance(marker, str):
-            continue
-        if not marker.startswith(marker_version_prefix):
-            # User-authored; don't touch.
+            marker = ""
+        is_synth_marker = marker.startswith(marker_version_prefix)
+        # v0.8.0a104 — SELF-HEAL the circular-reference RESIDUE even when the
+        # ``synthesised_by`` marker is absent.  The residue signature: a
+        # ``_groups`` file that points at a SIBLING group in this same dir
+        # (Demo ⊃ ``./MSOffice.scriptreetree`` and vice-versa) — written by a
+        # pre-a100 push-back that ALSO stripped the marker, so the marker check
+        # alone could never reclaim it (it stayed on disk, re-shown every
+        # startup).  Reclaiming it lets the next pass regenerate the group
+        # cleanly from tool categories.
+        #
+        # IMPORTANT: only a SAME-DIR SIBLING-group reference is corruption.  A
+        # leaf pointing at an EXTERNAL or NESTED ``.scriptreetree`` sub-tree is a
+        # LEGITIMATE node type — a hand-authored hub can carry one, and so can a
+        # synthesised group built from *categorised sub-trees*.  Those must NOT
+        # be deleted, so we resolve the leaf and require it to be a direct
+        # neighbour inside ``output_dir`` before treating the file as residue.
+        residue = _refs_sibling_group_tree(data.get("nodes", []), output_dir)
+        if not (is_synth_marker or residue):
+            # Marker-less AND not sibling-group residue → treat as a genuine
+            # user file (incl. one legitimately referencing a sub-tree); leave it.
             continue
         try:
             f.unlink()
@@ -507,3 +530,45 @@ def prune_orphan_synthesised(
             # don't have a logger here.
             pass
     return deleted
+
+
+def _refs_sibling_group_tree(nodes: object, groups_dir: Path) -> bool:
+    """True iff any node (recursively) is a leaf referencing a SIBLING synth
+    group — a ``.scriptreetree`` leaf whose path resolves to a DIRECT neighbour
+    inside ``groups_dir`` itself (e.g. ``./MSOffice.scriptreetree`` sitting next
+    to ``Demo.scriptreetree``).
+
+    That same-dir cross-ref is the circular-reference residue a pre-a100
+    push-back wrote.  A leaf pointing at an EXTERNAL or NESTED ``.scriptreetree``
+    sub-tree is a documented, legitimate node type and is NOT flagged — so a
+    user-authored hub or a synth group built from categorised sub-trees is left
+    intact.  Operates on raw JSON dict nodes; leaf paths are resolved relative to
+    ``groups_dir`` (the directory the file lives in)."""
+    try:
+        base = groups_dir.resolve()
+    except (OSError, ValueError):
+        base = groups_dir
+
+    def _walk(ns: object) -> bool:
+        if not isinstance(ns, list):
+            return False
+        for n in ns:
+            if not isinstance(n, dict):
+                continue
+            if n.get("type") == "folder":
+                if _walk(n.get("children", [])):
+                    return True
+                continue
+            p = n.get("path")
+            if not (isinstance(p, str) and p.lower().endswith(".scriptreetree")):
+                continue
+            try:
+                pp = Path(p)
+                target = pp if pp.is_absolute() else (base / pp)
+                if target.resolve().parent == base:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    return _walk(nodes)

@@ -3801,6 +3801,31 @@ class CellWindow(QMainWindow):
         # Unregister from registry (emits hexagonClosed).
         CellRegistry.instance().unregister(self._id)
         super().closeEvent(event)
+        # v0.8.0a106 — manual last-window quit.  ``app`` runs with
+        # ``setQuitOnLastWindowClosed(False)`` (cells are frameless windows; a
+        # transient cell-close must not kill the app while siblings live), so Qt
+        # will NOT auto-quit when the final window closes.  Closing the forest
+        # hub (or the last cell) via the window-frame [X] therefore used to leave
+        # the PROCESS alive headless — a lingering instance that (a) wastes
+        # memory + can hold file locks, and (b) keeps owning the single-instance
+        # named pipe, so every later launch HANDS OFF to the stale process
+        # instead of starting fresh (newly-deployed code never runs).  Quit
+        # explicitly once nothing is left to show.
+        self._quit_if_app_empty()
+
+    def _quit_if_app_empty(self) -> None:
+        """v0.8.0a106 — quit the app when NO cells remain registered.
+
+        "Empty" = no standalones AND no masters in the ``CellRegistry``.  Hidden
+        cells (auto-hide / tray) stay REGISTERED, so this never quits a forest
+        that's merely tucked away — only a genuinely empty app.  Idempotent:
+        ``QApplication.quit()`` is safe to call more than once (e.g. it also
+        fires on the final close inside ``_exit_all``)."""
+        from scriptree.shell.cell_registry import CellRegistry
+        reg = CellRegistry.instance()
+        if not reg.standalones() and not reg.masters():
+            _log("Last cell closed — quitting application (registry empty).")
+            QApplication.quit()
 
     # ------------------------------------------------------------------
     # QSettings persistence  (ADR-001 Â§sub-decision-5)
@@ -5414,27 +5439,49 @@ class CellWindow(QMainWindow):
     def _apply_always_on_top_flag(self, on: bool) -> None:
         """Re-apply the stay-on-top window flag.
 
-        Qt requires a hide + show cycle for flag changes to take effect on Win11.
-        We only do this if the window is already visible (not during construction).
+        Qt requires a hide + show cycle for flag changes to take effect on
+        Win11, and ``setWindowFlags()`` RECREATES the native HWND -- which
+        resets the window position to (0,0) and DISCARDS the hex mask +
+        translucent background.
+
+        v0.8.0a108 -- decoupled from visibility.  The pre-a108 code gated the
+        position-restore + chrome-reassert behind ``if was_visible``, so a flag
+        applied BEFORE the first show (the forest hub: the manager's ``apply()``
+        runs at startup before any ``show()``) silently left the hub at (0,0)
+        with a blank mask and an unestablished drag region -- exactly the
+        user-reported "jumped to the top-left corner, lost its icon, wasn't
+        mobile after loading".  Now we ALWAYS restore the pre-swap position and
+        reassert the chrome; only the actual ``show()`` stays gated on prior
+        visibility (we never force-show a window the caller meant to keep
+        hidden).  Idempotent + safe on a hidden window (``setMask`` /
+        ``setAttribute`` / ``move`` don't require visibility).
         """
         # a71: setWindowFlags() HIDES the widget (it calls setParent), so
         # ``isVisible()`` is already False AFTER it -- capture visibility
-        # BEFORE.  The pre-a71 ``if self.isVisible(): self.show()`` was
-        # therefore dead: a runtime flag swap silently left the cell
-        # hidden (a forest "disappeared" cause).
+        # BEFORE.  a108: also capture the position BEFORE, since the HWND
+        # recreation resets it to (0,0).
         was_visible = self.isVisible()
+        prev_pos = self.pos()
         flags = self.windowFlags()
         if on:
             flags |= Qt.WindowStaysOnTopHint
         else:
             flags &= ~Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
+        # a108: restore position unconditionally -- the flag swap must NEVER
+        # relocate the window (this is the heart of the "jumps to (0,0)" fix).
+        try:
+            self.move(prev_pos)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_always_on_top_flag: move restore raised {exc!r}")
         if was_visible:
             self.show()
-            # The HWND recreation dropped the hex mask + translucent
-            # background -> re-apply so the cell doesn't render as a
-            # blank rectangle ("lost its icon").
-            self._reassert_window_chrome()
+        # a108: reassert chrome unconditionally (was gated on was_visible).
+        # The HWND recreation dropped the hex mask + translucent background;
+        # re-applying it on a hidden window is harmless and means the very
+        # first show already has its mask + drag region -- so the hub is
+        # movable immediately, no hide/show cycle needed.
+        self._reassert_window_chrome()
 
     def _apply_taskbar_flag(self, on: bool) -> None:
         """v0.8.0a54: swap ``Qt.Tool`` <-> ``Qt.Window`` so this cell
@@ -5466,7 +5513,10 @@ class CellWindow(QMainWindow):
         # widget (see _apply_always_on_top_flag) -- the pre-a71
         # ``if self.isVisible()`` re-show was dead, so toggling taskbar
         # mode at runtime silently hid the hub.
+        # a108: also capture position BEFORE -- the Qt.Tool<->Qt.Window swap
+        # recreates the HWND and resets it to (0,0).
         was_visible = self.isVisible()
+        prev_pos = self.pos()
         flags = self.windowFlags()
         if on:
             flags &= ~Qt.Tool
@@ -5475,12 +5525,17 @@ class CellWindow(QMainWindow):
             flags &= ~Qt.Window
             flags |= Qt.Tool
         self.setWindowFlags(flags)
+        # a108: restore position + reassert chrome UNCONDITIONALLY (was gated on
+        # was_visible).  The forest hub's taskbar flag is applied at startup
+        # before the first show; gating left it at (0,0) with a blank mask.  See
+        # the full rationale in _apply_always_on_top_flag.
+        try:
+            self.move(prev_pos)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_apply_taskbar_flag: move restore raised {exc!r}")
         if was_visible:
             self.show()
-            # The Qt.Tool<->Qt.Window swap recreated the HWND ->
-            # re-apply the hex mask + translucent background so the hub
-            # doesn't render as a blank rectangle ("lost its icon").
-            self._reassert_window_chrome()
+        self._reassert_window_chrome()
 
     # ------------------------------------------------------------------
     # Paint
@@ -6776,6 +6831,24 @@ class CellWindow(QMainWindow):
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self._drag_started = False
             _log(f"press @ {self._press_global_pos} id={self._id[:8]}")
+            # v0.8.0a113 [drag-diag] -- for the forest hub, log the window
+            # activation/foreground state at press time.  The "hub not draggable
+            # on first startup until a manual minimise/restore" bug is a Win11
+            # foreground-lock symptom: if the hub isn't the ACTIVE window, mouse
+            # MOVE events may not be delivered while a button is held, so the
+            # drag never crosses the threshold (drag_started stays False).  When
+            # the user hits the non-draggable state, this line tells us whether
+            # the window was inactive (root cause) vs moves simply not arriving.
+            if getattr(self, "_is_forest_master", False):
+                try:
+                    _log(
+                        f"[drag-diag] hub press: active={self.isActiveWindow()} "
+                        f"min={self.isMinimized()} visible={self.isVisible()} "
+                        f"focus={self.hasFocus()} "
+                        f"flags=0x{int(self.windowFlags()):X}"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             # v0.6.38 — self-heal any membership inconsistency on the
             # master before a drag begins.  The v0.6.37 trace
             # surfaced phantom ids in _positioned + orphan cells +
@@ -8940,15 +9013,14 @@ class CellWindow(QMainWindow):
                     return
             registry.masterDespawned.emit(self._id)
 
-        # Check if this is the last non-master hex.
-        standalones = registry.standalones()
-        is_last = len(standalones) <= 1 and self in standalones
-
+        # v0.8.0a106 — quitting on the last close is now handled uniformly in
+        # ``closeEvent`` → ``_quit_if_app_empty`` (fires for the [X] button too,
+        # and correctly covers closing the last MASTER).  This replaces the old
+        # standalones-only ``is_last`` check, which both (a) MISSED a last master
+        # (closing the forest hub left the process running headless) and (b)
+        # PREMATURELY quit when the last standalone closed while a master hub was
+        # still open.  Just close; ``closeEvent`` decides whether to quit.
         self.close()
-
-        if is_last:
-            _log("Last hexagon closed — quitting application")
-            QApplication.quit()
 
     # ------------------------------------------------------------------
     # Role-aware close + exit handlers (right-click menu)
@@ -9679,8 +9751,37 @@ class CellWindow(QMainWindow):
         key = _member_offset_key(self)
         if key is None:
             return
-        dx = self.pos().x() - hub.pos().x()
-        dy = self.pos().y() - hub.pos().y()
+        # v0.8.0a113 [reloc FIX] -- capture the SETTLED resting position, not a
+        # mid-flight one.  ``mouseReleaseEvent`` runs ``_settle_no_overlap()``
+        # BEFORE this capture, and settle relocates an overlapping / edge-
+        # straddling drop via ``_smooth_move`` -> an ASYNC ``QPropertyAnimation``
+        # whose target ``self.pos()`` isn't reached until LATER event-loop
+        # turns.  Reading ``self.pos()`` here would therefore store the
+        # PRE-settle (stale) offset; on the next bloom that stale spot fails the
+        # on-screen fit-test in ``_restore_remembered_offsets`` and the cell is
+        # dropped from ``placed`` -> the engine re-tiles it to a DIFFERENT
+        # honeycomb slot.  That is the intermittent "a stacked cell relocates
+        # even though its space is still free" bug (root-caused in a113): it
+        # only fires when the drop tripped settle's overlap/edge spiral, which
+        # is exactly why it was intermittent.  Fix: read the in-flight
+        # animation's ``endValue`` (the settled destination) instead of the
+        # live position -- for the member AND the hub (a master drag can leave
+        # the hub itself animating).
+        def _resting_xy(widget: "CellWindow") -> tuple[int, int]:
+            anim = getattr(widget, "_pos_anim", None)
+            if anim is not None:
+                try:
+                    end = anim.endValue()
+                    if end is not None:
+                        return end.x(), end.y()
+                except Exception:  # noqa: BLE001
+                    pass
+            return widget.pos().x(), widget.pos().y()
+
+        sx, sy = _resting_xy(self)
+        hx, hy = _resting_xy(hub)
+        dx = sx - hx
+        dy = sy - hy
         hub._remembered_offsets[key] = (dx, dy)
         _log(f"remembered offset {self._id[:8]} -> ({dx},{dy})")
         # Persist: nudge the forest controller's debounced autosave (250 ms).
@@ -9727,37 +9828,26 @@ class CellWindow(QMainWindow):
         registry = CellRegistry.instance()
         hub_x, hub_y = self.pos().x(), self.pos().y()
         placed: set[str] = set()
-        # [bloom-diag a85] TEMPORARY instrumentation — find why a stacked cell
-        # isn't restored on bloom (the "second one up gets pushed out of
-        # alignment" report).  One line per member: key / has-offset / target /
-        # on-screen-gate / PINNED-or-SKIP.  Remove once diagnosed.
-        def _tail(s: object) -> str:
-            t = str(s)
-            return t[-44:] if len(t) > 44 else t
-        _log(
-            f"[bloom-diag] restore-start hub={self._id[:8]} pos=({hub_x},{hub_y}) "
-            f"move={move} members={len(self._members)} "
-            f"remembered_keys={len(self._remembered_offsets)}"
-        )
+        # v0.8.0a113 [reloc-diag] -- record WHY each member was NOT restored so
+        # the intermittent "a bloomed cell relocated even though its spot was
+        # free" bug is observable in the debug log.  Reasons: floating /
+        # no-key / no-offset / off-screen.  Logged once per bloom as a summary.
+        skips: list[str] = []
         for mid in list(self._members.keys()):
             m = registry.get(mid)
             if m is None:
+                skips.append(f"{mid[:8]}=gone")
                 continue
             if getattr(m, "_floating_intent", False):
-                _log(f"[bloom-diag]   {mid[:8]} SKIP floating")
+                skips.append(f"{m._id[:8]}=floating")
                 continue  # owns its own position
             key = _member_offset_key(m)
             if key is None:
-                _log(
-                    f"[bloom-diag]   {mid[:8]} SKIP no-key "
-                    f"catalog={_tail(getattr(m, '_catalog_path', None))}"
-                )
+                skips.append(f"{m._id[:8]}=no-key(path={getattr(m, '_catalog_path', None)!r})")
                 continue
             off = self._remembered_offsets.get(key)
             if off is None:
-                _log(
-                    f"[bloom-diag]   {mid[:8]} SKIP no-offset key=...{_tail(key)}"
-                )
+                skips.append(f"{m._id[:8]}=no-offset(key={key[-40:]})")
                 continue
             tx, ty = hub_x + int(off[0]), hub_y + int(off[1])
             sz = m._size_px
@@ -9765,10 +9855,9 @@ class CellWindow(QMainWindow):
             # (offset kept, so the cell returns to its spot when space allows).
             vis = self._visible_area_on_any_screen(QRect(tx, ty, sz, sz))
             if vis < sz * sz:
-                _log(
-                    f"[bloom-diag]   {mid[:8]} SKIP off-screen off={off} "
-                    f"target=({tx},{ty}) vis={vis} need={sz * sz} "
-                    f"key=...{_tail(key)}"
+                skips.append(
+                    f"{m._id[:8]}=offscreen(target=({tx},{ty}) "
+                    f"vis={vis}/{sz * sz})"
                 )
                 continue
             self._members[mid] = QPoint(tx, ty)
@@ -9784,16 +9873,55 @@ class CellWindow(QMainWindow):
                 m.move(tx, ty)
                 m.setVisible(True)
             placed.add(mid)
-            _log(
-                f"[bloom-diag]   {mid[:8]} PINNED off={off} target=({tx},{ty}) "
-                f"key=...{_tail(key)}"
-            )
-        if placed:
+        if placed or skips:
             _log(
                 f"_restore_remembered_offsets {self._id[:8]}: restored "
-                f"{len(placed)} member(s) to remembered offsets (move={move})"
+                f"{len(placed)}/{len(self._members)} member(s) (move={move})"
+                + (f"  [reloc-diag] NOT restored: {', '.join(skips)}"
+                   if skips else "")
             )
         return placed
+
+    def _current_home_pins(
+        self, members: list, already_placed: set[str]
+    ) -> set[str]:  # noqa: ANN001
+        """v0.8.0a113 [reloc FIX] -- return the member ids to PIN at their
+        CURRENT ``_members[mid]`` home so a RE-BLOOM doesn't relocate them.
+
+        ``_restore_remembered_offsets`` only pins members the user explicitly
+        DRAGGED (those with a remembered offset).  Every other member would be
+        handed to ``_compute_layout`` and re-tiled to a possibly-different
+        honeycomb slot -- the user-reported "a cell relocated even though its
+        space is still free" bug, whose true cause (confirmed by the
+        ``[reloc-diag]`` log: ``NOT restored: <id>=no-offset``) is simply that
+        the cell has no remembered offset because it was never dragged.
+
+        A member is pinned here iff it isn't floating, isn't already pinned by a
+        remembered offset, and its current home is WHOLLY on-screen.  Genuinely
+        new or off-screen members are left for the engine (so a fresh cell still
+        honeycomb-tiles, and an off-screen home is rescued on-screen).
+
+        This is scoped to ``_start_expand``, which is ALWAYS a re-bloom of an
+        already-laid-out cluster -- the initial startup layout tiles cells via
+        ``_compute_layout`` directly and never routes through here, so every
+        member reaching this point already has a valid pre-collapse home.
+        """
+        pins: set[str] = set()
+        for m in members:
+            mid = getattr(m, "_id", None)
+            if mid is None or mid in already_placed:
+                continue
+            if getattr(m, "_floating_intent", False):
+                continue
+            home = self._members.get(mid)
+            if home is None:
+                continue
+            sz = m._size_px
+            if self._visible_area_on_any_screen(
+                QRect(home.x(), home.y(), sz, sz)
+            ) >= sz * sz:
+                pins.add(mid)
+        return pins
 
     def _visible_area_on_any_screen(self, rect: QRect) -> int:
         """Total visible area (px²) of ``rect`` across ALL monitors — 0 if
@@ -11046,6 +11174,15 @@ class CellWindow(QMainWindow):
         v0.6.16 cascade per user direction "single click on forest
         or a ring is supposed to collapse all linked cells").
         """
+        # v0.8.0a113 [reloc FIX] -- snapshot the hub position at collapse.  On
+        # the matching expand, members are pinned at their current (absolute)
+        # home ONLY IF the hub hasn't moved since -- because ``_members[mid]``
+        # is absolute, so if the hub was dragged WHILE collapsed those homes are
+        # stale (relative to the old hub spot) and must be engine-tiled around
+        # the new hub position instead (the a68 behaviour).  Same-position
+        # expand keeps every cell where it was (the a113 no-relocation fix).
+        from PySide6.QtCore import QPoint as _QP
+        self._hub_pos_at_collapse = _QP(self.pos())
         from scriptree.shell.cell_registry import CellRegistry
         registry = CellRegistry.instance()
 
@@ -11118,19 +11255,6 @@ class CellWindow(QMainWindow):
             # position (so expand goes back to where the member is NOW, not
             # wherever it was when it first joined).
             self._members[m._id] = QPoint(m.pos())
-            # [bloom-diag a85] TEMPORARY — where each cell sits at collapse-time
-            # (its stack position) + its remember-key, so we can compare against
-            # restore.  Remove once diagnosed.
-            try:
-                _ck = _member_offset_key(m)
-                _log(
-                    f"[bloom-diag] collapse-record {m._id[:8]} "
-                    f"pos=({m.pos().x()},{m.pos().y()}) "
-                    f"has_offset={(_ck in self._remembered_offsets) if _ck else False} "
-                    f"key=...{(str(_ck)[-44:]) if _ck else None}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
             # v0.6.20 — recursive cascade restored.  If this member
             # is itself a master with link-children (e.g. a ring
             # inside the forest), collapse it FIRST so its members
@@ -11272,6 +11396,25 @@ class CellWindow(QMainWindow):
         # to its _members[mid] target (remembered for restored, engine for the
         # rest).
         placed = self._restore_remembered_offsets(move=False)
+        # v0.8.0a113 [reloc FIX] -- also pin every member at its CURRENT on-
+        # screen home so a re-bloom NEVER relocates a cell the user didn't
+        # explicitly drag (its space is free -> keep it there).  ONLY when the
+        # hub is at the SAME position as at collapse: if the hub was dragged
+        # while collapsed, the absolute homes are stale and must be engine-
+        # tiled around the new hub position (a68).  Genuinely new / off-screen
+        # members always fall through to the engine below.
+        hub_static = (
+            getattr(self, "_hub_pos_at_collapse", None) is not None
+            and self._hub_pos_at_collapse == self.pos()
+        )
+        if hub_static:
+            home_pins = self._current_home_pins(members, placed)
+            if home_pins:
+                placed = placed | home_pins
+                _log(
+                    f"_start_expand {self._id[:8]}: pinned {len(home_pins)} "
+                    f"member(s) at current home (no-drag stability)"
+                )
         for m in members:
             if getattr(m, "_id", None) in placed:
                 continue
@@ -11281,19 +11424,6 @@ class CellWindow(QMainWindow):
             self._compute_layout(instant=True, pinned=placed)
         except Exception as exc:  # noqa: BLE001
             _log(f"_start_expand: _compute_layout raised {exc!r}")
-        # [bloom-diag a85] TEMPORARY — post-engine bloom target per member:
-        # placed=True means restored to remembered spot; placed=False + a slot
-        # means the engine RE-TILED it (a diagonal honeycomb slot is the
-        # "pushed out of alignment" symptom).  Remove once diagnosed.
-        for _dm in members:
-            _dt = self._members.get(_dm._id)
-            _dcp = str(getattr(_dm, "_catalog_path", None))
-            _log(
-                f"[bloom-diag] post-engine {_dm._id[:8]} "
-                f"placed={_dm._id in placed} slot={getattr(_dm, '_slot', None)} "
-                f"target={(_dt.x(), _dt.y()) if _dt is not None else None} "
-                f"catalog={_dcp[-44:] if len(_dcp) > 44 else _dcp}"
-            )
 
         leaf_pending: list[str] = []
         for m in members:

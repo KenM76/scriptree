@@ -108,6 +108,32 @@ def rescue_all_cells() -> int:
 
     for cell in cells:
         try:
+            # v0.8.0a110 — AUTO-HIDE AWARENESS.  The rescue must NEVER reveal a
+            # cell that is currently hidden.  The repack path it runs for a
+            # forest hub (``_restore_remembered_offsets`` / ``_compute_layout``)
+            # calls ``setVisible(True)`` on the members, so a display change
+            # while the forest is auto-hidden (always-on-top OFF, hub
+            # minimised/hidden, cells folded) would POP the folded cells back
+            # onto the screen -- and leave them scattered where the rescue put
+            # them, not following the hub when it is later revealed.  This is
+            # the exact user-reported "the cells pop up even though always-on-
+            # top is off, and don't follow the forest when I click its icon".
+            #
+            # A hidden forest is re-placed (clamped on-screen + re-clustered
+            # around the hub) when the user NEXT reveals it via
+            # ``ForestVisibilityManager.apply_state`` -- the screen watcher
+            # leaves the folded cluster completely alone:
+            #   * Forest hub in its hidden/minimised state (tray mode: not
+            #     visible; taskbar mode: minimised) -> skip the WHOLE cluster
+            #     (skip the master's repack, which is what reveals members).
+            #   * Any individually-hidden cell (a folded member / hidden
+            #     standalone) -> skip; it isn't on screen, so it needs no rescue
+            #     and must not be shown here.
+            if getattr(cell, "_is_forest_master", False):
+                if cell.isMinimized() or not cell.isVisible():
+                    continue
+            if not cell.isVisible():
+                continue
             is_master = (
                 getattr(cell, "role", None) == "master"
                 and getattr(cell, "_members", None)

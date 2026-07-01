@@ -1,9 +1,14 @@
 {
   "schema_version": 3,
   "name": "Deselect to act",
+  "category": "Demos",
   "description": "Demo of the v0.8.0a50 'emit: unselected' field. The form opens with three fake 'currently-enabled features' all pre-checked. Untick the ones you want to DISABLE, click Run, and the tool prints the unticked list -- those are the items the back-end would act on. The 'Select all' master at the top lets you untick everything in one click ('disable everything') or re-tick after exploring.",
   "executable": "python",
   "working_directory": ".",
+  "source": {
+    "mode": "manual",
+    "help_text_cached": null
+  },
   "argument_template": [
     "deselect_to_act.py",
     "{features}"
@@ -15,12 +20,24 @@
       "description": "Each tick = feature stays ON.  Each UNTICK = feature gets passed to the back-end as 'disable this.'  Open + Run = no-op; untick + Run = act on the unticked set.",
       "type": "multiselect",
       "widget": "checkbox_list",
-      "default": ["fast_path", "verbose_logs", "auto_save"],
-      "choices": ["fast_path", "verbose_logs", "auto_save"],
-      "choice_labels": ["Fast path", "Verbose logs", "Auto-save"],
+      "required": false,
+      "default": [
+        "fast_path",
+        "verbose_logs",
+        "auto_save"
+      ],
+      "choices": [
+        "fast_path",
+        "verbose_logs",
+        "auto_save"
+      ],
+      "choice_labels": [
+        "Fast path",
+        "Verbose logs",
+        "Auto-save"
+      ],
       "select_all": true,
-      "emit": "unselected",
-      "required": false
+      "emit": "unselected"
     }
   ]
 }

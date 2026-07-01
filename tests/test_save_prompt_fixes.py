@@ -104,7 +104,9 @@ class TestF1ExitAllPrompt:
             "F1: _exit_all must fire the unsaved-ring save prompt "
             "before closing."
         )
-        m_quit.assert_called_once()
+        # a106 — quit fires (explicitly in _exit_all AND via the final
+        # closeEvent's _quit_if_app_empty; idempotent).  Assert "called".
+        assert m_quit.called
 
     def test_exit_all_skips_prompt_for_clean_master(
         self, tmp_path: Path,

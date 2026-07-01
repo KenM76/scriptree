@@ -275,6 +275,34 @@ class SettingsDialog(QDialog):
 
         root.addWidget(install_group)
 
+        # --- Portable mode ---
+        # When ON, ScripTree keeps ALL of its state (apps, the forest
+        # workspace, settings, rings) under the install folder instead of the
+        # user profile / registry, so the whole folder is self-contained and
+        # travels with a copy / USB stick.  Backed by a sentinel file in the
+        # install root (see ``scriptree.core.portable``); a restart is required
+        # because the data roots are chosen once at startup, so a live toggle
+        # can't re-home the open forest.
+        from scriptree.core.portable import is_portable as _is_portable
+        portable_group = QGroupBox("Portable mode")
+        portable_lay = QVBoxLayout(portable_group)
+        self._portable_initial = _is_portable()
+        self._portable_check = QCheckBox(
+            "Keep everything under the install folder (portable / USB)"
+        )
+        self._portable_check.setChecked(self._portable_initial)
+        portable_lay.addWidget(self._portable_check)
+        portable_hint = QLabel(
+            "<i>Self-contained install: the forest, settings, rings and "
+            "personal drop-installed apps all live under the install folder "
+            "instead of your user profile, so a folder-copy carries them. "
+            "Behaves like saving to a shared/server location, contained in the "
+            "install folder. <b>Changing this needs a restart.</b></i>"
+        )
+        portable_hint.setWordWrap(True)
+        portable_lay.addWidget(portable_hint)
+        root.addWidget(portable_group)
+
         # --- Global environment variables ---
         env_group = QGroupBox("Global environment variables")
         env_lay = QVBoxLayout(env_group)
@@ -352,9 +380,54 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
         )
+        btns.accepted.connect(self._apply_portable_on_accept)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         root.addWidget(btns)
+
+    def _apply_portable_on_accept(self) -> None:
+        """Create/remove the portable sentinel if the toggle changed.
+
+        Writes the sentinel via ``scriptree.core.portable.set_portable`` and
+        tells the user a restart is required (data roots resolve at startup).
+        Only fires on an actual state change so an unrelated Settings save
+        never touches the sentinel.
+        """
+        want = self._portable_check.isChecked()
+        if want == self._portable_initial:
+            return
+        from scriptree.shell.portable_migrate import migrate_for_toggle
+        from scriptree.shell.branding_loader import load_branding
+        from PySide6.QtWidgets import QMessageBox
+        # Flip the sentinel AND migrate the current forest / preferences /
+        # rings / UI settings into the target mode's locations, so switching
+        # either direction carries your state across (no data loss).
+        result = migrate_for_toggle(want, load_branding())
+        # ok is False only when ENABLING failed to write the sentinel
+        # (read-only / locked install medium) — nothing was flipped or copied.
+        if want and not result.get("ok"):
+            QMessageBox.warning(
+                self,
+                "Portable mode",
+                "Couldn't write the portable marker file — the install folder "
+                "may be read-only.  Portable mode was NOT enabled.",
+            )
+            self._portable_check.setChecked(self._portable_initial)
+            return
+        self._portable_initial = want  # avoid double-apply if re-entered
+        copied = result.get("copied") or []
+        moved = ", ".join(copied) if copied else "no existing state to copy"
+        where = "the install folder" if want else "your user profile"
+        QMessageBox.information(
+            self,
+            "Portable mode",
+            f"Portable mode {'enabled' if want else 'disabled'}.\n\n"
+            f"Your current state was copied to {where} "
+            f"({moved}), so nothing is lost.\n\n"
+            "Restart ScripTree for the change to take effect — its data "
+            "locations are chosen at startup. (Personal drop-installed apps "
+            "keep working via their existing paths.)",
+        )
 
     def _browse_permissions_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(

@@ -90,6 +90,7 @@ Public API
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from PySide6.QtCore import (
@@ -267,8 +268,7 @@ class ForestTrayIcon(QSystemTrayIcon):
 # ---------------------------------------------------------------------------
 
 class _FocusWatcher(QObject):
-    """Hide the forest hub when focus moves outside the forest
-    hierarchy, AND follow the user across virtual desktops.
+    """Hide the forest hub when focus moves outside the forest hierarchy.
 
     Active only when ``auto_hide`` is True (i.e. always-on-top is
     OFF and at least one of taskbar / tray is ON).  Wraps
@@ -285,14 +285,10 @@ class _FocusWatcher(QObject):
     programmatic show) benefits from a short suppression to ride
     out the platform's focus shuffle.
 
-    a55: the focus signal ALSO triggers the virtual-desktop
-    follow-the-user logic.  When focus moves to a window on a
-    different desktop than the forest hub, we move the hub (and
-    its visible descendants) to the user's current desktop.  This
-    is independent of ``_enabled`` -- the user wants the forest
-    to follow them whether or not auto-hide is on.  Implementation:
-    ``_on_focus_changed`` always calls the follow path; the hide
-    path is gated by ``_enabled`` as before.
+    v0.8.0a107: the a55 virtual-desktop "follow the user across
+    desktops" path was removed (see
+    ``docs/archive/removed_virtual_desktop_a107/``); this watcher is
+    now hide-only.
     """
 
     def __init__(
@@ -300,13 +296,11 @@ class _FocusWatcher(QObject):
         forest_window: Any,
         registry: Any,
         on_focus_left: Callable[[], None],
-        on_focus_changed_for_follow: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._forest_window = forest_window
         self._registry = registry
         self._on_focus_left = on_focus_left
-        self._on_focus_changed_for_follow = on_focus_changed_for_follow
         self._enabled = False
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -316,17 +310,9 @@ class _FocusWatcher(QObject):
         self._suppress_timer.setSingleShot(True)
         self._suppress_timer.timeout.connect(self._clear_suppression)
         self._suppressed: bool = False
-        # a70: DEBOUNCE the virtual-desktop follow.  Pre-a70 it ran on
-        # EVERY focusWindowChanged, so a focus-churn burst (e.g. while
-        # dragging the hub, or alt-tabbing) fired dozens of raw COM
-        # MoveWindowToDesktop calls -- each a race opportunity that can
-        # land the hub on the wrong virtual desktop and strand it there
-        # ("forest disappeared, cells left behind").  Now one move
-        # fires ~120ms after focus settles.  No-op for single-desktop.
-        self._follow_debounce = QTimer(self)
-        self._follow_debounce.setSingleShot(True)
-        self._follow_debounce.setInterval(120)
-        self._follow_debounce.timeout.connect(self._fire_follow)
+        # v0.8.0a107 — the virtual-desktop "follow the user across desktops"
+        # feature was removed (see docs/archive/removed_virtual_desktop_a107/).
+        # This watcher is now hide-only.
         app = QApplication.instance()
         if app is not None:
             app.focusWindowChanged.connect(self._on_focus_changed)
@@ -351,25 +337,9 @@ class _FocusWatcher(QObject):
         self._suppressed = False
 
     def _on_focus_changed(self, _new_window: Any) -> None:
-        # a55: the follow-the-user path gives the "forest appears on
-        # every desktop" behaviour without the private-COM ``PinWindow``
-        # fragility.  a70: it is now DEBOUNCED (see _follow_debounce) so
-        # a focus-churn burst fires ONE COM move after focus settles,
-        # not one per event.  No-op for single-desktop users.
-        if self._on_focus_changed_for_follow is not None:
-            self._follow_debounce.start()
         if not self._enabled or self._suppressed:
             return
         self._debounce.start()
-
-    def _fire_follow(self) -> None:
-        """Debounced virtual-desktop follow (see _on_focus_changed)."""
-        if self._on_focus_changed_for_follow is None:
-            return
-        try:
-            self._on_focus_changed_for_follow()
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_fire_follow: follow callback raised {exc!r}")
 
     def _fire(self) -> None:
         if not self._enabled or self._suppressed:
@@ -448,6 +418,43 @@ class _FocusWatcher(QObject):
 
 
 # ---------------------------------------------------------------------------
+# ForestHubState — the single source of truth (model)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ForestHubState:
+    """v0.8.0a108 — the ONE model the forest hub's show/hide/restore reads.
+
+    See ``docs/LLM/forest_show_apply_design.md``.  ``ForestVisibilityManager``
+    mutates this on events and reflects it via the single idempotent
+    ``apply_state()``; nothing else stores hub position / visibility / mode.
+    """
+
+    #: The hub's desired top-left in global screen coords — THE one position
+    #: store.  Written ONLY by user drag (drag-end) + initial load.  Read by
+    #: apply_state().  ``None`` => no stored position yet (let the OS place it).
+    hub_position: QPoint | None = None
+
+    #: Window MODE (derived from the 3 visibility prefs in ``apply``).
+    always_on_top: bool = True
+    taskbar: bool = False          #: hub carries ``Qt.Window`` (taskbar entry)
+    tray: bool = False             #: a tray icon exists
+
+    #: Desired visibility of the whole forest (False => hidden / minimised).
+    shown: bool = True
+
+    #: IDs of descendants we hid on the last hide, so a show reveals exactly
+    #: them (user-collapsed cells stay collapsed).
+    hidden_descendant_ids: list[str] = field(default_factory=list)
+
+    @property
+    def auto_hide(self) -> bool:
+        """Derived: the focus-watcher (auto-hide) is on iff always-on-top is OFF
+        and at least one of taskbar / tray is on."""
+        return (not self.always_on_top) and (self.taskbar or self.tray)
+
+
+# ---------------------------------------------------------------------------
 # ForestVisibilityManager
 # ---------------------------------------------------------------------------
 
@@ -472,22 +479,28 @@ class ForestVisibilityManager(QObject):
         self._tray_icon: ForestTrayIcon | None = None
         self._watcher = _FocusWatcher(
             forest_window, registry, self.hide_hub,
-            on_focus_changed_for_follow=self._follow_user_across_desktops,
         )
-        # Current visibility state derived from the last apply().
-        self._taskbar_on: bool = False
-        self._always_on_top: bool = True
-        self._auto_hide: bool = False
-        # Saved position of the hub so hide/show round-trips
-        # don't lose placement.  Only used in tray-only (no
-        # taskbar) mode -- in taskbar mode "hide" means minimise,
-        # which preserves position natively.
-        self._last_hub_position: QPoint | None = None
-        # IDs of cells we hid in the last hide_hub() call.  Only
-        # these get re-shown by show_hub() -- if the user had
-        # other cells collapsed / explicitly closed before we
-        # ran, leave them alone.
-        self._hidden_descendant_ids: list[str] = []
+        # v0.8.0a108 — THE single source of truth.  Window mode (the three
+        # flags), desired visibility, the one hub-position store, and the set
+        # of descendants folded away on the last hide all live in this model.
+        # Events mutate it; ``apply_state()`` is the only thing that reflects it
+        # onto the live window.  The old scattered fields (_taskbar_on /
+        # _always_on_top / _auto_hide / _last_hub_position /
+        # _hidden_descendant_ids) collapsed into this one object so the three
+        # historically-divergent show paths (tray click, taskbar restore,
+        # startup) can no longer drift apart.  See
+        # ``docs/LLM/forest_show_apply_design.md``.
+        self._state = ForestHubState()
+        # v0.8.0a108 (review fix) — re-entrancy guard.  ``apply_state`` MOVES the
+        # hub programmatically (clamp-on-show), and ``CellWindow.moveEvent``
+        # emits ``hexagonMoved`` on EVERY move, including programmatic ones.
+        # ``forest_controller._on_hex_moved`` listens for that and writes
+        # ``state.hub_position`` — so without a guard, apply_state's own clamp
+        # would re-enter and overwrite the stored position with the clamped
+        # value (losing a real off-screen position + persisting the clamp).
+        # This flag, set True for the duration of apply_state, tells
+        # _on_hex_moved "this move is mine, not the user's — don't capture it".
+        self._applying_state: bool = False
         # Install the event filter on the hub so we can detect
         # the user clicking its taskbar entry (restore from
         # minimised).  See eventFilter() below.
@@ -530,8 +543,11 @@ class ForestVisibilityManager(QObject):
 
         self._apply_tray(tr)
 
-        self._auto_hide = (not aot) and (tb or tr)
-        self._watcher.set_enabled(self._auto_hide)
+        # The three flag setters above each wrote their field into self._state
+        # (state.taskbar / state.always_on_top / state.tray).  ``auto_hide`` is
+        # the derived rule "watcher on iff always-on-top OFF and taskbar-or-tray
+        # ON".
+        self._watcher.set_enabled(self._state.auto_hide)
 
         # If auto-hide is on AND the hub is currently visible /
         # not-minimised, transition into the hidden / minimised
@@ -539,7 +555,7 @@ class ForestVisibilityManager(QObject):
         # effect.  On the first apply() (during start()) the hub
         # hasn't been shown yet -- this branch becomes a no-op
         # and the controller leaves the hub in its hidden state.
-        if self._auto_hide and self._forest_window is not None:
+        if self._state.auto_hide and self._forest_window is not None:
             try:
                 w = self._forest_window
                 if w.isVisible() and not w.isMinimized():
@@ -565,207 +581,250 @@ class ForestVisibilityManager(QObject):
             _log(f"_clamp_hub: {exc!r}")
         return pos
 
-    def show_hub(self) -> None:
-        """Bring the forest hub AND its descendants back into view.
+    # ------------------------------------------------------------------
+    # apply_state() -- THE single render pass (v0.8.0a108)
+    # ------------------------------------------------------------------
 
-        Used by the tray icon, by the taskbar restore detector
-        (eventFilter below), and by external code that wants to
-        guarantee everything is visible.
+    def apply_state(self) -> None:
+        """Reflect ``self._state`` onto the live hub window -- the ONE place
+        that shows / hides / moves the forest.
 
-        Briefly suppresses the focus watcher (200ms) so the
-        platform focus shuffle during show + raise + activate
-        doesn't trigger a spurious hide.  In a54 the suppression
-        is much shorter than a53's 300ms because the taskbar
-        proxy bounce-back is gone.
+        This is the "render pass" of the model->apply design
+        (``docs/LLM/forest_show_apply_design.md`` §4).  Every show / hide /
+        restore path -- tray click, taskbar-entry restore, startup, an
+        auto-hide flip -- mutates ``self._state`` then calls this; they can no
+        longer diverge the way ``show_hub`` (forced a stored position) and the
+        taskbar restore (trusted the OS) used to.
+
+        Contract / invariants:
+          * **Position comes from the model.**  When showing, the hub is moved
+            to ``state.hub_position`` *clamped on-screen* -- "wherever the user
+            last left it", never (0,0) and never a stale off-screen spot.
+            ``hub_position`` is kept current by the drag-end capture in
+            ``forest_controller`` (and, defensively, re-captured here at hide).
+          * **Idempotent.**  Calling it twice with an unchanged model lands the
+            same window geometry / visibility; showNormal / move / show on
+            already-correct values are no-ops.  In particular a redundant HIDE
+            (a second focus-left event while already hidden) is a no-op that
+            PRESERVES ``hidden_descendant_ids`` -- it must NOT re-derive the
+            list from the (already-hidden) descendants, or the next show would
+            reveal nothing ("forest comes back empty").  [review fix]
+          * **Programmatic moves are not user drags.**  ``_applying_state`` is
+            held True for the duration so the clamp-on-show move (which fires
+            ``hexagonMoved``) can't re-enter ``_on_hex_moved`` and overwrite the
+            stored ``hub_position`` with the clamped value.  [review fix]
+          * **Never invokes the bloom / layout engine.**  Docking, the bloom
+            expand/collapse, and remembered offsets stay entirely the docking
+            engine's job (design §6a).  This method only show()/hide()/move()s
+            windows that already exist -- it never re-tiles.
+          * **Descendants follow the hub.**  Showing reveals exactly the cells
+            the last hide folded away (``state.hidden_descendant_ids``) and
+            rescues any now off-screen; hiding folds every visible descendant
+            and records which ones.
         """
-        try:
-            self._watcher.suppress_for(300)
-        except Exception:  # noqa: BLE001
-            pass
-
         w = self._forest_window
         if w is None:
             return
-
-        # a59: move BEFORE show, while window is still minimised.
-        #
-        # The a56 ritual hid the window before moving, on the
-        # theory that hide() would clear Windows' minimise-state
-        # desktop tracking.  The diagnostic log (after a58 fixed
-        # ctypes) revealed the real failure mode:
-        #
-        #   [win_virtual_desktops:debug] MoveWindowToDesktop(...) -> HRESULT=0x8002802B FAIL
-        #
-        # 0x8002802B is TYPE_E_ELEMENTNOTFOUND -- and it's what
-        # ``MoveWindowToDesktop`` returns when the target window
-        # is HIDDEN.  Minimised windows accept the call;
-        # ``hide()``-d ones don't.  So the a56 "hide then move"
-        # sequence was self-defeating: it disabled the very call
-        # it was trying to make work.  By the time the post-show
-        # move ran with HRESULT=OK, ``showNormal()`` had already
-        # called ``SwitchToThisWindow`` and yanked the user to
-        # the origin desktop.
-        #
-        # a59: keep the window minimised, move it (the COM call
-        # accepts minimised windows just fine), THEN restore.
-        # ``showNormal`` then restores on the desktop we just
-        # moved it to -- which IS the user's current desktop --
-        # so the SwitchToThisWindow internal becomes a no-op.
-        desktop_id = None
+        st = self._state
+        # [review fix] Re-entrancy guard: hold this True across the whole render
+        # pass so any programmatic move() below (the clamp-on-show) is ignored
+        # by forest_controller._on_hex_moved -- only a real USER drag should
+        # write state.hub_position.  finally-reset so an exception can't strand
+        # it (which would silently freeze all future drag-captures).
+        self._applying_state = True
         try:
-            from scriptree.shell import win_virtual_desktops as wvd
-            if wvd.is_supported():
-                desktop_id = wvd.get_current_desktop_id()
-        except Exception as exc:  # noqa: BLE001
-            _log(f"show_hub: resolve current desktop raised {exc!r}")
-
-        try:
-            hwnd = int(w.winId()) if w is not None else 0
-
-            if self._taskbar_on:
-                # Move FIRST, while still minimised.
-                if desktop_id is not None and hwnd:
-                    try:
-                        from scriptree.shell import win_virtual_desktops as wvd
-                        ok = wvd.move_window_to_desktop(hwnd, desktop_id)
-                        on_current = wvd.is_window_on_current_desktop(hwnd)
-                        _log(
-                            f"show_hub: hub move (minimised path): "
-                            f"ok={ok} on_current_after={on_current}"
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        _log(f"show_hub: pre-show move raised {exc!r}")
-                # Now restore -- the window is on the user's
-                # current desktop, so SwitchToThisWindow inside
-                # showNormal does nothing.
-                w.showNormal()
-                if self._last_hub_position is not None:
-                    # a69: clamp so a stale / off-screen last position
-                    # (resolution shrank, monitor unplugged, hub last
-                    # dragged off-screen) can't strand the hub off the
-                    # visible desktop -- the "forest disappeared" bug.
-                    w.move(self._clamp_hub(self._last_hub_position))
-                # Belt-and-suspenders: re-check after show, in
-                # case some platform race put us back on the
-                # origin desktop.  Log the result so we can see
-                # whether this second call is doing real work or
-                # whether the pre-show move was sufficient.
-                if desktop_id is not None and hwnd:
-                    try:
-                        from scriptree.shell import win_virtual_desktops as wvd
-                        if not wvd.is_window_on_current_desktop(hwnd):
-                            ok = wvd.move_window_to_desktop(
-                                hwnd, desktop_id,
-                            )
-                            _log(
-                                f"show_hub: hub corrective post-show "
-                                f"move: ok={ok}"
-                            )
-                    except Exception as exc:  # noqa: BLE001
-                        _log(f"show_hub: post-show move raised {exc!r}")
-            else:
-                # Tray-only / hidden mode -- the hub is HIDDEN
-                # (not minimised) here, so MoveWindowToDesktop
-                # would return TYPE_E_ELEMENTNOTFOUND.  We have
-                # to show first, then move.  Trade-off: brief
-                # flash on origin desktop possible.  Mitigated
-                # by suppress_for above.
-                if self._last_hub_position is not None and not w.isVisible():
-                    # a69: clamp the restore position on-screen (see the
-                    # taskbar branch above).
-                    w.move(self._clamp_hub(self._last_hub_position))
-                w.show()
-                if desktop_id is not None and hwnd:
-                    try:
-                        from scriptree.shell import win_virtual_desktops as wvd
-                        ok = wvd.move_window_to_desktop(hwnd, desktop_id)
-                        _log(f"show_hub: hub move (tray-only path): ok={ok}")
-                    except Exception as exc:  # noqa: BLE001
-                        _log(f"show_hub: tray-mode move raised {exc!r}")
-
-            # a59: show descendants FIRST, then move.  Hidden
-            # windows reject MoveWindowToDesktop with
-            # TYPE_E_ELEMENTNOTFOUND (the bug a59 fixed for the
-            # hub); descendants hit the same wall.  The trade-off
-            # here is a brief flash on the origin desktop before
-            # the move catches up, but the suppress_for(300)
-            # above buys enough time that the user doesn't
-            # perceive it as a desktop switch.
-            shown_descendants: list[Any] = []
-            for cell_id in self._hidden_descendant_ids:
-                cell = self._registry.get(cell_id)
-                if cell is None:
-                    continue
+            if st.shown:
+                # Suppress the focus watcher across the show+raise focus
+                # shuffle so the platform churn can't queue a spurious
+                # auto-hide (was 300ms in the old show_hub).
                 try:
-                    cell.show()
-                    shown_descendants.append(cell)
+                    self._watcher.suppress_for(300)
                 except Exception:  # noqa: BLE001
-                    continue
-            # Now they're visible -- move them.
-            if desktop_id is not None:
+                    pass
+                # Move to the stored position (clamped) THEN show so the window
+                # never flashes at (0,0) / a stale spot.  a69 clamp guards a
+                # stale or off-screen stored position (resolution shrank,
+                # monitor unplugged, dragged off-screen).
+                if st.taskbar:
+                    # v0.8.0a111 -- only un-minimise / show when the window
+                    # actually needs it.  Calling ``showNormal()`` on a window
+                    # the OS has ALREADY restored (the user's taskbar click)
+                    # re-maps it and DROPS the foreground/active state Windows
+                    # just granted -- which is why the first reveal's hub was
+                    # clickable but NOT draggable until a manual minimise/
+                    # restore.  Re-mapping only when needed preserves activation.
+                    if w.isMinimized():
+                        w.showNormal()
+                    elif not w.isVisible():
+                        w.show()
+                    if st.hub_position is not None:
+                        w.move(self._clamp_hub(st.hub_position))
+                else:
+                    if st.hub_position is not None and not w.isVisible():
+                        w.move(self._clamp_hub(st.hub_position))
+                    if not w.isVisible():
+                        w.show()
+                    if st.hub_position is not None:
+                        # Re-show in tray / always-on-top mode must land where
+                        # the user left it even if the window was already
+                        # visible (cheap + idempotent).  This is the a108 fix
+                        # for "tray click jumps the forest back to its
+                        # show-time position": now it reads the LIVE
+                        # drag-captured position, not a stale hide-time one.
+                        w.move(self._clamp_hub(st.hub_position))
+                self._reveal_hidden_descendants()
                 try:
-                    from scriptree.shell import win_virtual_desktops as wvd
-                    for cell_id in self._hidden_descendant_ids:
-                        cell = self._registry.get(cell_id)
-                        if cell is None:
-                            continue
-                        try:
-                            d_hwnd = int(cell.winId())
-                            wvd.move_window_to_desktop(d_hwnd, desktop_id)
-                        except Exception:  # noqa: BLE001
-                            continue
-                except Exception as exc:  # noqa: BLE001
-                    _log(f"show_hub: descendant post-show move raised {exc!r}")
-            # a62 (user-reported): the hub may have moved while the
-            # cells were hidden, so a revealed cell's stored position
-            # can now be off-screen.  Rescue each one onto a visible
-            # screen before we clear the tracking list.
-            self._rescue_cells_on_screen(shown_descendants)
-            self._hidden_descendant_ids = []
-            w.raise_()
-            w.activateWindow()
+                    w.raise_()
+                    w.activateWindow()
+                    # v0.8.0a111 -- re-assert activation on the NEXT event-loop
+                    # tick, after the OS finishes the map/restore.  A frameless
+                    # window revealed programmatically on Win11 can fail to
+                    # become foreground in the same tick (foreground lock), so
+                    # its first drag gesture is dropped; the deferred activate
+                    # makes the hub draggable on first reveal without a manual
+                    # hide/show cycle.
+                    QTimer.singleShot(0, self._post_show_activate)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                # [review fix] IDEMPOTENT HIDE.  If the hub is ALREADY in its
+                # hidden state (minimised in taskbar mode; not-visible
+                # otherwise), this is a redundant hide -> NO-OP.  Re-running the
+                # fold loop here would be catastrophic: every descendant is
+                # already hidden, so the loop records NOTHING, and the
+                # unconditional ``hidden_descendant_ids = []`` would WIPE the
+                # set captured by the first hide -> the next show reveals no
+                # cells ("forest comes back empty / cells left behind").  This
+                # double-hide is reachable in auto-hide mode: the focus watcher
+                # stays enabled while hidden and fires hide_hub again on a
+                # second focus-left event (or the hide's own focus churn).
+                # Returning early preserves the recorded set and makes
+                # hide();hide();show() == hide();show() (design §4 idempotence).
+                already_hidden = (
+                    w.isMinimized() if st.taskbar else (not w.isVisible())
+                )
+                if already_hidden:
+                    return
+                # First (real) hide: fold every visible descendant away,
+                # recording exactly which ones so the next show reveals only
+                # those (user-collapsed / explicitly-closed cells stay as they
+                # were), capture the live hub position as a safety net, then
+                # minimise (taskbar mode, keeps the taskbar entry) or hide
+                # (tray-only / always-on-top toggle).
+                st.hidden_descendant_ids = []
+                for descendant in self._forest_descendants():
+                    try:
+                        if descendant.isVisible():
+                            descendant.hide()
+                            cell_id = getattr(descendant, "_id", None)
+                            if cell_id:
+                                st.hidden_descendant_ids.append(cell_id)
+                    except Exception:  # noqa: BLE001
+                        continue
+                if st.taskbar:
+                    if w.isVisible() and not w.isMinimized():
+                        st.hub_position = QPoint(w.pos())
+                    w.showMinimized()
+                else:
+                    if w.isVisible():
+                        st.hub_position = QPoint(w.pos())
+                    w.hide()
         except Exception as exc:  # noqa: BLE001
-            _log(f"show_hub: {exc!r}")
+            _log(f"apply_state: {exc!r}")
+        finally:
+            self._applying_state = False
+
+    def _post_show_activate(self) -> None:
+        """v0.8.0a111 -- deferred re-activation of the freshly-revealed hub.
+
+        Scheduled one event-loop tick after ``apply_state`` shows the hub.  A
+        frameless window shown programmatically on Win11 can fail to become the
+        foreground/active window in the same tick (the OS foreground lock), so
+        its first drag gesture is silently dropped -- the user-reported "I can
+        click the forest icon (menu opens) but can't drag it until I minimise
+        and restore it".  Re-asserting ``raise_`` + ``activateWindow`` + the
+        active window-state here, after the OS has finished the map, gives the
+        hub the input focus it needs to be draggable on first reveal.  Guarded
+        to act only when the hub is genuinely shown (not minimised/hidden)."""
+        w = self._forest_window
+        if w is None:
+            return
+        try:
+            if w.isVisible() and not w.isMinimized():
+                w.raise_()
+                w.activateWindow()
+                # activateWindow() alone can be a no-op under the Win11
+                # foreground lock; setting the ACTIVE window-state explicitly is
+                # the stronger nudge.  Clearing Minimized keeps it a no-op when
+                # already normal (so no spurious WindowStateChange storm).
+                w.setWindowState(
+                    (w.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive
+                )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_post_show_activate: {exc!r}")
+
+    def _reveal_hidden_descendants(self) -> None:
+        """Show exactly the descendants the last hide folded away, then clamp
+        any whose stored position is now off-screen, and clear the tracked-id
+        list.  Shared by every show path (tray, taskbar restore, startup) so
+        the reveal logic exists in ONE place.
+
+        a62 (user-reported): the hub may have moved while the cells were hidden,
+        leaving a revealed cell's stored position off every connected screen; a
+        bare ``show()`` would strand it.  ``_rescue_cells_on_screen`` clamps each
+        back onto its containing screen, moving only those that actually changed.
+        """
+        st = self._state
+        shown: list[Any] = []
+        for cell_id in st.hidden_descendant_ids:
+            cell = self._registry.get(cell_id)
+            if cell is None:
+                continue
+            try:
+                cell.show()
+                shown.append(cell)
+            except Exception:  # noqa: BLE001
+                continue
+        st.hidden_descendant_ids = []
+        self._rescue_cells_on_screen(shown)
+
+    def show_hub(self) -> None:
+        """Reveal the forest hub AND its descendants.
+
+        Thin wrapper (v0.8.0a108): flip the model to ``shown`` and render once.
+        EVERY show entry point -- the tray icon, the taskbar-entry restore
+        detector (``eventFilter`` below), and external callers -- funnels
+        through here into ``apply_state``, so they can't drift apart the way
+        the old hand-written ``show_hub`` / ``_restore_descendants`` pair did.
+        """
+        self._state.shown = True
+        self.apply_state()
 
     def hide_hub(self) -> None:
         """Hide the forest hub AND every visible forest descendant.
 
-        Behaviour depends on whether the hub carries ``Qt.Window``
-        (taskbar mode):
-          * Taskbar mode: ``showMinimized()`` so the taskbar entry
-            stays visible.
-          * Otherwise: ``hide()`` so the window is removed
-            entirely (tray-only or always-on-top toggles).
-
-        Tracks which descendants we hid so ``show_hub`` restores
-        only those (user-collapsed cells stay collapsed).
+        Thin wrapper (v0.8.0a108): flip the model to hidden and render once.
+        ``apply_state`` captures the live hub position, records which
+        descendants it folded (so the next show reveals only those), and
+        minimises (taskbar mode) or hides (tray-only / always-on-top toggle).
         """
-        w = self._forest_window
-        if w is None:
-            return
-        try:
-            self._hidden_descendant_ids = []
-            for descendant in self._forest_descendants():
-                try:
-                    if descendant.isVisible():
-                        descendant.hide()
-                        cell_id = getattr(descendant, "_id", None)
-                        if cell_id:
-                            self._hidden_descendant_ids.append(cell_id)
-                except Exception:  # noqa: BLE001
-                    continue
-            if self._taskbar_on:
-                # Capture position before minimising so showNormal
-                # can put it back exactly where the user had it.
-                if w.isVisible() and not w.isMinimized():
-                    self._last_hub_position = QPoint(w.pos())
-                w.showMinimized()
-            else:
-                if w.isVisible():
-                    self._last_hub_position = QPoint(w.pos())
-                w.hide()
-        except Exception as exc:  # noqa: BLE001
-            _log(f"hide_hub: {exc!r}")
+        self._state.shown = False
+        self.apply_state()
+
+    def toggle_hub(self) -> None:
+        """Toggle the forest's visibility: hide it if shown, show it if hidden.
+
+        v0.8.0a111 -- the tray icon (and any single click-to-toggle surface)
+        funnels here so a SECOND click on the tray/taskbar icon HIDES the whole
+        forest (hub + bloomed cells) when always-on-top is OFF, instead of the
+        old behaviour where a tray click always showed and never hid.  Reads the
+        one model flag ``state.shown`` so it stays in lock-step with the
+        taskbar-entry toggle handled in ``eventFilter``.
+        """
+        if self._state.shown:
+            self.hide_hub()
+        else:
+            self.show_hub()
 
     def hide_descendants_only(self) -> None:
         """Hide every visible forest descendant WITHOUT touching
@@ -779,14 +838,48 @@ class ForestVisibilityManager(QObject):
         invariant and seeds ``_hidden_descendant_ids`` so the
         first ``show_hub`` reveals them again.
         """
-        self._hidden_descendant_ids = []
+        st = self._state
+        st.hidden_descendant_ids = []
         for descendant in self._forest_descendants():
             try:
                 if descendant.isVisible():
                     descendant.hide()
                     cell_id = getattr(descendant, "_id", None)
                     if cell_id:
-                        self._hidden_descendant_ids.append(cell_id)
+                        st.hidden_descendant_ids.append(cell_id)
+            except Exception:  # noqa: BLE001
+                continue
+
+    def fold_new_visible_descendants(self) -> None:
+        """v0.8.0a114 -- fold any descendant that is CURRENTLY VISIBLE while the
+        forest is HIDDEN, APPENDING each to ``hidden_descendant_ids`` (never
+        resetting the list).
+
+        This is the FIRST-RUN fix.  At startup ``hide_descendants_only`` folds
+        the forest once; but on a NEW install the forest is EMPTY at that point,
+        so nothing is folded, and the first-run discovery then populates it via
+        ``ForestController.add_item`` -- each freshly-spawned cell appears
+        VISIBLE on the desktop while the hub is already hidden ("hub
+        disappeared, cells left behind").  Calling this after each such add
+        folds the new cell(s) into the hidden set so the next reveal
+        (taskbar/tray click) brings them back with the rest of the forest.
+
+        Crucially it APPENDS rather than resetting the id list, so calling it
+        repeatedly across a discovery burst never wipes the already-folded set
+        (the trap ``hide_descendants_only`` would hit if reused per-item).
+        No-op when the forest is currently shown -- then a new cell belongs on
+        screen with everything else.
+        """
+        st = self._state
+        if st.shown:
+            return
+        for descendant in self._forest_descendants():
+            try:
+                if descendant.isVisible():
+                    descendant.hide()
+                    cell_id = getattr(descendant, "_id", None)
+                    if cell_id and cell_id not in st.hidden_descendant_ids:
+                        st.hidden_descendant_ids.append(cell_id)
             except Exception:  # noqa: BLE001
                 continue
 
@@ -823,89 +916,43 @@ class ForestVisibilityManager(QObject):
         # them via getattr so we degrade to "not handled" instead of
         # spewing "Error calling Python override of eventFilter".
         fw = getattr(self, "_forest_window", None)
+        st = getattr(self, "_state", None)
         if (
             fw is not None
+            and st is not None
             and obj is fw
             and event.type() == QEvent.Type.WindowStateChange
-            and getattr(self, "_auto_hide", False)
-            and getattr(self, "_taskbar_on", False)
+            and st.auto_hide
+            and st.taskbar
         ):
             try:
                 if not fw.isMinimized() and fw.isVisible():
-                    # User restored us from the taskbar.  Reveal the
-                    # descendants too.  Schedule on the next event-loop
-                    # tick so the OS finishes processing the state
-                    # change first.
-                    QTimer.singleShot(0, self._restore_descendants)
+                    # RESTORE: the user un-minimised the hub from the taskbar.
+                    # Only act if our model says we WERE hidden (else this is
+                    # the echo of our own showNormal -> no double-fire).  Run
+                    # the SAME show path the tray click uses (model ->
+                    # apply_state) so the two can never diverge -- the a108
+                    # unification.  Scheduled on the next event-loop tick so the
+                    # OS finishes the state change first.
+                    if not st.shown:
+                        QTimer.singleShot(0, self.show_hub)
+                elif fw.isMinimized() and st.shown:
+                    # MINIMISE (v0.8.0a111): the user clicked the taskbar entry
+                    # of the SHOWN forest, so Windows minimised the hub window.
+                    # But the hub's frameless cells are SEPARATE windows -- the
+                    # OS leaves them on screen, and the focus watcher misses it
+                    # because focus lands on one of the still-visible cells
+                    # (``_is_inside_forest`` -> True -> no hide).  Fold the cells
+                    # ourselves so the WHOLE forest hides together on a second
+                    # taskbar click (the user-requested behaviour).  The hub is
+                    # already minimised by the OS, so we only fold the
+                    # descendants (``hide_descendants_only`` records them so the
+                    # next restore reveals exactly them) and sync the model.
+                    st.shown = False
+                    QTimer.singleShot(0, self.hide_descendants_only)
             except Exception as exc:  # noqa: BLE001
-                _log(f"eventFilter: taskbar restore raised {exc!r}")
+                _log(f"eventFilter: taskbar state-change raised {exc!r}")
         return super().eventFilter(obj, event)
-
-    def _restore_descendants(self) -> None:
-        """Helper used by the event filter to show only the
-        descendants WE hid, without touching the hub (it's
-        already restored by the user's click)."""
-        # Suppress the watcher so the platform focus shuffle
-        # during the cell shows doesn't queue a hide.
-        try:
-            self._watcher.suppress_for(200)
-        except Exception:  # noqa: BLE001
-            pass
-        # a61: SHOW each tracked cell FIRST, then move it to the
-        # user's current desktop.
-        #
-        # The hub is already on the user's current desktop (Windows
-        # put it there when the user clicked the taskbar entry), but
-        # the cells were last shown wherever the forest used to
-        # live, so they need moving to land beside the hub.  Pre-a61
-        # this called ``_ensure_descendants_on_current_desktop()``
-        # BEFORE the show loop -- while the cells were still hidden.
-        # ``MoveWindowToDesktop`` returns TYPE_E_ELEMENTNOTFOUND for
-        # a hidden window (the exact failure a59 fixed for the hub
-        # in ``show_hub``), so the move silently no-op'd and the
-        # cells reappeared on the forest's OLD desktop instead of
-        # beside the hub.  Mirror a59: show -> then move.
-        shown: list[Any] = []
-        for cell_id in self._hidden_descendant_ids:
-            cell = self._registry.get(cell_id)
-            if cell is None:
-                continue
-            try:
-                cell.show()
-                shown.append(cell)
-            except Exception:  # noqa: BLE001
-                continue
-        self._hidden_descendant_ids = []
-        # Now that they're visible, move the ones we just revealed to
-        # the current desktop.  We move only ``shown`` (not the full
-        # descendant walk) so we don't force-create native windows
-        # for cells the user had deliberately collapsed/closed.
-        if shown:
-            try:
-                from scriptree.shell import win_virtual_desktops as wvd
-                if wvd.is_supported():
-                    desktop_id = wvd.get_current_desktop_id()
-                    if desktop_id is not None:
-                        for cell in shown:
-                            try:
-                                wvd.move_window_to_desktop(
-                                    int(cell.winId()), desktop_id,
-                                )
-                            except Exception:  # noqa: BLE001
-                                continue
-            except Exception as exc:  # noqa: BLE001
-                _log(f"_restore_descendants: post-show move raised {exc!r}")
-        # a62 (user-reported): rescue any revealed cell whose stored
-        # position is now off-screen -- the hub may have moved while
-        # the cells were hidden, leaving them stranded.
-        self._rescue_cells_on_screen(shown)
-        # Bring the hub itself to the foreground in case the
-        # restore from taskbar didn't activate it properly.
-        try:
-            self._forest_window.raise_()
-            self._forest_window.activateWindow()
-        except Exception:  # noqa: BLE001
-            pass
 
     def _rescue_cells_on_screen(self, cells: list[Any]) -> None:
         """Clamp each just-revealed cell back onto a visible screen.
@@ -953,7 +1000,7 @@ class ForestVisibilityManager(QObject):
             w._apply_always_on_top_flag(on)
         except Exception as exc:  # noqa: BLE001
             _log(f"_apply_always_on_top: helper raised {exc!r}")
-        self._always_on_top = on
+        self._state.always_on_top = on
 
     # ------------------------------------------------------------------
     # Internals -- taskbar
@@ -974,7 +1021,7 @@ class ForestVisibilityManager(QObject):
             w._apply_taskbar_flag(on)
         except Exception as exc:  # noqa: BLE001
             _log(f"_apply_taskbar_flag: helper raised {exc!r}")
-        self._taskbar_on = on
+        self._state.taskbar = on
 
     # ------------------------------------------------------------------
     # Internals -- tray
@@ -982,6 +1029,7 @@ class ForestVisibilityManager(QObject):
 
     def _apply_tray(self, on: bool) -> None:
         """Spawn or tear down the system tray icon."""
+        self._state.tray = on
         if on and self._tray_icon is None:
             if not QSystemTrayIcon.isSystemTrayAvailable():
                 _log(
@@ -990,7 +1038,10 @@ class ForestVisibilityManager(QObject):
                 )
                 return
             tray = ForestTrayIcon(
-                on_activate=self.show_hub,
+                # v0.8.0a111 -- TOGGLE, not show-only: a second tray click now
+                # hides the forest (hub + bloomed cells) when always-on-top is
+                # OFF, matching the taskbar-entry toggle.
+                on_activate=self.toggle_hub,
                 on_quit=self._quit_callback,
                 parent=self,
             )
@@ -1005,126 +1056,6 @@ class ForestVisibilityManager(QObject):
 
     # ------------------------------------------------------------------
     # Internals -- descendant walk
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Virtual-desktop follow-the-user (a55+)
-    # ------------------------------------------------------------------
-
-    def _ensure_hub_on_current_desktop(self) -> None:
-        """Move the forest hub to the user's current virtual
-        desktop if it isn't already there.
-
-        Called from ``show_hub`` and ``_restore_descendants`` so
-        any programmatic reveal (tray click, taskbar restore,
-        external code) puts the hub on whichever desktop the
-        user is actually looking at.  Without this, clicking the
-        tray icon from desktop B yanks the user back to desktop
-        A where the forest happens to live.
-
-        Cheap on systems with one desktop -- the underlying
-        ``ensure_on_current_desktop`` short-circuits to a single
-        COM call when the window is already there.
-        """
-        try:
-            from scriptree.shell import win_virtual_desktops as wvd
-            if not wvd.is_supported():
-                return
-            hwnd = int(self._forest_window.winId())
-            wvd.ensure_on_current_desktop(hwnd)
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_ensure_hub_on_current_desktop: {exc!r}")
-
-    def _ensure_descendants_on_current_desktop(self) -> None:
-        """Move every visible forest descendant to the user's
-        current desktop.
-
-        Used when a show triggers descendant reveal -- without
-        this, the hub would arrive on desktop B and the cells
-        would be left behind on desktop A (where they were last
-        shown).  The user then sees a hub with no cells around
-        it on the current desktop.
-        """
-        try:
-            from scriptree.shell import win_virtual_desktops as wvd
-            if not wvd.is_supported():
-                return
-            for descendant in self._forest_descendants():
-                try:
-                    hwnd = int(descendant.winId())
-                    wvd.ensure_on_current_desktop(hwnd)
-                except Exception:  # noqa: BLE001
-                    continue
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_ensure_descendants_on_current_desktop: {exc!r}")
-
-    def _follow_user_across_desktops(self) -> None:
-        """Wire focus-changes -> move-forest-to-current-desktop.
-
-        Called by the watcher on every focusWindowChanged event,
-        regardless of auto-hide state -- the user wants the forest
-        reachable on every desktop whether or not auto-hide is on.
-
-        The heavy lifting is in ``ensure_on_current_desktop``,
-        which is idempotent.  The CHECK (is_window_on_current
-        desktop) is a single COM call; the MOVE only fires when
-        the hub is actually on a different desktop.  So the cost
-        on the common (single-desktop) case is one COM call per
-        focus event -- negligible.
-        """
-        try:
-            from scriptree.shell import win_virtual_desktops as wvd
-            if not wvd.is_supported():
-                return
-            if self._forest_window is None:
-                return
-            # Only follow when the hub HAS a native handle (i.e.
-            # has been shown at least once).  Calling winId on an
-            # un-shown widget forces window creation, which we
-            # don't want here.
-            if not self._forest_window.testAttribute(
-                Qt.WidgetAttribute.WA_WState_Created
-            ):
-                return
-            # a70: never move the hub across desktops while the user is
-            # actively dragging it.  A drag generates focus churn, and a
-            # mid-drag cross-desktop move is the most likely way the hub
-            # "disappears" out from under the user.
-            if getattr(self._forest_window, "_drag_started", False):
-                return
-            hwnd = int(self._forest_window.winId())
-            if wvd.is_window_on_current_desktop(hwnd):
-                return
-            # Hub is on a different desktop -- the user switched.
-            # Move the hub AND every currently-visible descendant.
-            desktop_id = wvd.get_current_desktop_id()
-            if desktop_id is None:
-                return
-            wvd.move_window_to_desktop(hwnd, desktop_id)
-            # a70: verify the move landed the hub on the user's current
-            # desktop.  If not, the COM call raced/failed and the hub may
-            # be stranded -- log it (the Forest -> Debug verbose stream
-            # carries the HRESULT) so a residual "disappeared" can be
-            # diagnosed directly instead of guessed at.
-            if not wvd.is_window_on_current_desktop(hwnd):
-                _log(
-                    "_follow_user_across_desktops: hub move did NOT land "
-                    "on the current desktop (possible COM race) -- hub may "
-                    "be stranded; capture the [win_virtual_desktops:debug] "
-                    "HRESULT line"
-                )
-            for descendant in self._forest_descendants():
-                try:
-                    if descendant.isVisible():
-                        d_hwnd = int(descendant.winId())
-                        wvd.move_window_to_desktop(d_hwnd, desktop_id)
-                except Exception:  # noqa: BLE001
-                    continue
-        except Exception as exc:  # noqa: BLE001
-            _log(f"_follow_user_across_desktops: {exc!r}")
-
-    # ------------------------------------------------------------------
-    # Descendant walk
     # ------------------------------------------------------------------
 
     def _forest_descendants(self) -> list[Any]:

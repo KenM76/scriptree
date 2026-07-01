@@ -162,6 +162,11 @@ python make_shortcut.py
 
 - **[Quickstart](docs/quickstart.md)** — get running in 60 seconds
 - **[Features](docs/features.md)** — top 10 and top 20 feature lists
+- **[Organizing your tools](docs/LLM/category_authoring.md)** — the `category`
+  field groups related tools into one forest cell; lay each tool out so its
+  folder mirrors its category (`category: "MSOffice/Word"` → `MSOffice/Word/`).
+  When hand-editing a `.scriptree` JSON, fields run stable-at-top →
+  most-edited-at-bottom, so `Ctrl+End` jumps you to the form.
 - **[Security Guide](docs/security.md)** — permissions, sanitization, deployment
 - **[Full Help Index](docs/README.md)** — all documentation
 

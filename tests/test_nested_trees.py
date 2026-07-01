@@ -36,6 +36,15 @@ from scriptree.ui.tree_view import (  # noqa: E402
 )
 
 
+def _root(view):  # noqa: ANN001 — a96 ROOT row (topLevelItem(0))
+    return view._tree_widget.topLevelItem(0)
+
+
+def _nodes(view):  # noqa: ANN001 — the tree's top-level NODES (root's children)
+    r = _root(view)
+    return [r.child(i) for i in range(r.childCount())]
+
+
 # --- helpers ----------------------------------------------------------------
 
 def _write_tool(path: Path, name: str) -> None:
@@ -185,9 +194,9 @@ class TestSubtreeDisplay:
         view.load(str(nested_tree_dir / "outer.scriptreetree"))
         tw = view._tree_widget
         # outer has 2 top-level items: inner (subtree) and beta (leaf)
-        assert tw.topLevelItemCount() == 2
-        inner_item = tw.topLevelItem(0)
-        beta_item = tw.topLevelItem(1)
+        assert _root(view).childCount() == 2
+        inner_item = _nodes(view)[0]
+        beta_item = _nodes(view)[1]
         assert _is_subtree(inner_item)
         assert _is_leaf(beta_item)
 
@@ -196,7 +205,7 @@ class TestSubtreeDisplay:
     ) -> None:
         view = TreeLauncherView()
         view.load(str(nested_tree_dir / "outer.scriptreetree"))
-        inner_item = view._tree_widget.topLevelItem(0)
+        inner_item = _nodes(view)[0]
         # The inner tree has one leaf (alpha).
         assert inner_item.childCount() == 1
         child = inner_item.child(0)
@@ -210,7 +219,7 @@ class TestSubtreeDisplay:
         tree file's directory, not the parent tree's directory."""
         view = TreeLauncherView()
         view.load(str(nested_tree_dir / "outer.scriptreetree"))
-        inner_item = view._tree_widget.topLevelItem(0)
+        inner_item = _nodes(view)[0]
         child = inner_item.child(0)
         from PySide6.QtCore import Qt
 
@@ -218,15 +227,22 @@ class TestSubtreeDisplay:
         expected = str((nested_tree_dir / "alpha.scriptree").resolve())
         assert str(Path(stored).resolve()) == expected
 
-    def test_subtree_not_editable(self, nested_tree_dir: Path) -> None:
+    def test_subtree_label_not_inline_editable_but_drop_enabled(
+        self, nested_tree_dir: Path
+    ) -> None:
+        """v0.8.0a103 — a subtree row's LABEL is still not inline-editable (it is
+        derived from the referenced file), but the row IS now drop-enabled so a
+        tool can be dropped INTO it to edit the linked tree's contents in place
+        (the edits write back to the referenced .scriptreetree on Save).  See
+        ``test_inline_subtree_edit_a103.py`` for the write-back behaviour."""
         view = TreeLauncherView()
         view.load(str(nested_tree_dir / "outer.scriptreetree"))
-        inner_item = view._tree_widget.topLevelItem(0)
+        inner_item = _nodes(view)[0]
         from PySide6.QtCore import Qt
 
         flags = inner_item.flags()
-        assert not (flags & Qt.ItemFlag.ItemIsEditable)
-        assert not (flags & Qt.ItemFlag.ItemIsDropEnabled)
+        assert not (flags & Qt.ItemFlag.ItemIsEditable)   # label stays read-only
+        assert flags & Qt.ItemFlag.ItemIsDropEnabled      # a103 — editable in place
 
 
 # --- tree_view: subtree save round-trip ------------------------------------
@@ -327,8 +343,8 @@ class TestCircularRefBlocking:
         view.load(str(circular_dir / "a.scriptreetree"))
         tw = view._tree_widget
         # a has 2 items: b subtree + tool leaf.
-        assert tw.topLevelItemCount() == 2
-        b_item = tw.topLevelItem(0)
+        assert _root(view).childCount() == 2
+        b_item = _nodes(view)[0]
         assert _is_subtree(b_item)
         # b contains one item: a subtree.
         assert b_item.childCount() == 1
@@ -349,7 +365,7 @@ class TestSubtreeActivation:
     ) -> None:
         view = TreeLauncherView()
         view.load(str(nested_tree_dir / "outer.scriptreetree"))
-        inner_item = view._tree_widget.topLevelItem(0)
+        inner_item = _nodes(view)[0]
         assert inner_item.childCount() == 1
         # Double-click refreshes (reload from disk).
         view._on_item_activated(inner_item, 0)
@@ -365,7 +381,7 @@ class TestSubtreeActivation:
         )
         view = TreeLauncherView()
         view.load(str(tmp_path / "parent.scriptreetree"))
-        subtree_item = view._tree_widget.topLevelItem(0)
+        subtree_item = _nodes(view)[0]
         assert _is_subtree(subtree_item)
         # Should have an error child instead of crashing.
         assert subtree_item.childCount() == 1
@@ -398,9 +414,8 @@ class TestDeepNesting:
         view.load(str(tmp_path / "a.scriptreetree"))
 
         # a has 1 child (b subtree)
-        tw = view._tree_widget
-        assert tw.topLevelItemCount() == 1
-        b_item = tw.topLevelItem(0)
+        assert _root(view).childCount() == 1
+        b_item = _nodes(view)[0]
         assert _is_subtree(b_item)
         # b has 1 child (c subtree)
         assert b_item.childCount() == 1

@@ -111,7 +111,14 @@ def _project_root() -> Path:
 
 
 def _appdata_dir(brand_name: str) -> Path:
-    """Return <APPDATA>/<brand_name> on Windows; XDG_CONFIG_HOME on Linux/Mac."""
+    """Return <APPDATA>/<brand_name> on Windows; XDG_CONFIG_HOME on Linux/Mac.
+
+    Portable mode: install-local ``<install>/_portable_data`` so the autoload
+    ring config travels with the install.
+    """
+    from scriptree.core.portable import is_portable, portable_data_root
+    if is_portable():
+        return portable_data_root()
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     else:
@@ -122,7 +129,17 @@ def _appdata_dir(brand_name: str) -> Path:
 
 
 def _programdata_dir(brand_name: str) -> Path:
-    """Return <PROGRAMDATA>/<brand_name> (Windows only)."""
+    """Return <PROGRAMDATA>/<brand_name> (Windows only).
+
+    Portable mode: install-local under a ``system`` subdir so the user-scope
+    and system-scope autoload configs stay DISTINCT files (``_appdata_dir``
+    returns the data root itself; without the subdir both scopes would resolve
+    to the same ``autoload_rings.json`` and a user-scope ring would be misread
+    as a system-scope one, tripping an HKLM Run-key write).
+    """
+    from scriptree.core.portable import is_portable, portable_data_root
+    if is_portable():
+        return portable_data_root() / "system"
     if sys.platform == "win32":
         base = os.environ.get("PROGRAMDATA") or "C:/ProgramData"
     else:
@@ -139,7 +156,16 @@ def _autoload_config_path(brand_name: str, scope: Literal["user", "system"]) -> 
 
 
 def _default_rings_dir(brand_name: str) -> Path:
-    """<USERPROFILE>/Documents/<BRAND>/rings/ — created on demand."""
+    """<USERPROFILE>/Documents/<BRAND>/rings/ — created on demand.
+
+    Portable mode: install-local ``<install>/_portable_data/rings/`` so saved
+    rings travel with the install.
+    """
+    from scriptree.core.portable import is_portable, portable_data_root
+    if is_portable():
+        d = portable_data_root() / "rings"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
     if sys.platform == "win32":
         docs = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / "Documents"
     else:

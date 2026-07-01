@@ -37,7 +37,19 @@ lib/combridge/*
 *.configs.json
 *.treeconfigs.json
 user_configs/
+# ``scriptree.ini`` holds machine-specific window geometry, dock-state
+# byte-arrays, and a per-user recent-files list (absolute local paths).
+# It was tracked in error through v0.8.0a88; a116 untracks it (git rm
+# --cached) and ignores it here so it never re-enters the public repo.
+# The app regenerates it on first run from QSettings defaults.
+scriptree.ini
 scriptree.ini.bak
+
+# Concept art / design explorations (fractal-tree icon studies) live
+# under scriptree/resources/concepts/.  They are working design assets,
+# not shipped runtime resources, and are excluded from the repo per the
+# project's never-commit list.
+scriptree/resources/concepts/
 
 # OneDrive cruft
 desktop.ini

@@ -183,7 +183,29 @@ def default_personal_root() -> Path:
     rather than ``sys.platform`` raw values so the three-value
     OS id stays canonical across the codebase.
     """
+    from .portable import is_portable, portable_apps_root, install_anchor
     custom = _settings_string("install.personal_root").strip()
+
+    # Portable mode: personal == shared, both install-local, so a folder-copy
+    # carries drop-installed *personal* apps too (and, because the synthesised
+    # ``_groups`` dir and the forest's third auto-discover root both derive
+    # from this helper, redirecting here cascades to them for free).  An
+    # explicit ``install.personal_root`` override is honoured ONLY when it
+    # resolves INSIDE the install tree — a stale machine-specific override that
+    # travelled in ``scriptree.ini`` would otherwise point off-tree on the
+    # destination and silently defeat portability.
+    if is_portable():
+        if custom:
+            try:
+                cp = Path(custom).resolve()
+                anchor = install_anchor().resolve()
+                if cp == anchor or anchor in cp.parents:
+                    return Path(custom)
+            except OSError:
+                pass
+        return portable_apps_root()
+
+    # Non-portable: an explicit override wins outright.
     if custom:
         return Path(custom)
 

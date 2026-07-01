@@ -20,7 +20,7 @@
 
 9. **Editable command preview with undo/redo** — see the exact command that will run, edit it directly, undo/redo changes. Edits are reconciled back into form values automatically. Copy argv to clipboard for external debugging.
 
-10. **Fully portable — zero registry, zero install** — settings live in an INI file inside the application folder. Copy the folder to another machine and it works. No installer, no registry keys, no admin rights to run. One dependency (PySide6), auto-detected and auto-installed.
+10. **Portable mode (opt-in) — self-contained, zero registry** — turn on Portable mode (Settings ▸ Portable mode, or drop a `portable` file in the install folder / set `SCRIPTREE_PORTABLE`, then restart) and ALL state — settings, the forest workspace, rings, and personal drop-installed apps — lives under the install folder, so a folder-copy / USB move carries everything with no registry keys. No installer, no admin rights to run; one dependency (PySide6), auto-detected and auto-installed. A normal install keeps per-user state in your profile (and recent/layout/menu settings in the registry on Windows).
 
 ---
 
@@ -52,7 +52,9 @@
 
 12. **Global environment and PATH settings** — application-wide env vars and PATH entries with override checkboxes that control merge priority over tool-level settings.
 
-13. **Fully portable — zero registry, zero install** — INI-based settings, no admin rights, one dependency. Copy the folder to another machine and run. Windows, Linux, macOS.
+13. **Portable mode (opt-in)** — enable Portable mode (Settings toggle, a `portable` sentinel file, or `SCRIPTREE_PORTABLE`) and ScripTree keeps everything — settings, forest, rings, personal apps — under the install folder for a true folder-copy / USB move. No admin rights, one dependency. Windows, Linux, macOS. (Default installs keep per-user state in your profile.) Switching either direction migrates your current forest, preferences, rings, and UI settings into the target mode's locations, so nothing is lost. The forest right-click offers two consolidation actions:
+   - **Convert this install to portable (copy local tools here)** — copies every tool that lives *outside* the install tree (a network/`apps` deploy root or your per-user `personal` root) into `<install>/ScripTreeApps`, re-points the forest at those copies (so they travel with a folder move), and only then flips Portable mode on. Your originals are copied, never moved or deleted.
+   - **Make a portable copy (incl. local tools)** — builds a *new*, self-contained portable ScripTree at a folder you choose, bundling the app, your install tools, and every outside tool into it. Your current install and forest are left completely untouched (ideal for a USB stick or a second machine). It copies the app exactly as installed; for a copy with bundled Python for a clean machine, run `make_portable.py --bundle-python` from the dev tree.
 
 **Security features:**
 

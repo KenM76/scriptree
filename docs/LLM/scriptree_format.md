@@ -3,6 +3,12 @@
 Canonical reference. If this document and `scriptree/core/io.py`
 disagree, the code wins — open an issue and fix the docs.
 
+> **Organizing & field order:** for *where* this tool belongs (the `category`
+> taxonomy + the on-disk folder convention that mirrors it) and the recommended
+> JSON **field order** (`category` near the top, `params` dead last so a
+> hand-editor can `Ctrl+End` to the form), see
+> [`category_authoring.md`](category_authoring.md).
+
 > **Schema version — single source of truth**
 >
 > The current `schema_version` value is the

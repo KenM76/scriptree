@@ -658,24 +658,33 @@ def _open_full_editor_for(hex_win) -> None:  # noqa: ANN001
     """
     role = getattr(hex_win, "role", "standalone")
     if role == "master":
-        # Build merged temp tree from every member's catalog and
-        # open the editor on it.  ``build_merged_tree_for_master``
-        # already walks the master's members and resolves their
-        # catalog paths, so we can just hand it the master.
-        from scriptree.shell.merged_tree import build_merged_tree_for_master
+        # Build a temp tree from every member's catalog and open the editor on
+        # it.  v0.8.0a99 — the FOREST hub (``_is_forest_master``) opens a
+        # PROVENANCE-VISIBLE view (each member a linked subtree/tool naming its
+        # source file), so you can tell which file underlies each folder and
+        # edit it via right-click → Open.  RING masters keep the flattened
+        # merged view (with its origins-sidecar save-back) — unchanged.
+        from scriptree.shell.merged_tree import (
+            build_forest_view_for_master,
+            build_merged_tree_for_master,
+        )
         from scriptree.shell.v1_launcher import (
             launch_editor_blank, launch_editor_with_tree,
         )
+        is_forest = getattr(hex_win, "_is_forest_master", False)
         try:
-            merged = build_merged_tree_for_master(hex_win)
+            if is_forest:
+                built = build_forest_view_for_master(hex_win)
+            else:
+                built = build_merged_tree_for_master(hex_win)
         except Exception as exc:  # noqa: BLE001
-            _log(f"_open_full_editor_for master: merged build raised {exc!r}")
+            _log(f"_open_full_editor_for master: build raised {exc!r}")
             launch_editor_blank()
             return
-        if merged is None:
+        if built is None:
             launch_editor_blank()
         else:
-            launch_editor_with_tree(merged)
+            launch_editor_with_tree(built)
         return
 
     # Standalone (or any non-master role) — defer to the existing
@@ -1518,6 +1527,46 @@ class _PerItemContextFilter(QObject):
             )
         outer.addWidget(btn_uninstall)
 
+        # --- Ignore this copy (v0.8.0a89) -------------------------
+        # The dual-source action: when a tool exists in BOTH a local
+        # and a server/shared location, both show up; "Ignore this
+        # copy" hides THIS physical copy (and, when it's a tree/app,
+        # everything under its folder) WITHOUT deleting anything from
+        # disk.  Path-keyed, so the other copy is untouched.  Restore
+        # later via Forest -> Manage excluded items (a tree picker).
+        btn_ignore = QPushButton("Ignore this copy")
+        btn_ignore.setProperty("stContext", "1")
+        btn_ignore.setIcon(
+            QApplication.style().standardIcon(
+                QStyle.StandardPixmap.SP_DialogCancelButton
+            )
+        )
+        btn_ignore.setCursor(_Qt.CursorShape.PointingHandCursor)
+        ignore_target = (
+            ctx.get("root_catalog_path") or ctx.get("leaf_path") or ""
+        )
+        if ignore_target and self._forest_controller() is not None:
+            btn_ignore.setToolTip(
+                "Hide this copy from the forest (a copy at another "
+                "location, if any, stays).  Nothing is deleted from "
+                "disk — restore via Forest → Manage excluded "
+                "items."
+            )
+
+            def _trigger_ignore(
+                _c: bool = False, p: str = ignore_target,
+            ) -> None:
+                dlg._st_close_reason = "action"  # type: ignore[attr-defined]
+                self._on_ignore_by_path(p)
+                dlg.close()
+            btn_ignore.clicked.connect(_trigger_ignore)
+        else:
+            btn_ignore.setEnabled(False)
+            btn_ignore.setToolTip(
+                "Ignore is only available while a forest is running."
+            )
+        outer.addWidget(btn_ignore)
+
         # ---- v0.8.0a44+: snapshot overlay + close real menu ------
         #
         # GOAL.  The user wants the underlying tool menu to LOOK
@@ -1778,6 +1827,36 @@ class _PerItemContextFilter(QObject):
             handler(catalog_path)
         except Exception as exc:  # noqa: BLE001
             _log(f"_on_uninstall_by_path failed: {exc!r}")
+
+    def _forest_controller(self):  # noqa: ANN201
+        """Return the live ``ForestController`` via the cell's menu-extension
+        hook, or ``None`` in standalone-cell mode (no forest attached)."""
+        hook = getattr(self._hex_win, "_forest_menu_extension", None)
+        return getattr(hook, "__self__", None) if hook else None
+
+    def _on_ignore_by_path(self, catalog_path: str) -> None:
+        """Ignore (hide) a discovered copy: ``controller.ignore_copy`` + save.
+
+        Mirrors :meth:`_on_uninstall_by_path` but reaches the new
+        ``ignore_copy`` action; bails silently when no controller is wired
+        (standalone-cell mode)."""
+        try:
+            controller = self._forest_controller()
+            if controller is None:
+                _log(
+                    "ignore requested but no forest controller is attached "
+                    "to this cell -- skipping"
+                )
+                return
+            ignore = getattr(controller, "ignore_copy", None)
+            if not callable(ignore):
+                return
+            ignore(catalog_path)
+            save = getattr(controller, "save", None)
+            if callable(save):
+                save()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"_on_ignore_by_path failed: {exc!r}")
 
 
 def _install_per_item_context(menu: QMenu, hex_win) -> None:  # noqa: ANN001

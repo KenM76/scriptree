@@ -287,6 +287,16 @@ class AutoDiscoverConfig:
     update_mode: UpdateMode = "prompt"
     """How discovery applies its diff.  See ``UpdateMode`` docstring."""
 
+    fold_single_item_categories: bool = False
+    """v0.8.0a101 — when True, a category with only ONE member still gets its
+    own synthesised folder (``group_by_category`` runs with
+    ``min_items_to_synthesise=1``).  When False (default), a single-item
+    category passes through at the TOP LEVEL — the "don't make a one-item
+    folder" rule — which is why e.g. a lone ``Media/ffmpeg`` tool shows at the
+    top rather than under a ``Media`` folder.  Per-forest, so a curated
+    workspace can opt into folding every categorised tool while auto-discovered
+    installs keep the clutter-free default."""
+
 
 @dataclass
 class ForestDef:
@@ -374,6 +384,87 @@ def _resolve_for_load(stored: str, forest_file: Path | None) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Named-root path portability (v0.8.0a92 — design option #2)
+# ---------------------------------------------------------------------------
+#
+# Item / catalog paths are serialised as ``(root-id, path-relative-to-that-root)``
+# instead of a bare absolute path, so the absolute location is RECOMPUTED per
+# context at load time — surviving a folder move, a portable<->normal toggle,
+# and a cross-machine copy.  The root BASES come from the portable-aware
+# resolvers (``default_personal_root`` redirects under portable mode), so the
+# SAME stored ``(root, rel)`` resolves correctly in either mode and on any
+# machine that has the same logical roots.
+#
+# Back-compat: a legacy forest stores a bare ``"path"`` (no ``"root"`` key) and
+# still loads via ``_resolve_for_load``; on the next save each item is
+# re-tagged with its root.  Extending this to network / browsed roots is just
+# adding entries to ``known_roots`` (the single registry).
+
+def known_roots() -> list[tuple[str, Path]]:
+    """Ordered ``(root-id, absolute-base)`` pairs used to root / unroot item
+    paths.  MOST-SPECIFIC FIRST (a tool under the install tree tags as
+    ``install`` rather than a broader parent).  Recomputed each call so
+    portable-mode redirects and per-machine bases are picked up automatically.
+
+    Today's registry — the three well-known roots that cover the shipped
+    layout; network / user-configured roots are a future addition here:
+      * ``install``  — ``<project root>/ScripTreeApps`` (travels with a
+        folder-copy of the install; the cross-machine-portable home).
+      * ``apps``     — ``<project root>/../ScripTreeApps`` (the sibling deploy
+        tree, e.g. ``R:\\Scriptreeapps``).
+      * ``personal`` — ``default_personal_root()`` (per-user app-data, or the
+        install-local apps root under portable mode).
+    """
+    from scriptree.core.app_install import default_personal_root
+    pr = _project_root()
+    out: list[tuple[str, Path]] = []
+
+    def _add(rid: str, base: Path) -> None:
+        try:
+            rb = base.resolve()
+        except OSError:
+            return
+        # Keep EVERY id even when two bases coincide (install == personal under
+        # portable mode): forward tagging (_path_to_rooted) iterates in order so
+        # the first matching id wins deterministically, while reverse lookup
+        # (_rooted_to_abs) must still resolve a 'personal'-tagged item even when
+        # its base now equals 'install'.  (De-duping by base would drop the id
+        # and strand those items.)
+        out.append((rid, rb))
+
+    _add("install", pr / "ScripTreeApps")
+    _add("apps", pr / ".." / "ScripTreeApps")
+    _add("personal", default_personal_root())
+    return out
+
+
+def _path_to_rooted(target: Path) -> tuple[str, str] | None:
+    """Return ``(root-id, forward-slash rel)`` when ``target`` lives under a
+    known root; otherwise ``None`` (the caller stores a bare path)."""
+    try:
+        t = target.resolve()
+    except OSError:
+        return None
+    for rid, base in known_roots():
+        try:
+            rel = t.relative_to(base)
+        except ValueError:
+            continue
+        return rid, str(rel).replace("\\", "/")
+    return None
+
+
+def _rooted_to_abs(root_id: str, rel: str) -> Path | None:
+    """Reverse of :func:`_path_to_rooted`: ``known_roots()[root_id] / rel``.
+    ``None`` when this build doesn't know ``root_id`` (caller then falls back
+    to the legacy resolver)."""
+    for rid, base in known_roots():
+        if rid == root_id:
+            return (base / rel).resolve()
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Detection helper — used by both io and the discovery walker
 # ---------------------------------------------------------------------------
 
@@ -417,10 +508,17 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
         # test had no effect.  ``_to_relative_if_possible`` already
         # handles both absolute and relative inputs correctly, so
         # call it unconditionally.
-        d = {
-            "path": _to_relative_if_possible(Path(it.path), root),
-            "kind": it.kind,
-        }
+        # v0.8.0a92 — store the path as (root-id, rel-to-root) when it lives
+        # under a known root, so it survives moves / portable toggle /
+        # cross-machine.  Fall back to the legacy relative-or-absolute string
+        # for paths under no known root (a hand-placed tool on another drive).
+        d: dict = {}
+        rooted = _path_to_rooted(Path(it.path))
+        if rooted:
+            d["root"], d["path"] = rooted
+        else:
+            d["path"] = _to_relative_if_possible(Path(it.path), root)
+        d["kind"] = it.kind
         if it.position is not None:
             d["position"] = list(it.position)
         # v0.8.0a83 — emit the remembered offset-from-hub only when set so
@@ -428,20 +526,37 @@ def save_forest(forest: ForestDef, path: str | Path) -> None:
         if it.rel_offset is not None:
             d["rel_offset"] = [int(it.rel_offset[0]), int(it.rel_offset[1])]
         if it.catalog_path:
-            d["catalog_path"] = _to_relative_if_possible(
-                Path(it.catalog_path), root,
-            )
+            crooted = _path_to_rooted(Path(it.catalog_path))
+            if crooted:
+                d["catalog_root"], d["catalog_path"] = crooted
+            else:
+                d["catalog_path"] = _to_relative_if_possible(
+                    Path(it.catalog_path), root,
+                )
         items_d.append(d)
 
-    excluded_d = [
-        _to_relative_if_possible(Path(e), root) for e in forest.excluded
-    ]
+    # v0.8.0a92 — root the excluded list the SAME way as items, so an ignored
+    # copy keeps matching after a move / portable toggle / cross-machine copy
+    # (items rebase to the new base; if excluded stayed absolute it would
+    # desync and the ignored copy would reappear).  Each entry is a
+    # ``{root, path}`` dict when it falls under a known root, else the legacy
+    # string (which an old loader still reads; it just skips dict entries).
+    excluded_d: list = []
+    for e in forest.excluded:
+        er = _path_to_rooted(Path(e))
+        if er:
+            excluded_d.append({"root": er[0], "path": er[1]})
+        else:
+            excluded_d.append(_to_relative_if_possible(Path(e), root))
 
     auto_d = {
         "enabled": bool(forest.auto_discover.enabled),
         "roots": list(forest.auto_discover.roots),
         "include": list(forest.auto_discover.include),
         "update_mode": forest.auto_discover.update_mode,
+        "fold_single_item_categories": bool(
+            forest.auto_discover.fold_single_item_categories
+        ),
     }
 
     blob = {
@@ -503,7 +618,21 @@ def load_forest(path: str | Path) -> ForestDef:
         stored_path = str(d.get("path", "")).strip()
         if not stored_path:
             continue
-        resolved = _resolve_for_load(stored_path, path)
+        # v0.8.0a92 — a tagged item resolves via its named root (recomputed for
+        # this machine / mode); an untagged legacy item via the path resolver.
+        # Accept the rooted candidate only when it EXISTS, else fall through to
+        # the legacy resolver — which recovers a tool co-located with the
+        # forest file (a zipped/emailed workspace) that the canonical base no
+        # longer points at.
+        root_id = d.get("root")
+        if root_id:
+            cand = _rooted_to_abs(str(root_id), stored_path)
+            resolved = (
+                cand if (cand is not None and cand.exists())
+                else _resolve_for_load(stored_path, path)
+            )
+        else:
+            resolved = _resolve_for_load(stored_path, path)
         kind = d.get("kind") or kind_for_suffix(resolved) or "tool"
         pos = d.get("position")
         if isinstance(pos, list) and len(pos) == 2:
@@ -515,7 +644,15 @@ def load_forest(path: str | Path) -> ForestDef:
             pos = None
         catalog = d.get("catalog_path")
         if catalog:
-            catalog = str(_resolve_for_load(str(catalog), path))
+            cat_root = d.get("catalog_root")
+            if cat_root:
+                ccand = _rooted_to_abs(str(cat_root), str(catalog))
+                catalog = str(
+                    ccand if (ccand is not None and ccand.exists())
+                    else _resolve_for_load(str(catalog), path)
+                )
+            else:
+                catalog = str(_resolve_for_load(str(catalog), path))
         # v0.8.0a83 — remembered offset-from-hub.  Same defensive 2-int
         # parse as position/window_position; any other shape -> None.
         ro_raw = d.get("rel_offset")
@@ -533,11 +670,26 @@ def load_forest(path: str | Path) -> ForestDef:
             rel_offset=rel_offset,
         ))
 
-    excluded = [
-        str(_resolve_for_load(str(e), path))
-        for e in raw.get("excluded", [])
-        if isinstance(e, str) and e.strip()
-    ]
+    # v0.8.0a92 — excluded entries are either {root, path} dicts (rooted) or
+    # legacy strings.  Rooted entries resolve to the CANONICAL base (NO
+    # existence gate — an excluded tool may be uninstalled-yet-excluded; keep
+    # it pinned to the same base items rebase to, so the suppression keeps
+    # matching).  Legacy strings resolve via the path resolver as before.
+    excluded: list[str] = []
+    for e in raw.get("excluded", []):
+        if isinstance(e, dict):
+            ep = str(e.get("path", "")).strip()
+            if not ep:
+                continue
+            er = e.get("root")
+            if er:
+                excluded.append(str(
+                    _rooted_to_abs(str(er), ep) or _resolve_for_load(ep, path)
+                ))
+            else:
+                excluded.append(str(_resolve_for_load(ep, path)))
+        elif isinstance(e, str) and e.strip():
+            excluded.append(str(_resolve_for_load(e, path)))
 
     auto_raw = raw.get("auto_discover") or {}
     update_mode = auto_raw.get("update_mode", "prompt")
@@ -552,6 +704,9 @@ def load_forest(path: str | Path) -> ForestDef:
         roots=[str(r) for r in (auto_raw.get("roots") or ["ScripTreeApps"])],
         include=include,  # type: ignore[arg-type]
         update_mode=update_mode,  # type: ignore[arg-type]
+        fold_single_item_categories=bool(
+            auto_raw.get("fold_single_item_categories", False)
+        ),
     )
 
     # v0.6.11 — restore the hub's last on-screen position when the
@@ -613,6 +768,11 @@ def default_autoload_path(branding: dict) -> Path:
     which the launcher calls at startup.
     """
     brand_name = branding.get("appName", "ScripTree")
+    # Portable mode: the forest workspace lives install-local (and
+    # ``default_preferences_path`` follows, since it derives from this dir).
+    from scriptree.core.portable import is_portable, portable_data_root
+    if is_portable():
+        return portable_data_root() / _DEFAULT_FOREST_FILENAME
     if sys.platform == "win32":
         appdata = Path.home() / "AppData" / "Roaming" / brand_name
     elif sys.platform == "darwin":
@@ -641,6 +801,14 @@ def shared_autoload_path(branding: dict) -> Path:
     by this user the write will surface its own error.
     """
     brand_name = branding.get("appName", "ScripTree")
+    # Portable mode: a portable install is single-scope (personal == shared),
+    # so the "shared" save target must ALSO stay install-local — otherwise the
+    # unsaved-forest "Save to shared location" button (forest_controller) would
+    # write the whole forest to %ProgramData% and a folder-copy/USB move would
+    # silently lose it.  Coincides with default_autoload_path in portable mode.
+    from scriptree.core.portable import is_portable, portable_data_root
+    if is_portable():
+        return portable_data_root() / _DEFAULT_FOREST_FILENAME
     if sys.platform == "win32":
         base = Path(
             os.environ.get("ProgramData", r"C:\ProgramData")

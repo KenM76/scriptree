@@ -4,12 +4,11 @@ diagnostics.
 
 ## For humans
 
-When a user reports a tricky bug (the v0.8.0a55+ virtual-desktop
-follow-the-user logic is the motivating case), the first thing
-needed for diagnosis is the program's actual stderr output -- the
-``[win_virtual_desktops:debug]`` lines, exception tracebacks,
-warning messages.  ScripTree's launchers don't pipe stderr to a
-file by default because the typical end user has no use for them.
+When a user reports a tricky bug, the first thing needed for
+diagnosis is the program's actual stderr output -- module
+``[...:debug]`` lines, exception tracebacks, warning messages.
+ScripTree's launchers don't pipe stderr to a file by default
+because the typical end user has no use for them.
 
 This module gives the user (or a developer in their place) a way
 to turn that capture on without editing batch files or knowing
@@ -24,9 +23,8 @@ The toggle:
     The original stderr (console) is untouched -- output goes BOTH
     places, so a developer watching the console still sees
     everything, and the user has the file to email.
-  * Flips ``is_enabled()`` so other modules (notably
-    ``win_virtual_desktops``) start emitting their verbose
-    ``_dlog`` lines.
+  * Flips ``is_enabled()`` so other modules start emitting their
+    verbose ``_dlog`` lines.
   * Persists in ``QSettings`` so the choice survives a restart --
     the user can flip it on, restart, reproduce the bug, and grab
     the log.

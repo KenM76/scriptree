@@ -83,6 +83,48 @@ def test_close_this_quits_when_last_cell() -> None:
 
 
 # ---------------------------------------------------------------------------
+# v0.8.0a106 — closeEvent (the window-frame [X]) must quit on the last window
+# ---------------------------------------------------------------------------
+
+def test_closeevent_quits_when_last_window() -> None:
+    """Closing the LAST cell via the [X] / ``close()`` (NOT the right-click
+    ``_close_this``) must quit — otherwise, with
+    setQuitOnLastWindowClosed(False), the process lingers headless."""
+    _fresh_registry()
+    only = _spawn_standalone()
+    only.show()
+    with patch.object(QApplication, "quit") as m_quit:
+        only.close()  # the frame-[X] path
+    m_quit.assert_called_once()
+
+
+def test_closeevent_no_quit_when_other_cells_remain() -> None:
+    _fresh_registry()
+    h1 = _spawn_standalone()
+    h2 = _spawn_standalone()
+    h1.show()
+    h2.show()
+    with patch.object(QApplication, "quit") as m_quit:
+        h1.close()
+    m_quit.assert_not_called()
+    h2.close()
+
+
+def test_closeevent_quits_when_last_master() -> None:
+    """The old standalones-only ``is_last`` check left the process running when
+    the last MASTER (the forest hub) was closed.  closeEvent now quits when the
+    registry is empty regardless of role."""
+    _fresh_registry()
+    master = _spawn_standalone()
+    master.role = "master"
+    master._saved_ring_path = "/tmp/synthetic.scriptreering"  # type: ignore[assignment]
+    master.show()
+    with patch.object(QApplication, "quit") as m_quit:
+        master.close()
+    m_quit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # _exit_all — closes everything regardless of role
 # ---------------------------------------------------------------------------
 
@@ -97,7 +139,9 @@ def test_exit_all_closes_every_cell_and_quits() -> None:
         h2._exit_all()
     for h in (h1, h2, h3):
         assert not h.isVisible(), f"{h._id} still visible after _exit_all"
-    m_quit.assert_called_once()
+    # a106 — quit fires (explicitly in _exit_all AND via the final closeEvent's
+    # _quit_if_app_empty; idempotent).  Assert "called", not "called once".
+    assert m_quit.called
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +226,12 @@ def test_close_all_related_closes_master_and_members() -> None:
     with patch.object(QApplication, "quit") as m_quit:
         master._close_all_related()
 
-    # All three closed; quit fires because nothing remains.
+    # All three closed; quit fires because nothing remains (explicitly in
+    # _close_all_related AND via the final closeEvent; idempotent).
     assert not master.isVisible()
     assert not member1.isVisible()
     assert not member2.isVisible()
-    m_quit.assert_called_once()
+    assert m_quit.called
 
 
 def test_close_all_related_skips_quit_when_other_cells_remain() -> None:

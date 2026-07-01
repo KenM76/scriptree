@@ -382,14 +382,28 @@ def show_composite_for(hex_win) -> None:  # noqa: ANN001
     """
     role = getattr(hex_win, "role", "standalone")
     if role == "master":
-        # Master path needs merged_tree.build_merged_tree(...).  Lazy
-        # import avoids a circular dependency at module-load time.
+        # v0.8.0a100 — a FOREST hub (``_is_forest_master``) opens the
+        # PROVENANCE-VISIBLE forest view (members as linked subtrees, no
+        # inlining, no origins-sidecar push-back) — same as the popup □ button
+        # (tree_popup._open_full_editor_for).  A RING master keeps the flattened
+        # merged view.  This matters for correctness, not just cosmetics: the
+        # merged path's push_back_to_origins is what writes circular
+        # ``./MSOffice.scriptreetree`` sibling refs into the synthesised
+        # ``_groups`` trees, so a forest hub must never take it.  Lazy import
+        # avoids a circular dependency at module-load time.
+        is_forest = getattr(hex_win, "_is_forest_master", False)
         try:
-            from scriptree.shell.merged_tree import build_merged_tree_for_master
-            tree_path = build_merged_tree_for_master(hex_win)
+            from scriptree.shell.merged_tree import (
+                build_forest_view_for_master,
+                build_merged_tree_for_master,
+            )
+            if is_forest:
+                tree_path = build_forest_view_for_master(hex_win)
+            else:
+                tree_path = build_merged_tree_for_master(hex_win)
         except Exception as exc:  # noqa: BLE001
             print(
-                f"[v1_launcher] master merged-tree build failed: {exc!r}; "
+                f"[v1_launcher] master tree build failed: {exc!r}; "
                 f"falling back to blank editor",
                 file=sys.stderr,
             )
