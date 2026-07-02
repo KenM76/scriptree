@@ -504,9 +504,14 @@ class TestForestCell:
         from PySide6.QtWidgets import QMenu
         m = QMenu()
         ctrl.forest_window._forest_menu_extension(m)
-        # At least the Forest submenu was inserted.
+        # v0.8.0a120 — the wrapping "Forest" sub-menu is DISSOLVED; the hook
+        # now builds the grouped sub-menus (File / Sources / Settings) directly
+        # into the menu, so assert those instead of a "Forest" label.
         labels = [a.text() for a in m.actions() if a.text()]
-        assert any("Forest" in label for label in labels)
+        assert "File" in labels, labels
+        assert "Sources" in labels, labels
+        assert "Settings" in labels, labels
+        assert "Forest" not in labels, labels  # wrapper is gone
         ctrl.forest_window.close()
 
 

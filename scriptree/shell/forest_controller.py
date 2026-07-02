@@ -807,49 +807,58 @@ class ForestController(QObject):
             except Exception:  # noqa: BLE001
                 return QIcon()
 
-        forest_menu = QMenu("Forest", menu)
-        forest_menu.setIcon(_bundled("forest"))
+        # v0.8.0a119 — menu consolidation; v0.8.0a120 — the wrapping "Forest"
+        # sub-menu is DISSOLVED (Ken: "the forest sub-menu should just be
+        # dissolved and its children be put in the menu that shows up when you
+        # right-click on forest").  We therefore build the three container
+        # sub-menus + the top-level actions DIRECTLY into ``menu`` (the
+        # right-click menu), not into a nested "Forest" container:
+        #   File     — Save / Save-as / Open forest, Save / Save-as / Open
+        #              layout, Make a portable copy, Convert this install.
+        #   Sources  — Refresh from sources, Auto-add, Re-organise, App
+        #              Discovery… (renamed from "Forest settings…"), Manage
+        #              excluded items.  (a120: "Auto" renamed "Sources".)
+        #   Settings — Visibility, Auto-load on startup, Debug, More…
+        #              (renamed from "Settings…", forest-cell options minus the
+        #              Click-action tab), Preferences….  (a120.)
+        # Then, at the top level of ``menu``: Recent layouts (a120: moved OUT of
+        # File), Bring all cells back on-screen, About… (a120: a two-tab dialog
+        # — About ScripTree + This forest), and a conditional Uninstall.
+        file_menu = QMenu("File", menu)
+        file_menu.setIcon(_std(_SP.SP_DirIcon))
+        auto_menu = QMenu("Sources", menu)
+        auto_menu.setIcon(_std(_SP.SP_BrowserReload))
+        settings_menu = QMenu("Settings", menu)
+        settings_menu.setIcon(_bundled("settings"))
 
-        a_save = forest_menu.addAction(_std(_SP.SP_DialogSaveButton), "Save forest")
-        a_save_as = forest_menu.addAction(
+        # ── File ▸ forest save / open ─────────────────────────────
+        a_save = file_menu.addAction(_std(_SP.SP_DialogSaveButton), "Save forest")
+        a_save_as = file_menu.addAction(
             _std(_SP.SP_DialogSaveButton), "Save forest as…",
         )
-        a_open = forest_menu.addAction(
+        a_open = file_menu.addAction(
             _std(_SP.SP_DialogOpenButton), "Open forest…",
         )
-        forest_menu.addSeparator()
-        a_refresh = forest_menu.addAction(
-            _std(_SP.SP_BrowserReload), "Refresh from sources",
-        )
-        a_autoadd = forest_menu.addAction(
-            _bundled("package"),
-            "Auto-add from ScripTreeApps now",
-        )
-        a_reorganise = forest_menu.addAction(
-            _bundled("folder"),
-            "Re-organise (re-run category grouping)",
-        )
-        a_rescue = forest_menu.addAction(
-            _std(_SP.SP_DesktopIcon),
-            "Bring all cells back on-screen",
-        )
-        forest_menu.addSeparator()
+        file_menu.addSeparator()
 
-        # v0.8.0a83 — Cell layout sub-submenu: Save / Load / Recent.  Saves
-        # the CURRENT arrangement (each cell's offset from the hub) to a named
-        # .scriptreelayout, and re-applies a saved one (reposition-existing-
-        # only: matching cells move to their saved spot, others stay put,
-        # entries with no matching cell are skipped).
-        layout_menu = QMenu("Cell layout", forest_menu)
-        layout_menu.setIcon(_bundled("forest"))
-        a_layout_save = layout_menu.addAction(
-            _std(_SP.SP_DialogSaveButton), "Save layout…",
+        # ── File ▸ cell-layout save / open (v0.8.0a83; a119 → under File) ──
+        # Saves the CURRENT arrangement (each cell's offset from the hub) to a
+        # named .scriptreelayout, and re-applies a saved one (reposition-
+        # existing-only: matching cells move to their saved spot, others stay
+        # put, entries with no matching cell are skipped).  a119 added a
+        # remembered-path "Save layout" (quick-save to the last-used file)
+        # alongside the always-prompt "Save layout as…", mirroring the forest's
+        # own Save / Save-as pair.
+        a_layout_save = file_menu.addAction(
+            _std(_SP.SP_DialogSaveButton), "Save layout",
         )
-        a_layout_load = layout_menu.addAction(
-            _std(_SP.SP_DialogOpenButton), "Load layout…",
+        a_layout_save_as = file_menu.addAction(
+            _std(_SP.SP_DialogSaveButton), "Save layout as…",
         )
-        layout_menu.addSeparator()
-        recent_layout_menu = QMenu("Recent layouts", layout_menu)
+        a_layout_load = file_menu.addAction(
+            _std(_SP.SP_DialogOpenButton), "Open layout…",
+        )
+        recent_layout_menu = QMenu("Recent layouts", menu)
         recent_layout_menu.setIcon(_std(_SP.SP_FileDialogDetailedView))
         try:
             from pathlib import Path as _P
@@ -866,19 +875,69 @@ class ForestController(QObject):
         else:
             _none = recent_layout_menu.addAction("(none)")
             _none.setEnabled(False)
-        layout_menu.addMenu(recent_layout_menu)
+        # a120 — Recent layouts is attached to the TOP LEVEL of ``menu`` (in
+        # the assembly below), NOT inside File, per Ken's request.
         a_layout_save.triggered.connect(self._on_save_layout)
+        a_layout_save_as.triggered.connect(self._on_save_layout_as)
         a_layout_load.triggered.connect(self._on_load_layout)
-        forest_menu.addMenu(layout_menu)
-        forest_menu.addSeparator()
+        file_menu.addSeparator()
 
-        # v0.8.0a52 -- Visibility sub-submenu with three checkable
-        # actions.  Each toggle persists via ``update_preferences``
-        # and re-applies live through the visibility manager.  The
-        # toggle handler refuses to uncheck the LAST checked
-        # action so the user can't accidentally make the hub
-        # unreachable.
-        vis_menu = QMenu("Visibility", forest_menu)
+        # ── File ▸ portable copy / convert (v0.8.0a93; a119 → under File) ──
+        # Gather tools that live OUTSIDE the install tree (the sibling 'apps'
+        # deploy tree or per-user 'personal' root) INTO <install>/ScripTreeApps
+        # so the install folder is self-contained and travels.  Both reduce to
+        # the consolidate primitive (scriptree.shell.portable_consolidate).
+        from scriptree.core import portable as _portable
+        a_make_copy = file_menu.addAction(
+            _bundled("package"),
+            "Make a portable copy (incl. local tools)…",
+        )
+        a_make_copy.triggered.connect(
+            self._on_make_portable_copy_with_tools,
+        )
+        a_convert = file_menu.addAction(
+            _bundled("package"),
+            "Convert this install to portable (copy local tools here)…",
+        )
+        a_convert.triggered.connect(
+            self._on_convert_install_to_portable_with_tools,
+        )
+        # In-place convert only when NOT already portable and the forest has a
+        # file on disk to re-save (loaded_from set).  Make-a-copy is always
+        # available (it never touches the running install).
+        a_convert.setEnabled(
+            (not _portable.is_portable()) and bool(self.forest.loaded_from)
+        )
+
+        # ── Auto ▸ discovery / grouping ───────────────────────────
+        a_refresh = auto_menu.addAction(
+            _std(_SP.SP_BrowserReload), "Refresh from sources",
+        )
+        a_autoadd = auto_menu.addAction(
+            _bundled("package"),
+            "Auto-add from ScripTreeApps now",
+        )
+        a_reorganise = auto_menu.addAction(
+            _bundled("folder"),
+            "Re-organise (re-run category grouping)",
+        )
+        auto_menu.addSeparator()
+        # a119 — "Forest settings…" renamed "App Discovery…" and moved here.
+        # It still opens the forest-settings dialog (where app discovery /
+        # sources are configured).
+        a_settings = auto_menu.addAction(
+            _bundled("settings"), "App Discovery…",
+        )
+        a_excluded = auto_menu.addAction(
+            _bundled("filter"), "Manage excluded items…",
+        )
+
+        # ── Settings ▸ Visibility ─────────────────────────────────
+        # v0.8.0a52 -- three checkable actions.  Each toggle persists via
+        # ``update_preferences`` and re-applies live through the visibility
+        # manager.  The toggle handler refuses to uncheck the LAST checked
+        # action so the user can't accidentally make the hub unreachable.
+        vis_menu = QMenu("Visibility", settings_menu)
         vis_menu.setIcon(_bundled("forest"))
         prefs_now = self.get_preferences()
 
@@ -982,10 +1041,9 @@ class ForestController(QObject):
                 lambda checked, a=action: _on_visibility_toggle(a, checked)
             )
 
-        forest_menu.addMenu(vis_menu)
-        forest_menu.addSeparator()
+        settings_menu.addMenu(vis_menu)
 
-        # ---- Auto-load on startup (v0.8.0a84) ----------------------------
+        # ---- Settings ▸ Auto-load on startup (v0.8.0a84) -----------------
         # Forest analog of the tree-ring's "Auto-load on startup" submenu
         # (cell_window.py).  Registers a Windows Run-key so ScripTree
         # launches in forest mode at login and loads THIS forest.  Three
@@ -993,7 +1051,7 @@ class ForestController(QObject):
         # the checks are rebuilt from prefs each time the menu opens.  The
         # heavy lifting (save-first prompt, UAC elevation for system scope,
         # the shared Run-key recompute) lives in ``_on_forest_autostart_set``.
-        autostart_menu = QMenu("Auto-load on startup", forest_menu)
+        autostart_menu = QMenu("Auto-load on startup", settings_menu)
         autostart_menu.setIcon(_std(_SP.SP_BrowserReload))
         _as_scope = prefs_now.autostart_scope
 
@@ -1030,10 +1088,9 @@ class ForestController(QObject):
             lambda _checked=False: self._on_forest_autostart_set("system")
         )
 
-        forest_menu.addMenu(autostart_menu)
-        forest_menu.addSeparator()
+        settings_menu.addMenu(autostart_menu)
 
-        # v0.8.0a57 -- Debug sub-submenu.  Two items:
+        # v0.8.0a57 -- Settings ▸ Debug sub-submenu.  Two items:
         #   * "Enable verbose logging" -- checkable toggle that
         #     tees stderr to %APPDATA%/ScripTree/logs/ AND flips
         #     module verbose output on.  Persisted in QSettings so
@@ -1042,7 +1099,7 @@ class ForestController(QObject):
         #   * "Open debug folder" -- pops Explorer at the log
         #     directory so the user can grab the file to send.
         from scriptree.shell import debug_logging as _dbg
-        debug_menu = QMenu("Debug", forest_menu)
+        debug_menu = QMenu("Debug", settings_menu)
         debug_menu.setIcon(_bundled("bug"))
         a_verbose = debug_menu.addAction("Enable verbose logging")
         a_verbose.setCheckable(True)
@@ -1071,44 +1128,44 @@ class ForestController(QObject):
         )
         a_open_log.triggered.connect(_dbg.open_log_folder)
 
-        forest_menu.addMenu(debug_menu)
-        forest_menu.addSeparator()
+        settings_menu.addMenu(debug_menu)
 
-        a_settings = forest_menu.addAction(
-            _bundled("settings"), "Forest settings…",
+        # ── Settings ▸ More… / Preferences… (a120) ────────────────
+        # "Settings…" (the forest cell's own options dialog — Shape/Colours/
+        # Label, MINUS the Click-action tab which the forest doesn't need —
+        # dropped in SettingsDialog for _is_forest_master) is renamed "More…"
+        # and grouped here with the app-wide "Preferences…".  Both open the
+        # forest HUB cell's dialogs, so they wire to the passed ``cell`` (the
+        # forest hub), falling back to ``self.forest_window`` for the 1-arg
+        # back-compat hook path.
+        hub_cell = cell if cell is not None else self.forest_window
+        a_more = settings_menu.addAction(_bundled("settings"), "More…")
+        a_prefs = settings_menu.addAction(_bundled("settings"), "Preferences…")
+        if hub_cell is not None:
+            a_more.triggered.connect(
+                lambda _checked=False, c=hub_cell: c._open_settings_dialog()
+            )
+            a_prefs.triggered.connect(
+                lambda _checked=False, c=hub_cell: c._open_preferences_dialog()
+            )
+        else:
+            a_more.setEnabled(False)
+            a_prefs.setEnabled(False)
+
+        # ── Assemble (DISSOLVED): File / Sources / Settings, then Recent
+        #    layouts, rescue and About… go straight into the right-click
+        #    ``menu`` — no wrapping "Forest" sub-menu (a120). ───────────────
+        menu.addMenu(file_menu)
+        menu.addMenu(auto_menu)
+        menu.addMenu(settings_menu)
+        menu.addMenu(recent_layout_menu)
+        menu.addSeparator()
+        a_rescue = menu.addAction(
+            _std(_SP.SP_DesktopIcon),
+            "Bring all cells back on-screen",
         )
-        a_excluded = forest_menu.addAction(
-            _bundled("filter"), "Manage excluded items…",
-        )
-        # v0.8.0a93 — Portable submenu: gather tools that live OUTSIDE the
-        # install tree (the sibling 'apps' deploy tree or per-user 'personal'
-        # root) INTO <install>/ScripTreeApps, so the install folder is
-        # self-contained and travels.  Both reduce to the consolidate
-        # primitive (scriptree.shell.portable_consolidate).
-        from scriptree.core import portable as _portable
-        a_make_copy = forest_menu.addAction(
-            _bundled("package"),
-            "Make a portable copy (incl. local tools)…",
-        )
-        a_make_copy.triggered.connect(
-            self._on_make_portable_copy_with_tools,
-        )
-        a_convert = forest_menu.addAction(
-            _bundled("package"),
-            "Convert this install to portable (copy local tools here)…",
-        )
-        a_convert.triggered.connect(
-            self._on_convert_install_to_portable_with_tools,
-        )
-        # In-place convert only when NOT already portable and the forest has a
-        # file on disk to re-save (loaded_from set).  Make-a-copy is always
-        # available (it never touches the running install).
-        a_convert.setEnabled(
-            (not _portable.is_portable()) and bool(self.forest.loaded_from)
-        )
-        forest_menu.addSeparator()
-        a_about = forest_menu.addAction(
-            _bundled("forest"), "About this forest",
+        a_about = menu.addAction(
+            _std(_SP.SP_MessageBoxInformation), "About…",
         )
 
         # v0.8.0a25 -- per-cell Uninstall action.  Only added when
@@ -1142,8 +1199,8 @@ class ForestController(QObject):
                 except Exception:  # noqa: BLE001
                     under_install_root = False
                 if under_install_root:
-                    forest_menu.addSeparator()
-                    a_uninstall = forest_menu.addAction(
+                    menu.addSeparator()
+                    a_uninstall = menu.addAction(
                         _std(_SP.SP_TrashIcon),
                         "Uninstall app from disk...",
                     )
@@ -1164,12 +1221,8 @@ class ForestController(QObject):
         a_settings.triggered.connect(self._show_settings_dialog)
         a_excluded.triggered.connect(self._show_excluded_dialog)
         a_about.triggered.connect(self._on_about)
-
-        # Insert the submenu at the top of the parent menu so the
-        # forest items are reachable without scrolling past every
-        # standard cell action.
-        first = menu.actions()[0] if menu.actions() else None
-        menu.insertMenu(first, forest_menu)
+        # a120 — no insertMenu: the forest actions were built DIRECTLY into
+        # ``menu`` above (the wrapping "Forest" sub-menu is dissolved).
 
     # ------------------------------------------------------------------
     # Cell layout — Save / Load / apply (v0.8.0a83)
@@ -1189,12 +1242,51 @@ class ForestController(QObject):
         return d
 
     def _on_save_layout(self) -> None:
-        """Capture the CURRENT cell arrangement (each forest member's offset
-        from the hub) and write it to a named ``.scriptreelayout``."""
-        from pathlib import Path as _P
+        """Quick-save the current cell arrangement to the remembered layout
+        path (v0.8.0a119).
 
+        Falls through to Save-as (prompt) when no layout has been saved or
+        opened yet this session — mirroring the forest's own Save vs Save-as
+        pair, and the ring's ``_save_ring_dialog``.
+        """
+        path = getattr(self, "_saved_layout_path", None)
+        if path is None:
+            self._on_save_layout_as()
+            return
+        self._write_layout_to_path(path)
+
+    def _on_save_layout_as(self) -> None:
+        """Always prompt for a destination, then save + remember it (a119)."""
+        from pathlib import Path as _P
         from PySide6.QtWidgets import QFileDialog
 
+        prior = getattr(self, "_saved_layout_path", None)
+        start = (
+            str(prior) if prior
+            else str(self._layouts_dir() / "layout.scriptreelayout")
+        )
+        chosen, _ = QFileDialog.getSaveFileName(
+            None,
+            "Save cell layout as",
+            start,
+            "ScripTree cell layouts (*.scriptreelayout);;All files (*)",
+        )
+        if not chosen:
+            return
+        p = _P(chosen)
+        if p.suffix.lower() != ".scriptreelayout":
+            p = p.with_suffix(".scriptreelayout")
+        self._write_layout_to_path(p)
+
+    def _write_layout_to_path(self, path) -> None:  # noqa: ANN001
+        """Capture the CURRENT cell arrangement (each forest member's offset
+        from the hub) and write it to ``path``; remember the path so a plain
+        "Save layout" afterwards quick-saves back to the same file.
+
+        Reposition-existing-only on apply: only members with a stable offset
+        key AND a bound catalog are recorded — others cannot be re-applied.
+        """
+        from pathlib import Path as _P
         from scriptree.shell import recent_files as _rf
         from scriptree.shell.cell_window import _member_offset_key
         from scriptree.shell.layout_io import (
@@ -1224,20 +1316,13 @@ class ForestController(QObject):
         if not entries:
             _log("save layout: no positionable cells")
             return
-        chosen, _ = QFileDialog.getSaveFileName(
-            None,
-            "Save cell layout as",
-            str(self._layouts_dir() / "layout.scriptreelayout"),
-            "ScripTree cell layouts (*.scriptreelayout);;All files (*)",
-        )
-        if not chosen:
-            return
-        p = _P(chosen)
+        p = _P(path)
         if p.suffix.lower() != ".scriptreelayout":
             p = p.with_suffix(".scriptreelayout")
         try:
             save_layout(LayoutDef(name=p.stem, entries=entries), p)
             _rf.add_layout(str(p))
+            self._saved_layout_path = p
             _log(f"saved cell layout: {p} ({len(entries)} cells)")
         except Exception as exc:  # noqa: BLE001
             _log(f"save layout failed: {exc!r}")
@@ -1255,6 +1340,7 @@ class ForestController(QObject):
             self._apply_layout_from_path(chosen)
 
     def _apply_layout_from_path(self, path: str) -> None:
+        from pathlib import Path as _P
         from scriptree.shell import recent_files as _rf
         from scriptree.shell.layout_io import load_layout
 
@@ -1264,6 +1350,9 @@ class ForestController(QObject):
             _log(f"load layout failed ({path}): {exc!r}")
             return
         _rf.add_layout(path)
+        # a119 — remember the opened layout so a subsequent plain "Save layout"
+        # quick-saves back to this same file.
+        self._saved_layout_path = _P(path)
         self._apply_layout(layout)
 
     def _apply_layout(self, layout: Any) -> None:
@@ -3069,19 +3158,86 @@ class ForestController(QObject):
             self._show_diff_dialog(diff)
 
     def _on_about(self) -> None:
-        cfg = self.forest.auto_discover
-        QMessageBox.information(
-            self.forest_window, "Forest",
-            f"<b>{self.forest.name}</b><br><br>"
-            f"Items: {len(self.forest.items)}<br>"
-            f"Excluded: {len(self.forest.excluded)}<br>"
-            f"Auto-discover: "
-            f"{'enabled' if cfg.enabled else 'disabled'} "
-            f"({cfg.update_mode})<br>"
-            f"Roots: {', '.join(cfg.roots) or '(none)'}<br>"
-            f"<br>"
-            f"File: {self.forest.loaded_from or '(unsaved)'}",
+        """Show the two-tab About dialog (a120)."""
+        self._build_about_dialog().exec()
+
+    def _build_about_dialog(self):  # noqa: ANN201
+        """v0.8.0a120 — BUILD (do not show) the TWO-TAB About dialog (Ken:
+        "make About section open two tabs — one for about scriptree, and one
+        about the current forest").
+
+        * Tab "About <brand>" — long name, tagline, version, build date (the
+          same content the cell menu's ``_show_about`` shows).
+        * Tab "This forest" — the forest's own summary (items / excluded /
+          auto-discover mode / roots / file) that the old single-message
+          ``QMessageBox`` About used to show.
+
+        Split from ``_on_about`` so tests can assert the tab structure without
+        opening a blocking modal.
+        """
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QLabel, QTabWidget, QVBoxLayout, QWidget,
         )
+
+        brand = (self._branding or {}).get("appName", "ScripTree")
+        app_long = (self._branding or {}).get("appNameLong", brand)
+        tagline = (self._branding or {}).get("tagline", "")
+        try:
+            from scriptree import __version__ as _ver
+        except Exception:  # noqa: BLE001
+            _ver = "(unknown)"
+        try:
+            from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            _bd = ""
+        build_line = f"<br><b>Built:</b> {_bd}" if _bd else ""
+        cfg = self.forest.auto_discover
+
+        def _tab(html: str) -> QWidget:
+            w = QWidget()
+            lay = QVBoxLayout(w)
+            lbl = QLabel(html)
+            lbl.setTextFormat(_Qt.TextFormat.RichText)
+            lbl.setWordWrap(True)
+            lbl.setTextInteractionFlags(
+                _Qt.TextInteractionFlag.TextBrowserInteraction
+            )
+            lay.addWidget(lbl)
+            lay.addStretch(1)
+            return w
+
+        dlg = QDialog(self.forest_window)
+        dlg.setWindowTitle(f"About {brand}")
+        outer = QVBoxLayout(dlg)
+        tabs = QTabWidget(dlg)
+        tabs.addTab(
+            _tab(
+                f"<b>{app_long}</b><br>{tagline}<br><br>"
+                f"<b>Version:</b> {_ver}{build_line}"
+            ),
+            f"About {brand}",
+        )
+        tabs.addTab(
+            _tab(
+                f"<b>{self.forest.name}</b><br><br>"
+                f"Items: {len(self.forest.items)}<br>"
+                f"Excluded: {len(self.forest.excluded)}<br>"
+                f"Auto-discover: "
+                f"{'enabled' if cfg.enabled else 'disabled'} "
+                f"({cfg.update_mode})<br>"
+                f"Roots: {', '.join(cfg.roots) or '(none)'}<br><br>"
+                f"File: {self.forest.loaded_from or '(unsaved)'}"
+            ),
+            "This forest",
+        )
+        outer.addWidget(tabs)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        outer.addWidget(bb)
+        dlg.resize(440, 280)
+        return dlg
 
     # ------------------------------------------------------------------
     # Login autostart (v0.8.0a84)
