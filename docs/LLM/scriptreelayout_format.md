@@ -4,8 +4,10 @@
 
 A **cell layout** is a *named, reusable arrangement* of the forest hub's cells.
 It records, for each cell, **where that cell sits relative to the forest hub** —
-nothing else. It is the file behind the forest's right-click menu
-**Cell layout → Save… / Load… / Recent layouts**.
+nothing else. It is the file behind the forest right-click menu's
+**File ▸ Save layout / Save layout as… / Open layout…** entries and the
+top-level **Recent layouts** submenu (the pre-a119 "Cell layout ▸"
+submenu was dissolved into those).
 
 A layout is **positional, not membership**. Applying (loading) a layout
 *repositions* the forest cells whose tool/tree path matches an entry, and

@@ -8,8 +8,10 @@ cells.  It is purely POSITIONAL: an ordered list of ``(catalog/tree path,
 offset-from-the-forest-hub)`` entries.  It deliberately does NOT record
 membership — applying a layout repositions the forest cells whose tool/tree
 path matches an entry and leaves everything else untouched (see
-``ForestController._apply_layout``).  This is the file behind the forest hub's
-right-click **"Cell layout → Save / Load / Recent"** menu.
+``ForestController._apply_layout``).  This is the file behind the forest
+hub right-click menu's **File ▸ Save layout / Save layout as… / Open
+layout…** entries and the top-level **Recent layouts** submenu (the
+pre-a119 "Cell layout ▸" submenu was dissolved into those).
 
 Why store the OFFSET from the hub (not an absolute position)?  So a layout can
 be applied no matter where the forest itself currently sits — the cells land in

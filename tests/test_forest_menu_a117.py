@@ -53,13 +53,9 @@ class _NoExecMenu(QMenu):
 
     exec_ = exec
 
-# Auto-dismiss any incidental dialogs so a stray prompt never blocks.
-QMessageBox.warning = staticmethod(  # type: ignore[assignment]
-    lambda *a, **kw: QMessageBox.StandardButton.Ok
-)
-QMessageBox.question = staticmethod(  # type: ignore[assignment]
-    lambda *a, **kw: QMessageBox.StandardButton.Yes
-)
+# (a121: the module-level QMessageBox patches were removed — tests/conftest.py's
+# session-wide ``_silence_qt_modals`` already stubs every blocking modal, and a
+# per-module raw assignment could fight it across test modules.)
 
 from scriptree.shell.branding_loader import load_branding  # noqa: E402
 from scriptree.shell.cell_registry import CellRegistry  # noqa: E402
@@ -126,9 +122,10 @@ def test_forest_menu_omits_ring_and_cell_destructive_actions(monkeypatch) -> Non
     assert "Spawn another cell" not in joined, texts
     # The catalog + ring submenus (exact submenu titles) are gone.
     assert "Tree Ring" not in texts, texts
-    assert "ScripTree" not in texts, texts   # note: the disabled header
-    #                                          "ScripTree: (default)" is a
-    #                                          DIFFERENT string and may remain.
+    assert "ScripTree" not in texts, texts
+    # a121 — the disabled "ScripTree: (default)" catalog header is also
+    # SKIPPED for the hub (it can never bind a catalog).
+    assert not any(t.startswith("ScripTree:") for t in texts), texts
 
 
 def test_forest_menu_has_open_new_cell_and_exit(monkeypatch) -> None:
@@ -141,12 +138,42 @@ def test_forest_menu_has_open_new_cell_and_exit(monkeypatch) -> None:
     assert "New" in texts, texts          # the New submenu title
     assert "Cell" in texts, texts         # New ▸ Cell
     assert "Exit all" in texts, texts
-    # v0.8.0a120 — "Settings…" and "Preferences…" are NO LONGER cell-native
-    # items on the a117 branch: they moved into the controller hook's Settings
-    # sub-menu as "More…" / "Preferences…".  A raw forest cell built without a
-    # ForestController has no hook, so they are absent here (the grouped
-    # versions are covered in test_forest_menu_consolidation_a119.py).
-    assert "Settings…" not in texts, texts
+    # a121 ORDER: the everyday actions lead the hub menu (no catalog
+    # header above them), Exit all closes it.
+    non_sep = [t for t in (a.text() for a in captured[0].actions()) if t]
+    assert non_sep[0] == "Open…", non_sep
+    assert non_sep[-1] == "Exit all", non_sep
+
+
+def test_forest_menu_fallback_when_hook_missing_or_raises(monkeypatch) -> None:
+    """a121 — the hub must stay recoverable without a working controller
+    hook.  A raw hub (no hook at all) and a hub whose hook RAISES both get
+    the cell-native fallback Settings… / Preferences… / About items; and a
+    TypeError from inside the builder must NOT re-invoke it (the old a25
+    arity-sniff double-built the whole menu)."""
+    # (1) no hook installed -> fallback present.
+    forest = _forest_hub()
+    captured = _capture_menu(monkeypatch)
+    forest._show_context_menu(QPoint(0, 0))
+    texts = _all_action_texts(captured[0])
+    assert "Settings…" in texts, texts
+    assert "Preferences…" in texts, texts
+    assert any(t.startswith("About") for t in texts), texts
+
+    # (2) hook adds one item then raises TypeError -> the item appears
+    # EXACTLY once (no re-invoke) and the fallback still appears.
+    forest2 = _forest_hub()
+
+    def _bad_hook(menu, cell=None):  # noqa: ANN001
+        menu.addAction("HOOK-MARKER")
+        raise TypeError("bug inside the builder")
+
+    forest2._forest_menu_extension = _bad_hook
+    _NoExecMenu.captured = []
+    forest2._show_context_menu(QPoint(0, 0))
+    texts2 = _all_action_texts(_NoExecMenu.captured[0])
+    assert texts2.count("HOOK-MARKER") == 1, texts2
+    assert "Settings…" in texts2, texts2
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +239,11 @@ def test_forest_open_routes_through_open_catalog_path_without_rebinding(
 
 def test_plain_member_cell_omits_catalog_and_ring_submenus(monkeypatch) -> None:
     _fresh_registry()
+    # a121 — the gate now RESOLVES the master id in the registry, so the
+    # test needs a real, live master for the cell to be "docked" under.
+    master = CellWindow(load_branding(), role="master")
     cell = CellWindow(load_branding())
-    cell._group_master_id = "fake-master-id"   # docked under a master
+    cell._group_master_id = master._id        # docked under a LIVE master
     assert cell.role != "master"
 
     captured = _capture_menu(monkeypatch)
@@ -230,6 +260,24 @@ def test_plain_member_cell_omits_catalog_and_ring_submenus(monkeypatch) -> None:
     assert "Exit all" in texts, texts
 
 
+def test_orphan_cell_with_stale_master_id_keeps_submenus(monkeypatch) -> None:
+    """a121 (review fix) — a cell whose ``_group_master_id`` does NOT
+    resolve to a live cell in the registry is effectively standalone (its
+    master died through an exceptional teardown, or a sidecar restored a
+    member whose master never respawned).  It must KEEP the catalog/ring
+    submenus, or the user has no way to rebind or save it."""
+    _fresh_registry()
+    cell = CellWindow(load_branding())
+    cell._group_master_id = "ghost-master-never-registered"
+
+    captured = _capture_menu(monkeypatch)
+    cell._show_context_menu(QPoint(0, 0))
+    texts = _all_action_texts(captured[0])
+
+    assert "ScripTree" in texts, texts
+    assert "Tree Ring" in texts, texts
+
+
 def test_standalone_cell_keeps_catalog_and_ring_submenus(monkeypatch) -> None:
     _fresh_registry()
     cell = CellWindow(load_branding())
@@ -241,3 +289,39 @@ def test_standalone_cell_keeps_catalog_and_ring_submenus(monkeypatch) -> None:
 
     assert "ScripTree" in texts, texts        # catalog submenu still offered
     assert "Tree Ring" in texts, texts        # ring submenu still offered
+
+
+def test_spawn_clamps_to_the_spawning_cells_screen(monkeypatch) -> None:
+    """a121 (review fix) — ``_spawn_cell_with_catalog`` must clamp the new
+    cell to the screen the SPAWNING cell is on (``screenAt(self.pos())``),
+    not unconditionally to the primary screen, or New ▸ Cell on a secondary
+    monitor materialises the cell on the primary one.
+
+    The adversarial verify caught the first version of this test as
+    VACUOUS: the spawned cell's ``_settle_no_overlap`` ALSO calls
+    ``screenAt``, so merely asserting "screenAt was consulted" passed even
+    with the primaryScreen() regression restored.  Hence: the settle step
+    is stubbed out, and the assertion pins the one call the clamp itself
+    makes — ``screenAt`` with EXACTLY the spawning cell's position."""
+    _fresh_registry()
+    forest = CellWindow(load_branding(), role="master", is_forest_master=True)
+
+    asked: list = []
+    real_screen_at = QApplication.screenAt
+
+    def _recording_screen_at(pos):  # noqa: ANN001
+        asked.append(pos)
+        return real_screen_at(pos)
+
+    monkeypatch.setattr(
+        QApplication, "screenAt", staticmethod(_recording_screen_at),
+    )
+    # Silence the other screenAt caller inside the spawn path.
+    monkeypatch.setattr(CellWindow, "_settle_no_overlap", lambda self: None)
+
+    forest._new_blank_cell()
+    assert any(p == forest.pos() for p in asked), (
+        "the spawn clamp must call screenAt(self.pos()) — got "
+        f"{[(p.x(), p.y()) for p in asked]!r}, expected to include "
+        f"({forest.pos().x()}, {forest.pos().y()})"
+    )

@@ -299,9 +299,15 @@ is never removed when its configs would otherwise be lost.
 **UI entry points** (both pop the same checkbox dialog):
 
 * `forest_controller._populate_forest_menu` adds an
-  "Uninstall app from disk…" action to the cell's right-click
-  Forest submenu when the right-clicked cell is bound to a
-  catalog under an install root.
+  "Uninstall app from disk…" action near the bottom of the hub's
+  right-click menu — after the hook-built groups, directly above
+  the cell-native "Exit all" that `_show_context_menu` appends
+  last (the a120 dissolve removed the old Forest submenu) — when
+  the right-clicked cell is bound to a catalog under an install
+  root.  NOTE: the hook is currently installed
+  only on the forest hub itself, which never binds a catalog, so
+  this entry point is dormant today — the popup-tree path below
+  is the live one.
 * `tree_popup._PerItemContextFilter` (per-action right-click
   in the cell's tool-popup tree) reaches the same handler
   via `hex_win._forest_menu_extension.__self__`.  See the

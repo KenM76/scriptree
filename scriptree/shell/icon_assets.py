@@ -247,7 +247,43 @@ def bundled_icon_png_path(name: str) -> Path | None:
     return p if p.is_file() else None
 
 
+@lru_cache(maxsize=64)
+def bundled_qicon(name: str):  # noqa: ANN201 — returns QIcon; annotated
+    #                            loosely so this module imports without Qt.
+    """Return a (cached) ``QIcon`` for the bundled ``icon-<name>.png``.
+
+    v0.8.0a121 — the SHARED replacement for the hand-rolled ``_bundled`` /
+    ``_seticon_bundled`` helpers that ``cell_window._show_context_menu``
+    and ``forest_controller._populate_forest_menu`` had each duplicated.
+    Those helpers re-stat'ed the PNG and re-constructed a ``QIcon`` on
+    EVERY menu build (the settings glyph alone was loaded four times per
+    right-click after a120) — this caches one ``QIcon`` per name for the
+    process lifetime.  ``QIcon`` instances are implicitly shared and safe
+    to reuse across menus.
+
+    Contract: never raises; returns a null ``QIcon()`` when the name is
+    unknown or the icons dir is missing (callers just get an icon-less
+    action — cosmetic degradation only), and ``None`` only if Qt itself
+    cannot import (headless callers shouldn't be asking for QIcons).
+    The ``QtGui`` import is deferred so this module stays importable
+    without Qt installed.
+    """
+    try:
+        from PySide6.QtGui import QIcon
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        p = bundled_icon_png_path(name)
+        if p is None:
+            return QIcon()
+        ic = QIcon(str(p))
+        return ic if not ic.isNull() else QIcon()
+    except Exception:  # noqa: BLE001
+        return QIcon()
+
+
 __all__ = [
     "icons_dir", "bundled_icon_b64", "BUNDLED_FORMAT",
-    "list_bundled_icons", "bundled_icon_png_path", "classify_icon",
+    "list_bundled_icons", "bundled_icon_png_path", "bundled_qicon",
+    "classify_icon",
 ]

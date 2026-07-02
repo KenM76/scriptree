@@ -1593,21 +1593,44 @@ class TestUnsavedForestDefaultSpot:
         parent = QMenu()
         ctrl._populate_forest_menu(parent)
 
-        # The forest submenu is the first action's menu().
-        forest_submenu_action = parent.actions()[0]
-        forest_submenu = forest_submenu_action.menu()
-        assert forest_submenu is not None
-        # The submenu marker itself carries the forest icon.
-        assert not forest_submenu.icon().isNull(), (
-            "Forest submenu should carry the forest hub icon."
-        )
-        # And every (non-separator) action inside has an icon.
-        for act in forest_submenu.actions():
-            if act.isSeparator():
-                continue
-            assert not act.icon().isNull(), (
-                f"Forest submenu action {act.text()!r} has no icon."
-            )
+        # v0.8.0a120 dissolved the wrapping "Forest" submenu: the hook now
+        # builds File / Sources / Settings / Recent layouts / rescue /
+        # About… DIRECTLY into ``parent``.  a121 (review fix): walk the
+        # WHOLE tree recursively so every forest action — not just the
+        # first submenu's — is icon-checked.  Exemptions: separators; the
+        # three Visibility + three Auto-load radio toggles plus the Debug
+        # "Enable verbose logging" toggle (checkable state items are
+        # deliberately icon-less); the plain "Open debug folder" action
+        # (icon-less by design in _populate_forest_menu); and the whole
+        # Recent-layouts submenu (dynamic file-name entries — skipped as
+        # a unit in the walk below, so its "(none)" placeholder never
+        # reaches this set).
+        _iconless_ok = {
+            "Show always on top (over desktop)", "Show on taskbar",
+            "Show in system tray", "Disabled", "For current user only",
+            "For all users (requires admin)", "Enable verbose logging",
+            "Open debug folder",
+        }
+
+        def _walk(m: QMenu, path: str) -> None:
+            for act in m.actions():
+                if act.isSeparator():
+                    continue
+                sub = act.menu()
+                label = f"{path} > {act.text()}"
+                if sub is not None and act.text() == "Recent layouts":
+                    continue  # dynamic file entries, no icons by design
+                if act.text() in _iconless_ok:
+                    continue
+                assert not act.icon().isNull(), (
+                    f"forest menu action {label!r} has no icon."
+                )
+                if sub is not None:
+                    _walk(sub, label)
+
+        top_titles = [a.text() for a in parent.actions() if a.text()]
+        assert "File" in top_titles and "Sources" in top_titles, top_titles
+        _walk(parent, "(root)")
 
     def test_master_absorbs_nearby_forest_linked_free_cell(
         self, tmp_path: Path, monkeypatch: Any,

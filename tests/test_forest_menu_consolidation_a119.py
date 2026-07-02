@@ -19,18 +19,45 @@ its child sub-menus (Qt GCs children with the parent).
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
+import pytest
+from PySide6.QtWidgets import QApplication, QMenu
 
 _app = QApplication.instance() or QApplication([])
 
-QMessageBox.warning = staticmethod(  # type: ignore[assignment]
-    lambda *a, **kw: QMessageBox.StandardButton.Ok
-)
+# (a121: the module-level QMessageBox.warning patch was removed —
+# tests/conftest.py's session-wide ``_silence_qt_modals`` already stubs
+# every blocking modal.)
 
 from scriptree.shell.branding_loader import load_branding  # noqa: E402
 from scriptree.shell.cell_registry import CellRegistry  # noqa: E402
 from scriptree.shell.forest_controller import ForestController  # noqa: E402
 from scriptree.shell.forest_io import ForestDef  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_user_appdata(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
+    """a121 (review fix) — every test in this module starts a REAL
+    ForestController, and ``start()`` reads forest preferences + the
+    autoload path.  Without redirection those come from the developer's
+    live ``%APPDATA%/ScripTree`` (visibility flags from live testing can
+    spawn a real tray icon / fold cells mid-suite, and autosave could
+    write the dev's actual ``default.scriptreeforest``).  Same isolation
+    ``test_forest.py`` applies via its class fixtures."""
+    from scriptree.shell import forest_controller as fc_mod
+    from scriptree.shell import forest_io as io_mod
+
+    monkeypatch.setattr(
+        io_mod, "default_preferences_path",
+        lambda branding: tmp_path / "forest_preferences.json",
+    )
+    monkeypatch.setattr(
+        fc_mod, "default_autoload_path",
+        lambda branding: tmp_path / "default.scriptreeforest",
+    )
+    monkeypatch.setattr(
+        io_mod, "default_autoload_path",
+        lambda branding: tmp_path / "default.scriptreeforest",
+    )
 
 
 def _fresh_registry() -> None:
@@ -57,13 +84,21 @@ def _direct_texts(menu: QMenu) -> list[str]:
     return [a.text() for a in menu.actions()]
 
 
+def _make_controller() -> ForestController:
+    """Fresh, started controller with autosave OFF (a121: so tests never
+    write the redirected — let alone a real — autoload forest file)."""
+    _fresh_registry()
+    ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+    ctrl.set_autosave_enabled(False)
+    ctrl.start(forest=ForestDef(), suppress_first_run=True)
+    return ctrl
+
+
 def _build_forest_menu():
     """Return ``(ctrl, menu)`` where ``menu`` has the DISSOLVED forest actions
     built directly into it.  The caller MUST keep ``menu`` alive while it walks
     the tree (its sub-menus are Qt children of ``menu``)."""
-    _fresh_registry()
-    ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
-    ctrl.start(forest=ForestDef(), suppress_first_run=True)
+    ctrl = _make_controller()
     menu = QMenu()
     ctrl._populate_forest_menu(menu, ctrl.forest_window)
     return ctrl, menu
@@ -154,6 +189,7 @@ def test_about_dialog_has_two_tabs() -> None:
     from PySide6.QtWidgets import QTabWidget
     _fresh_registry()
     ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+    ctrl.set_autosave_enabled(False)
     ctrl.start(forest=ForestDef(), suppress_first_run=True)
     try:
         dlg = ctrl._build_about_dialog()
@@ -195,6 +231,7 @@ def test_forest_settings_dialog_omits_click_action_tab() -> None:
 def test_save_layout_quicksave_vs_saveas(monkeypatch, tmp_path) -> None:
     _fresh_registry()
     ctrl = ForestController(load_branding(), CellRegistry.instance(), None)
+    ctrl.set_autosave_enabled(False)
     ctrl.start(forest=ForestDef(), suppress_first_run=True)
     try:
         calls: list[str] = []
@@ -208,5 +245,153 @@ def test_save_layout_quicksave_vs_saveas(monkeypatch, tmp_path) -> None:
         monkeypatch.setattr(ctrl, "_write_layout_to_path", lambda path: wrote.append(path))
         ctrl._on_save_layout()
         assert wrote == [p]
+    finally:
+        ctrl.forest_window.close()
+
+
+# ---------------------------------------------------------------------------
+# a121 — review fixes: layout data-loss guards, About dedup, dialog title
+# ---------------------------------------------------------------------------
+
+def test_write_layout_refuses_while_collapsed(monkeypatch, tmp_path) -> None:
+    """a121 — while the forest is collapsed every member sits at the hub, so
+    a capture would record ~(0,0) offsets; the quick-save one-click path made
+    that a single-click data-loss.  The writer must refuse + warn."""
+    from PySide6.QtWidgets import QMessageBox
+
+    ctrl = _make_controller()
+    try:
+        warned: list[str] = []
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda parent, title, text, *a, **k:
+                         warned.append(text) or QMessageBox.StandardButton.Ok),
+        )
+        ctrl.forest_window._collapse_state = "collapsed"
+        target = tmp_path / "l.scriptreelayout"
+        ctrl._write_layout_to_path(target)
+        assert not target.exists(), "no file may be written while collapsed"
+        assert warned and "collapsed" in warned[0], warned
+        assert getattr(ctrl, "_saved_layout_path", None) is None
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_write_layout_warns_when_nothing_positionable(monkeypatch, tmp_path) -> None:
+    """a121 — 'Save layout as…' with nothing positionable used to bail with a
+    log line only, right after the user picked a filename.  Now it warns."""
+    from PySide6.QtWidgets import QMessageBox
+
+    ctrl = _make_controller()      # empty forest -> zero positionable cells
+    try:
+        warned: list[str] = []
+        monkeypatch.setattr(
+            QMessageBox, "warning",
+            staticmethod(lambda parent, title, text, *a, **k:
+                         warned.append(text) or QMessageBox.StandardButton.Ok),
+        )
+        target = tmp_path / "l.scriptreelayout"
+        ctrl._write_layout_to_path(target)
+        assert not target.exists()
+        assert warned and "Nothing to save" in warned[0], warned
+        assert getattr(ctrl, "_saved_layout_path", None) is None
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_zero_match_open_does_not_arm_quicksave(tmp_path) -> None:
+    """a121 — opening a layout that matches NO current cell is a visible
+    no-op; it must NOT become the quick-save target (a later one-click
+    'Save layout' would silently overwrite that unrelated file)."""
+    from scriptree.shell.layout_io import LayoutDef, LayoutEntry, save_layout
+
+    ctrl = _make_controller()      # empty forest -> nothing can match
+    try:
+        p = tmp_path / "foreign.scriptreelayout"
+        # NOTE: a LOCAL non-existent path — a fake drive letter (Z:/…) can
+        # be a real blocked network share on a dev machine and make
+        # Path.resolve() raise OSError inside _norm.
+        save_layout(LayoutDef(name="foreign", entries=[
+            LayoutEntry(catalog_path=str(tmp_path / "ghost" / "x.scriptree"),
+                        rel_offset=(40, 40), kind="tool"),
+        ]), p)
+        ctrl._apply_layout_from_path(str(p))
+        assert getattr(ctrl, "_saved_layout_path", None) is None, (
+            "a zero-match apply must not arm the quick-save target"
+        )
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_open_forest_clears_quicksave_target(tmp_path) -> None:
+    """a121 — switching forests must forget the previous forest's layout
+    file, or 'Save layout' in forest B clobbers forest A's layout."""
+    from scriptree.shell.forest_io import save_forest
+
+    ctrl = _make_controller()
+    try:
+        ctrl._saved_layout_path = tmp_path / "a.scriptreelayout"
+        f = tmp_path / "other.scriptreeforest"
+        save_forest(ForestDef(name="Other"), f)
+        ctrl.open(str(f))
+        assert getattr(ctrl, "_saved_layout_path", None) is None
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_app_discovery_dialog_title_matches_menu() -> None:
+    """a121 — the menu says 'App Discovery…'; the dialog it opens must not
+    still be titled 'Forest settings' (a119 renamed the menu entry only)."""
+    from scriptree.shell.forest_dialogs import ForestSettingsDialog
+
+    ctrl = _make_controller()
+    try:
+        dlg = ForestSettingsDialog(ctrl)
+        assert dlg.windowTitle() == "App Discovery", dlg.windowTitle()
+        dlg.deleteLater()
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_about_tab_one_uses_shared_html() -> None:
+    """a121 — tab 1 of the two-tab About must render EXACTLY the shared
+    ``branding_loader.about_app_html`` string (the same one the cell menu's
+    About box shows), so the two surfaces cannot drift."""
+    from PySide6.QtWidgets import QLabel, QTabWidget
+    from scriptree.shell.branding_loader import about_app_html
+
+    ctrl = _make_controller()
+    try:
+        dlg = ctrl._build_about_dialog()
+        tabs = dlg.findChild(QTabWidget)
+        first_label = tabs.widget(0).findChild(QLabel)
+        assert first_label.text() == about_app_html(ctrl._branding)
+        dlg.deleteLater()
+    finally:
+        ctrl.forest_window.close()
+
+
+def test_uninstall_action_appears_for_installed_cell(monkeypatch, tmp_path) -> None:
+    """a121 — the per-cell Uninstall block read the never-existing
+    ``catalog_path`` attribute (CellWindow stores ``_catalog_path``), so it
+    could NEVER fire.  With a cell whose catalog lives under an install
+    root, the action must now appear."""
+    from scriptree.core import app_install
+
+    monkeypatch.setattr(app_install, "default_personal_root",
+                        lambda: str(tmp_path))
+    monkeypatch.setattr(app_install, "default_shared_root",
+                        lambda: str(tmp_path / "shared"))
+
+    ctrl = _make_controller()
+    try:
+        import types
+        fake = types.SimpleNamespace(
+            _catalog_path=str(tmp_path / "someapp" / "tool.scriptree"),
+        )
+        menu = QMenu()
+        ctrl._populate_forest_menu(menu, fake)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert "Uninstall app from disk..." in texts, texts
     finally:
         ctrl.forest_window.close()

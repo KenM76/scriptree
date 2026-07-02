@@ -69,3 +69,44 @@ def load_branding() -> dict:
     _log(f"Loading branding from {config_path}")
     with config_path.open(encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def about_app_html(branding: dict | None) -> str:
+    """Return the canonical rich-text body for every "About <brand>" surface.
+
+    v0.8.0a121 — SINGLE SOURCE for the About-box content.  Two UI surfaces
+    show "about the app" information and they must never drift:
+
+      * ``cell_window.CellWindow._show_about`` — the standard cell menu's
+        "About <brand>" message box;
+      * ``forest_controller.ForestController._build_about_dialog`` — the
+        first tab of the forest hub's two-tab "About…" dialog (a120).
+
+    a120 accidentally re-inlined the HTML in the controller (the exact
+    duplication a117's ``_show_about`` extraction existed to prevent), so
+    the builder now lives here, next to the branding it renders.  Content:
+    long app name, tagline, ``scriptree.__version__`` and — when set —
+    ``scriptree.__build_date__`` (users identify fast-moving builds by the
+    date; see the ``__init__`` docstring).  Qt-free on purpose: this module
+    stays import-light and the string is plain rich-text HTML that QLabel /
+    QMessageBox render identically.
+    """
+    b = branding or {}
+    brand = b.get("appName", "App")
+    app_name_long = b.get("appNameLong", brand)
+    tagline = b.get("tagline", "")
+    try:
+        from scriptree import __version__ as _ver
+    except Exception:  # noqa: BLE001
+        _ver = "(unknown)"
+    try:
+        from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        _bd = ""
+    build_line = f"<br><b>Built:</b> {_bd}" if _bd else ""
+    return (
+        f"<b>{app_name_long}</b><br>"
+        f"{tagline}<br><br>"
+        f"<b>Version:</b> {_ver}"
+        f"{build_line}"
+    )

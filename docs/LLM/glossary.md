@@ -59,7 +59,7 @@ This doc is the cross-reference.  Whenever a user message says
 |---|---|---|
 | **single left-click on a cell** | `CellWindow` left-click handler | Toggles the cell's tool-menu popup (the tree popup of its catalog). |
 | **double left-click on a cell** | `CellWindow.mouseDoubleClickEvent` | On a non-master cell: opens the standalone runner.  On a master / forest: opens the developer editor with the master's merged tree loaded. |
-| **single right-click on a cell** | `CellWindow.contextMenuEvent` | Opens the cell's right-click context menu (Settings, Forest submenu, etc.). |
+| **single right-click on a cell** | `CellWindow.contextMenuEvent` | Opens the cell's right-click context menu (role-aware since v0.8.0a117: the forest hub gets its curated File/Sources/Settings groups, plain member cells omit the catalog/ring submenus, standalones get the full cell menu). |
 | **double right-click on a cell** | `CellWindow.mouseDoubleClickEvent` (right button) | Opens the developer editor for the cell's catalog (or merged tree for masters). |
 | **single left-click on a tool in the tree** (developer editor) | `_EditableTreeWidget.itemClicked` -> `TreeLauncherView._on_item_activated` -> `MainWindow._on_tool_selected` -> `_show_runner` | Opens the tool's runner in the centre pane.  Should NOT pop new floating windows on every click -- the Form / Output / Run-controls docks already exist and the runner is swapped into them in place. |
 | **double left-click on a tool in the tree** (developer editor) | same as above (Qt default for QTreeWidget) | Same as single click in the current design.  Distinct double-click semantics are reserved. |

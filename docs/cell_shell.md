@@ -37,7 +37,7 @@ dock with each other).
 |---|---|---|
 | **1× left click** | Toggle the cell's tool menu next to the cell. Click another cell → its menu opens (the previous one closes). Click the same cell again → the menu hides. Picking a tool launches the V1 standalone runner with the tool's default configuration. **v0.8.0a28+:** right-click any entry inside the popup tree for a per-item context menu (**Open containing folder**, **Uninstall app from disk…** when the tool's catalog lives under an install root). | **v0.6.20+:** collapse / expand the whole linked group. Forest single-click recursively tucks every link-descendant into the forest hub; ring single-click tucks the ring's members. Click again → expand. (Pre-v0.6.20 this opened a popup menu; the popup now lives on double-click — see below.) |
 | **2× left click** | Opens V1: the **standalone runner** if the cell is bound to a `.scriptree`, or V1's **full editor** with the tree pre-loaded if the cell is bound to a `.scriptreetree`. | **v0.6.20+:** in-process popup tree with one sub-folder per member (union of every member's catalog for a ring; every forest item for the forest hub). Same content the single-click used to show. Works whether the group is expanded or collapsed (v0.6.23: the popup raises above the always-on-top member cells when the group is expanded). |
-| **1× right click** | Cell context menu organised into three sub-menus — **ScripTree ▶**, **Tree Ring ▶**, **Cell ▶** — plus top-level About / Settings / Preferences and role-aware Close / Exit-all entries. See "Right-click menu" below. | Same structure plus the **Forest ▶** submenu on the forest hub (Save / Open / Refresh / Auto-add / Forest settings / Manage excluded items / About this forest). |
+| **1× right click** | Role-aware context menu (v0.8.0a117+). Standalone cells: **ScripTree ▶**, **Tree Ring ▶**, **Cell ▶** sub-menus plus top-level About / Settings / Preferences and Close / Exit-all. Plain member cells (a docked tool under a forest or ring) omit the **ScripTree ▶** and **Tree Ring ▶** sub-menus — a docked tool doesn't manage catalogs or rings. See "Right-click menu" below. | The forest hub gets a dedicated, curated menu instead (a117–a121): **Open…**, **New ▸ Cell**, then the controller-built groups **File ▸ / Sources ▸ / Settings ▸ / Recent layouts ▸**, **Bring all cells back on-screen**, the two-tab **About…**, and **Exit all**. It deliberately has NO Close-ring/Disband-style actions — those could detach forest members. |
 | **2× right click** | Opens V1's full editor on the cell's catalog (or a blank editor if no catalog is bound). | Opens V1's full editor on a *merged* `.scriptreetree` — each member becomes a top-level folder. The merged file is regenerated whenever membership changes; same membership = same temp file (V1 can keep it open). If no member has a catalog yet, a placeholder folder is shown so the editor never opens blank. |
 | **Drag (cell)** | Live snap detection — when the dragged cell's centre falls within `snapDistancePx` (default 18 px) of one of the target's six honeycomb-neighbour slots, a 2 px highlight outlines the intended dock. Release to commit. Two forest-linked cells dragged together while loose form a new ring that itself stays linked to the forest (v0.6.14+). | At master drag-end, a free standalone within ~1.6×size_px of the master's centre is absorbed as a new ring member; if the absorbed cell was forest-linked, the master inherits the forest link too (v0.6.14+). |
 | **Drag (ring to a forest cell)** | — | The ring becomes a forest sibling of the cell (`link = Forest, dock = Forest`); the cell is NOT pulled into the ring. The forest's repack lands the new ring on the nearest free honeycomb slot, which by closest-slot semantics ends up adjacent to the cell you dropped near (v0.6.16+). |
@@ -458,8 +458,13 @@ deleting the ring/forest save file by hand, and starting over.
 
 ## Right-click menu
 
-The right-click menu (v0.2.3 + v0.2.4) is organised into three
-sub-folders plus a top-level row:
+The right-click menu (v0.2.3 + v0.2.4; role-aware gating v0.8.0a117/a118)
+is organised into three sub-folders plus a top-level row.  The tree below
+is the FULL menu as a **standalone cell** shows it; a **plain member cell**
+(role != master, docked under a live master) omits the **ScripTree ▶** and
+**Tree Ring ▶** sub-folders, and the **forest hub** never uses this menu at
+all (it takes its own curated branch — see `scriptreeforest_format.md`,
+"Right-click menu"):
 
 ```
 ├── ScripTree[Tree]: <name>          (read-only label of what's loaded)

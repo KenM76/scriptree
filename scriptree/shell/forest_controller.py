@@ -769,23 +769,32 @@ class ForestController(QObject):
     def _populate_forest_menu(
         self, menu: QMenu, cell: Any | None = None,
     ) -> None:
-        """Insert forest-specific actions at the top of ``menu``.
+        """Build the forest's workspace actions DIRECTLY into ``menu``.
 
-        Layout: a ``Forest`` submenu so the standard cell menu stays
-        readable.  All actions wire to controller methods directly
-        (no signal hops, simpler debug).
+        v0.8.0a120 dissolved the old wrapping "Forest" submenu: this hook
+        now writes the grouped containers (File / Sources / Settings), the
+        top-level Recent layouts submenu, "Bring all cells back on-screen"
+        and the two-tab "About…" straight into the right-click menu the
+        caller passes.  The caller (``cell_window._show_context_menu``'s
+        forest branch, a121) invokes this hook AFTER adding its own
+        cell-native Open… / New ▸ Cell items and BEFORE Exit all, so the
+        everyday actions stay at the top.  All actions wire to controller
+        methods directly (no signal hops, simpler debug).
 
-        ``cell`` is the right-clicked cell (v0.8.0a25+).  When
-        provided AND the cell is bound to a catalog under one of
-        the install roots, a per-cell "Uninstall app..." action is
-        added so the user can remove the app's files from disk.
-        Defaults to None for back-compat with callers on the
-        older 1-arg hook contract.
+        ``cell`` is the right-clicked cell (v0.8.0a25+; today always the
+        forest hub — the hook is installed only on ``forest_window``).
+        When provided it powers the Settings ▸ More…/Preferences… wiring
+        and — if the cell is bound to a catalog under an install root —
+        the per-cell "Uninstall app..." action.  Defaults to None for
+        back-compat with callers on the older 1-arg hook contract.
         """
         # v0.6.15 — icon helpers.  Universal save/open/refresh come
         # from Qt's standard set so they match every other app on
         # the platform; everything else uses a glyph from our
         # bundled ``icons/`` set whose category matches the action.
+        # a121: the bundled glyphs come from the SHARED, lru-cached
+        # ``icon_assets.bundled_qicon`` (one disk load per name per
+        # process) instead of a per-call path-stat + QIcon build.
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QApplication, QStyle
         _SP = QStyle.StandardPixmap
@@ -795,17 +804,9 @@ class ForestController(QObject):
             return app.style().standardIcon(which) if app else QIcon()
 
         def _bundled(name: str) -> QIcon:
-            try:
-                from scriptree.shell.icon_assets import (
-                    bundled_icon_png_path,
-                )
-                p = bundled_icon_png_path(name)
-                if p is None:
-                    return QIcon()
-                ic = QIcon(str(p))
-                return ic if not ic.isNull() else QIcon()
-            except Exception:  # noqa: BLE001
-                return QIcon()
+            from scriptree.shell.icon_assets import bundled_qicon
+            ic = bundled_qicon(name)
+            return ic if ic is not None else QIcon()
 
         # v0.8.0a119 — menu consolidation; v0.8.0a120 — the wrapping "Forest"
         # sub-menu is DISSOLVED (Ken: "the forest sub-menu should just be
@@ -1171,12 +1172,27 @@ class ForestController(QObject):
         # v0.8.0a25 -- per-cell Uninstall action.  Only added when
         # the right-clicked cell is bound to a catalog whose folder
         # lives under one of the install roots (otherwise we have
-        # nothing to safely delete).  Lives at the bottom of the
-        # Forest submenu so the user doesn't trigger it by accident
-        # while reaching for Save or Refresh.
+        # nothing to safely delete).  Added LAST, at the bottom of the
+        # right-click menu (a120 dissolved the old Forest submenu), so
+        # the user doesn't trigger it by accident.
+        #
+        # a121 (review fix): read ``_catalog_path`` — the attribute
+        # CellWindow actually stores — not the never-existing
+        # ``catalog_path``, which made this block unreachable.  NOTE:
+        # the action is DORMANT today on two counts: the hook is only
+        # installed on the forest HUB (``_install_menu_hook(
+        # self.forest_window)``), which never binds a catalog, AND
+        # since a121 ``_show_context_menu`` only invokes the hook from
+        # its forest branch — so even installing the hook on a member
+        # cell would not surface this menu path.  Re-activating
+        # per-cell uninstall would need both a hook install on members
+        # and a non-forest invocation site (or a different surface —
+        # the live one is the popup-tree per-item context menu, see
+        # ``tree_popup._PerItemContextFilter``).  The attribute fix
+        # simply makes the code honour its documented contract.
         a_uninstall = None
         if cell is not None:
-            cat_path = getattr(cell, "catalog_path", None)
+            cat_path = getattr(cell, "_catalog_path", None)
             if cat_path:
                 from pathlib import Path
                 from scriptree.core.app_install import (
@@ -1273,10 +1289,9 @@ class ForestController(QObject):
         )
         if not chosen:
             return
-        p = _P(chosen)
-        if p.suffix.lower() != ".scriptreelayout":
-            p = p.with_suffix(".scriptreelayout")
-        self._write_layout_to_path(p)
+        # Suffix normalisation + path-remembering both live in the callee
+        # (a121 — the caller-side duplicate fixup was removed).
+        self._write_layout_to_path(_P(chosen))
 
     def _write_layout_to_path(self, path) -> None:  # noqa: ANN001
         """Capture the CURRENT cell arrangement (each forest member's offset
@@ -1285,6 +1300,20 @@ class ForestController(QObject):
 
         Reposition-existing-only on apply: only members with a stable offset
         key AND a bound catalog are recorded — others cannot be re-applied.
+
+        SAFETY GUARDS (a121, from the a120 review):
+          * COLLAPSED guard — while the forest is collapsed (or animating),
+            every member sits at/near the hub position, so a capture would
+            record ~(0,0) offsets and destroy the on-disk arrangement.  A
+            collapsed hub is exactly the state where the hub is the only
+            thing left to right-click, so this is an easy accidental save —
+            refuse it with a visible warning instead of silently corrupting
+            the file.
+          * NO-SILENT-FAILURE — both the "nothing positionable" case and a
+            ``save_layout`` exception show a ``QMessageBox.warning`` (the
+            user just picked a filename; a log-only bail makes them believe
+            the layout saved when no file was written).  Mirrors the ring
+            twin ``_write_ring_to_path``.
         """
         from pathlib import Path as _P
         from scriptree.shell import recent_files as _rf
@@ -1295,6 +1324,14 @@ class ForestController(QObject):
 
         hub = self.forest_window
         if hub is None:
+            return
+        if getattr(hub, "_collapse_state", "expanded") != "expanded":
+            _log("save layout refused: forest is collapsed/animating")
+            QMessageBox.warning(
+                None, "Save layout",
+                "The forest is collapsed — expand it first so the layout "
+                "captures the cells' real positions.",
+            )
             return
         hub_pos = hub.pos()
         entries: list[LayoutEntry] = []
@@ -1315,6 +1352,12 @@ class ForestController(QObject):
             ))
         if not entries:
             _log("save layout: no positionable cells")
+            QMessageBox.warning(
+                None, "Save layout",
+                "Nothing to save — no forest cell has both a bound tool "
+                "and a stable identity, so a layout written now could "
+                "never be re-applied.  No file was written.",
+            )
             return
         p = _P(path)
         if p.suffix.lower() != ".scriptreelayout":
@@ -1326,6 +1369,9 @@ class ForestController(QObject):
             _log(f"saved cell layout: {p} ({len(entries)} cells)")
         except Exception as exc:  # noqa: BLE001
             _log(f"save layout failed: {exc!r}")
+            QMessageBox.warning(
+                None, "Save failed", f"Could not save layout:\n{exc}",
+            )
 
     def _on_load_layout(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -1350,20 +1396,30 @@ class ForestController(QObject):
             _log(f"load layout failed ({path}): {exc!r}")
             return
         _rf.add_layout(path)
+        applied = self._apply_layout(layout)
         # a119 — remember the opened layout so a subsequent plain "Save layout"
-        # quick-saves back to this same file.
-        self._saved_layout_path = _P(path)
-        self._apply_layout(layout)
+        # quick-saves back to this same file.  a121 (review fix): ONLY when the
+        # apply actually repositioned something.  A zero-match apply is a
+        # visible no-op (e.g. a layout saved from a different forest/machine);
+        # arming quick-save on it would point a later one-click "Save layout"
+        # at that unrelated file and silently overwrite it with THIS forest's
+        # arrangement.
+        if applied > 0:
+            self._saved_layout_path = _P(path)
 
-    def _apply_layout(self, layout: Any) -> None:
+    def _apply_layout(self, layout: Any) -> int:
         """Reposition EXISTING forest cells to match ``layout`` (positions
         only): cells matched by tool/tree path move to the saved offset; cells
         not named in the layout stay put; entries with no matching cell are
         skipped.  Never spawns or removes cells.
+
+        Returns the number of cells actually repositioned (0 = the layout
+        matched nothing in the current forest) — a121: callers use this to
+        decide whether the layout file should become the quick-save target.
         """
         hub = self.forest_window
         if hub is None:
-            return
+            return 0
         from scriptree.shell.cell_window import _member_offset_key
 
         # Index each spawned forest member by its offset key.
@@ -1390,7 +1446,7 @@ class ForestController(QObject):
                 f"apply layout '{getattr(layout, 'name', '?')}': "
                 f"no matching cells in the current forest"
             )
-            return
+            return 0
         try:
             placed = hub._restore_remembered_offsets(move=True)
             hub._compute_layout(instant=True, pinned=placed)
@@ -1401,6 +1457,7 @@ class ForestController(QObject):
             f"apply layout '{getattr(layout, 'name', '?')}': "
             f"repositioned {applied} cell(s)"
         )
+        return applied
 
     # ------------------------------------------------------------------
     # Item spawn
@@ -2784,6 +2841,10 @@ class ForestController(QObject):
         # drop the previous forest's remembered offsets before loading.
         if self.forest_window is not None:
             self.forest_window._remembered_offsets.clear()
+        # a121 (review fix) — also forget the previous forest's quick-save
+        # layout target: a one-click "Save layout" in forest B must prompt
+        # for a file, not silently overwrite forest A's .scriptreelayout.
+        self._saved_layout_path = None
         self.forest = load_forest(path)
         # v0.8.0a46+ -- do NOT stamp ``_derive_label(name)`` here;
         # see the matching note in ``__init__`` for the full
@@ -3158,8 +3219,19 @@ class ForestController(QObject):
             self._show_diff_dialog(diff)
 
     def _on_about(self) -> None:
-        """Show the two-tab About dialog (a120)."""
-        self._build_about_dialog().exec()
+        """Show the two-tab About dialog (a120).
+
+        a121 (review fix): the dialog is parented to the hub window (for
+        stacking) and ``exec`` alone never frees it, so repeated About…
+        clicks used to accumulate dead dialog trees as live children of the
+        hub for the whole app lifetime.  ``deleteLater`` after ``exec``
+        schedules destruction on the next event-loop turn.
+        """
+        dlg = self._build_about_dialog()
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _build_about_dialog(self):  # noqa: ANN201
         """v0.8.0a120 — BUILD (do not show) the TWO-TAB About dialog (Ken:
@@ -3173,25 +3245,17 @@ class ForestController(QObject):
           ``QMessageBox`` About used to show.
 
         Split from ``_on_about`` so tests can assert the tab structure without
-        opening a blocking modal.
+        opening a blocking modal.  a121: tab 1's body comes from the shared
+        ``branding_loader.about_app_html`` — the SAME string the cell menu's
+        ``_show_about`` renders — so the two About surfaces cannot drift.
         """
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtWidgets import (
             QDialog, QDialogButtonBox, QLabel, QTabWidget, QVBoxLayout, QWidget,
         )
+        from scriptree.shell.branding_loader import about_app_html
 
         brand = (self._branding or {}).get("appName", "ScripTree")
-        app_long = (self._branding or {}).get("appNameLong", brand)
-        tagline = (self._branding or {}).get("tagline", "")
-        try:
-            from scriptree import __version__ as _ver
-        except Exception:  # noqa: BLE001
-            _ver = "(unknown)"
-        try:
-            from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            _bd = ""
-        build_line = f"<br><b>Built:</b> {_bd}" if _bd else ""
         cfg = self.forest.auto_discover
 
         def _tab(html: str) -> QWidget:
@@ -3212,10 +3276,7 @@ class ForestController(QObject):
         outer = QVBoxLayout(dlg)
         tabs = QTabWidget(dlg)
         tabs.addTab(
-            _tab(
-                f"<b>{app_long}</b><br>{tagline}<br><br>"
-                f"<b>Version:</b> {_ver}{build_line}"
-            ),
+            _tab(about_app_html(self._branding)),
             f"About {brand}",
         )
         tabs.addTab(

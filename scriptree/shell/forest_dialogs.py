@@ -382,7 +382,7 @@ class FirstRunDialog(QDialog):
                 "I scanned the configured folders and didn't find any "
                 "ScripTree files.  You can add things manually via the "
                 "forest's right-click menu, or change the scan folders "
-                "in Forest settings later.",
+                "later under Sources ▸ App Discovery… in that menu.",
             )
             self.accept()
             return
@@ -554,12 +554,18 @@ class UpdateDiffDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class ForestSettingsDialog(QDialog):
-    """Edit name + auto-discovery config."""
+    """Edit name + auto-discovery config.
+
+    Opened from the forest right-click menu's **Sources ▸ App
+    Discovery…** (the menu entry was renamed from "Forest settings…"
+    in v0.8.0a119; a121 renamed this window title to match so the
+    dialog the user gets is the one the menu promised).
+    """
 
     def __init__(self, controller: "ForestController") -> None:
         super().__init__(controller.forest_window)
         self._controller = controller
-        self.setWindowTitle("Forest settings")
+        self.setWindowTitle("App Discovery")
         self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)

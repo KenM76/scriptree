@@ -3299,8 +3299,12 @@ class CellWindow(QMainWindow):
         # ``_try_spawn_master`` / ``_drop_spawn_member_and_link``.
         self._is_forest_master: bool = bool(is_forest_master)
         # Hook the ForestController registers when this cell is the
-        # forest master — prepends forest-specific items to the
-        # context menu.  See ``_show_context_menu`` for invocation.
+        # forest master — builds the forest's grouped workspace actions
+        # (File / Sources / Settings / Recent layouts / About…, a120
+        # dissolved shape) directly into the hub's context menu.  See
+        # ``_show_context_menu``'s forest branch for invocation order
+        # (after Open…/New, before Exit all) and its hook-failure
+        # fallback (a121).
         self._forest_menu_extension = None  # type: ignore[assignment]
         # v0.8.0a21 — same hook, parallel feature.  When this cell is
         # bound to a ``.scriptreetree``, ``TreeController.attach_to_cell``
@@ -7631,32 +7635,22 @@ class CellWindow(QMainWindow):
     def _show_about(self) -> None:
         """Show the About dialog (long name, tagline, version, build date).
 
-        v0.8.0a117 — extracted from the ``_show_context_menu`` dispatch so
-        BOTH the standard cell menu and the new stripped-down forest-hub
-        menu show an identical About box without duplicating the builder.
-        Uses a ``None`` parent so the dialog gets OS chrome rather than
-        inheriting the cell's translucent/dark palette.
+        v0.8.0a117 — extracted from the ``_show_context_menu`` dispatch.
+        v0.8.0a121 — the body HTML comes from the shared
+        ``branding_loader.about_app_html`` (single source; the forest hub's
+        two-tab About renders the SAME string as its first tab, so the two
+        surfaces can't drift).  Reached from the standard cell menu's
+        "About <brand>" item; the forest hub shows About via the
+        controller-built two-tab "About…" instead.  Uses a ``None`` parent
+        so the dialog gets OS chrome rather than inheriting the cell's
+        translucent/dark palette.
         """
+        from scriptree.shell.branding_loader import about_app_html
+
         brand = self._branding.get("appName", "App")
-        app_name_long = self._branding.get("appNameLong", brand)
-        tagline = self._branding.get("tagline", "")
-        try:
-            from scriptree import __version__ as _ver
-        except Exception:  # noqa: BLE001
-            _ver = "(unknown)"
-        try:
-            from scriptree import __build_date__ as _bd  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            _bd = ""
-        build_line = f"<br><b>Built:</b> {_bd}" if _bd else ""
         msg = QMessageBox(None)
         msg.setWindowTitle(f"About {brand}")
-        msg.setText(
-            f"<b>{app_name_long}</b><br>"
-            f"{tagline}<br><br>"
-            f"<b>Version:</b> {_ver}"
-            f"{build_line}"
-        )
+        msg.setText(about_app_html(self._branding))
         msg.exec()
 
     def _show_context_menu(self, pos) -> None:
@@ -7664,8 +7658,8 @@ class CellWindow(QMainWindow):
         from scriptree.shell import recent_files as _rf
 
         brand = self._branding.get("appName", "App")
-        app_name_long = self._branding.get("appNameLong", brand)
-        tagline = self._branding.get("tagline", "")
+        # (a121: the long-name/tagline locals moved into _show_about /
+        # branding_loader.about_app_html — the only code that used them.)
 
         # Use None parent so the menu gets Win11 system chrome rather than
         # inheriting the CellWindow's translucent/dark palette.
@@ -7702,80 +7696,19 @@ class CellWindow(QMainWindow):
             a QAction or QMenu.  Used where a category-specific glyph
             reads better than the generic Qt standard one (e.g.
             ``ring`` for the Tree Ring submenu instead of
-            SP_DriveNetIcon)."""
+            SP_DriveNetIcon).  a121: the icon comes from the shared,
+            lru-cached ``icon_assets.bundled_qicon`` — one disk load
+            per name per process instead of a path-stat + QIcon build
+            on every right-click."""
             try:
-                from scriptree.shell.icon_assets import (
-                    bundled_icon_png_path,
-                )
-                p = bundled_icon_png_path(name)
-                if p is None:
-                    return
-                ic = QIcon(str(p))
-                if not ic.isNull():
+                from scriptree.shell.icon_assets import bundled_qicon
+                ic = bundled_qicon(name)
+                if ic is not None and not ic.isNull():
                     obj.setIcon(ic)
             except Exception:  # noqa: BLE001
                 pass
 
-        # ---- File type display (read-only, at top) ----
-        # Show "ScripTree: <name>" or "ScripTreeTree: <name>" based on the
-        # extension of the currently-loaded file.  If nothing is loaded,
-        # show a generic "(default)" label.
-        if self._catalog_path is not None:
-            _cp = _Path(self._catalog_path)
-            _ext = _cp.suffix.lower()
-            if _ext == ".scriptreetree":
-                _type_label = f"ScripTreeTree: {_cp.stem}"
-            else:
-                # .scriptree or anything else
-                _type_label = f"ScripTree: {_cp.stem}"
-        else:
-            _type_label = "ScripTree: (default)"
-        catalog_display = menu.addAction(_type_label)
-        catalog_display.setEnabled(False)
-
-        menu.addSeparator()
-
-        # V3 v0.3.15+ — forest hook.  When the cell is the forest
-        # master, ``ForestController`` registers a callback here
-        # that prepends a ``Forest`` submenu with workspace-wide
-        # actions (Save forest, Auto-add, Forest settings, …)
-        # alongside the standard cell context menu.  Non-forest
-        # cells skip this entirely.
-        forest_hook = getattr(self, "_forest_menu_extension", None)
-        if forest_hook is not None:
-            try:
-                # v0.8.0a25+ -- pass ``self`` as the originating cell
-                # so the forest extension can offer cell-specific
-                # actions (uninstall, etc.).  Older
-                # ``_populate_forest_menu`` accepts ``(menu)``
-                # only; the controller's new signature defaults
-                # the cell to None for the back-compat case where
-                # this hook fires before the controller has been
-                # updated.
-                try:
-                    forest_hook(menu, self)
-                except TypeError:
-                    # Hook still on the old 1-arg signature.
-                    forest_hook(menu)
-                menu.addSeparator()
-            except Exception as _exc:  # noqa: BLE001
-                _log(f"forest_menu_extension failed: {_exc!r}")
-
-        # v0.8.0a21+ — parallel hook for ``.scriptreetree``-bound cells.
-        # ``TreeController.attach_to_cell`` installs the callback;
-        # non-tree-bound cells have ``_tree_menu_extension is None``
-        # and skip this block entirely.  Same try/except shape as the
-        # forest hook above so a buggy menu extension never crashes
-        # the right-click — at worst we log and keep going.
-        tree_hook = getattr(self, "_tree_menu_extension", None)
-        if tree_hook is not None:
-            try:
-                tree_hook(menu)
-                menu.addSeparator()
-            except Exception as _exc:  # noqa: BLE001
-                _log(f"tree_menu_extension failed: {_exc!r}")
-
-        # ── Forest hub: a deliberately minimal menu ───────────────
+        # ── Forest hub: a deliberately minimal, curated menu ──────
         # v0.8.0a117 — the forest hub is the user's single workspace
         # ROOT, not a ring.  It must never offer the standard cell
         # operations that could detach its members ("Close ring
@@ -7783,31 +7716,20 @@ class CellWindow(QMainWindow):
         # corruption the user hit, where a summoned-back forest could
         # no longer re-associate its cells — nor the operations that
         # are meaningless for a workspace hub (Load ScripTree, Save
-        # Tree Ring, Spawn another cell).  The ``_forest_menu_extension``
-        # hook above has already prepended the workspace-specific
-        # "Forest" submenu; here we add just:
-        #   * Open…       — load a Tree Ring / ScripTree / ScripTreeTree
-        #                   (dispatched via ``_open_catalog_path``; on the
-        #                   hub — a master — this spawns a NEW cell, it
-        #                   never rebinds the hub, see ``_can_bind_self``).
-        #   * New ▸ Cell  — a fresh blank, unbound cell.
-        # …then About / Settings / Preferences and the single global
-        # "Exit all" (which subsumes the old "Close all related").
-        # Early-return so NONE of the standard cell submenus below are
-        # built or shown for the forest — keeping the hub menu clean and
-        # leaving the (large, unchanged) cell-menu path untouched.
+        # Tree Ring, Spawn another cell).  Early-return so NONE of the
+        # standard cell submenus below are built for the forest.
+        #
+        # v0.8.0a121 ORDER (review fixes): the hub's everyday actions
+        # come FIRST — Open… and New ▸ Cell — then the controller
+        # hook's admin block (File / Sources / Settings / Recent
+        # layouts / Bring cells back / About…, built by
+        # ``_populate_forest_menu`` DIRECTLY into this menu since the
+        # a120 dissolve), then Exit all at the bottom.  The disabled
+        # "ScripTree: (default)" catalog header is SKIPPED for the hub
+        # — the hub can never bind a catalog, so the label was pure
+        # noise as the menu's first line.
         is_forest = getattr(self, "_is_forest_master", False)
         if is_forest:
-            # v0.8.0a120 — the forest's grouped actions (File / Sources /
-            # Settings [incl. More… + Preferences…] / Recent layouts / Bring
-            # cells back / About…) are built by the controller's
-            # ``_forest_menu_extension`` hook (invoked earlier) DIRECTLY into
-            # this menu — the wrapping "Forest" sub-menu is dissolved.  Here we
-            # add ONLY the cell-native actions the hook can't reach: Open…,
-            # New ▸ Cell, and Exit all.  (a117 also had "Settings…",
-            # "Preferences…" and an "About {brand}" here; a120 moved Settings/
-            # Preferences into the hook's Settings sub-menu as "More…"/
-            # "Preferences…", and folded About into the hook's two-tab "About…".)
             forest_open_action = menu.addAction("Open…")
             _seticon(forest_open_action, _SP.SP_DialogOpenButton)
 
@@ -7816,6 +7738,40 @@ class CellWindow(QMainWindow):
             forest_new_cell_action = new_menu.addAction("Cell")
             _seticon_bundled(forest_new_cell_action, "package")
             menu.addMenu(new_menu)
+
+            menu.addSeparator()
+
+            # Controller hook — one plain 2-arg call.  a121 removed the
+            # old ``except TypeError: forest_hook(menu)`` arity sniff:
+            # the controller's hook has accepted ``(menu, cell=None)``
+            # since v0.8.0a25, so a TypeError here is a REAL bug inside
+            # the builder, and re-invoking it used to append a second
+            # copy of the entire dissolved menu.
+            forest_hook = getattr(self, "_forest_menu_extension", None)
+            hook_ok = False
+            if forest_hook is not None:
+                try:
+                    forest_hook(menu, self)
+                    hook_ok = True
+                except Exception as _exc:  # noqa: BLE001
+                    _log(f"forest_menu_extension failed: {_exc!r}")
+
+            # a121 FALLBACK: if the hook is absent or raised, the hub
+            # would otherwise offer nothing but Open…/New/Exit all — no
+            # Settings, no Preferences, no About, and no visible error
+            # (a120 moved those into the hook's Settings sub-menu).
+            # Keep the hub recoverable with the three cell-native
+            # dialogs it can always open itself.
+            fb_about_action = None
+            fb_settings_action = None
+            fb_prefs_action = None
+            if not hook_ok:
+                fb_settings_action = menu.addAction("Settings…")
+                _seticon_bundled(fb_settings_action, "settings")
+                fb_prefs_action = menu.addAction("Preferences…")
+                _seticon_bundled(fb_prefs_action, "settings")
+                fb_about_action = menu.addAction(f"About {brand}")
+                _seticon(fb_about_action, _SP.SP_MessageBoxInformation)
 
             menu.addSeparator()
             exit_all_action = menu.addAction("Exit all")
@@ -7837,9 +7793,49 @@ class CellWindow(QMainWindow):
                 self._open_forest_file_dialog()
             elif chosen == forest_new_cell_action:
                 self._new_blank_cell()
+            elif fb_settings_action is not None and chosen == fb_settings_action:
+                self._open_settings_dialog()
+            elif fb_prefs_action is not None and chosen == fb_prefs_action:
+                self._open_preferences_dialog()
+            elif fb_about_action is not None and chosen == fb_about_action:
+                self._show_about()
             elif chosen == exit_all_action:
                 self._exit_all()
             return
+
+        # ---- File type display (read-only, at top; non-forest only) ----
+        # Show "ScripTree: <name>" or "ScripTreeTree: <name>" based on the
+        # extension of the currently-loaded file.  If nothing is loaded,
+        # show a generic "(default)" label.
+        if self._catalog_path is not None:
+            _cp = _Path(self._catalog_path)
+            _ext = _cp.suffix.lower()
+            if _ext == ".scriptreetree":
+                _type_label = f"ScripTreeTree: {_cp.stem}"
+            else:
+                # .scriptree or anything else
+                _type_label = f"ScripTree: {_cp.stem}"
+        else:
+            _type_label = "ScripTree: (default)"
+        catalog_display = menu.addAction(_type_label)
+        catalog_display.setEnabled(False)
+
+        menu.addSeparator()
+
+        # v0.8.0a21+ — hook for ``.scriptreetree``-bound cells.
+        # ``TreeController.attach_to_cell`` installs the callback;
+        # non-tree-bound cells have ``_tree_menu_extension is None``
+        # and skip this block entirely.  try/except so a buggy menu
+        # extension never crashes the right-click — at worst we log
+        # and keep going.  (The FOREST hook is invoked inside the
+        # forest branch above — only the hub ever carries it.)
+        tree_hook = getattr(self, "_tree_menu_extension", None)
+        if tree_hook is not None:
+            try:
+                tree_hook(menu)
+                menu.addSeparator()
+            except Exception as _exc:  # noqa: BLE001
+                _log(f"tree_menu_extension failed: {_exc!r}")
 
         # v0.8.0a117 — a PLAIN MEMBER cell (a single tool docked under a
         # forest or a ring: ``role != "master"`` AND grouped under a
@@ -7854,11 +7850,24 @@ class CellWindow(QMainWindow):
         # (The forest hub took the early-return above and never reaches
         # here.)  The two submenu objects are still BUILT below so the
         # shared exec-dispatch never references an undefined action name;
-        # they are only ATTACHED to the menu when ``not is_plain_member``.
-        is_plain_member = (
-            self.role != "master"
-            and self._group_master_id is not None
-        )
+        # they are only ATTACHED to the menu when ``not is_plain_member``,
+        # and (a121) their per-click disk/registry reads are skipped too.
+        #
+        # a121 (review fix): resolve ``_group_master_id`` in the registry
+        # instead of trusting it raw — a cell orphaned by a master that
+        # closed through an exceptional teardown (or restored from a
+        # sidecar whose master never respawned) carries a STALE id.  Such
+        # a cell is effectively standalone and must keep its catalog/ring
+        # submenus, or the user has no way to rebind or save it.  Same
+        # registry-``get`` resolution the forest-membership check below
+        # uses (a single live-cell lookup — "two-prong" is the different,
+        # sidecar-matching pattern elsewhere in the codebase).
+        is_plain_member = False
+        if self.role != "master" and self._group_master_id is not None:
+            from scriptree.shell.cell_registry import CellRegistry as _CR0
+            is_plain_member = (
+                _CR0.instance().get(self._group_master_id) is not None
+            )
 
         # ── ScripTree submenu ─────────────────────────────────────
         # Groups all load / save / clear catalog actions plus the
@@ -7877,8 +7886,10 @@ class CellWindow(QMainWindow):
 
         # "Open recent" submenu — last 10 entries per type, merged and
         # sorted most-recent first.  Each entry shows filename + full path.
-        recent_tool_paths = _rf.get_scriptree()
-        recent_tree_paths = _rf.get_scriptreetree()
+        # a121 — a plain member never SHOWS this submenu (not attached),
+        # so skip its two per-click QSettings/disk reads entirely.
+        recent_tool_paths = [] if is_plain_member else _rf.get_scriptree()
+        recent_tree_paths = [] if is_plain_member else _rf.get_scriptreetree()
         all_recent: list[str] = []
         # Interleave: each list is already most-recent-first.  We merge them
         # by prepending each list's items alternately, preserving MRU order
@@ -7977,16 +7988,21 @@ class CellWindow(QMainWindow):
         )
         autoload_system_action.setCheckable(True)
 
-        # Determine which state is current.
+        # Determine which state is current.  a121 — the two
+        # list_autoload_rings calls each re-read the autoload config
+        # from disk; a plain member never shows this submenu, so skip
+        # the reads (the checkmarks then default to Disabled, which is
+        # fine for a menu that is never attached).
         saved_path = getattr(self, "_saved_ring_path", None)
         user_paths = []
         sys_paths = []
-        try:
-            from scriptree.shell.ring_io import list_autoload_rings
-            user_paths = [str(p) for p in list_autoload_rings("user")]
-            sys_paths  = [str(p) for p in list_autoload_rings("system")]
-        except Exception:
-            pass
+        if not is_plain_member:
+            try:
+                from scriptree.shell.ring_io import list_autoload_rings
+                user_paths = [str(p) for p in list_autoload_rings("user")]
+                sys_paths  = [str(p) for p in list_autoload_rings("system")]
+            except Exception:
+                pass
 
         in_user   = saved_path is not None and str(saved_path) in user_paths
         in_system = saved_path is not None and str(saved_path) in sys_paths
@@ -8132,6 +8148,11 @@ class CellWindow(QMainWindow):
             )
 
         chosen = menu.exec(pos)
+        # a121 — explicit dismiss guard: with the menu closed without a
+        # selection, ``chosen`` is None; bail before any ``chosen ==``
+        # comparison so a None-valued action variable can never match.
+        if chosen is None:
+            return
 
         if chosen == load_scriptree_action:
             self._load_catalog_dialog(prefer_ext=".scriptree")
@@ -8388,6 +8409,22 @@ class CellWindow(QMainWindow):
             except Exception as exc:
                 _log(f"_autoload_disable: remove_autoload_ring({scope}) failed: {exc!r}")
 
+    @staticmethod
+    def _catalog_dialog_start_dir() -> str:
+        """Directory every catalog open-dialog starts in.
+
+        a121 — extracted so the forest hub's unified "Open…"
+        (:meth:`_open_forest_file_dialog`) and the standard cell's
+        "Load ScripTree…" (:meth:`_load_catalog_dialog`) share ONE
+        definition instead of two copies of the same three-parent
+        path walk.  Points at ``<project-root>/sample-catalog``;
+        QFileDialog quietly falls back to the last-used directory
+        when the path doesn't exist, so no existence check needed.
+        """
+        from pathlib import Path as _Path
+        project_root = _Path(__file__).resolve().parent.parent.parent
+        return str(project_root / "sample-catalog")
+
     def _open_forest_file_dialog(self) -> None:
         """Forest-hub 'Open…' — one dialog that opens a Tree Ring, a
         ScripTree, or a ScripTreeTree file.
@@ -8409,11 +8446,9 @@ class CellWindow(QMainWindow):
         it in), honouring the rule that the forest never silently absorbs
         cells.
         """
-        from pathlib import Path as _Path
         from PySide6.QtWidgets import QFileDialog
 
-        project_root = _Path(__file__).resolve().parent.parent.parent
-        start_dir = str(project_root / "sample-catalog")
+        start_dir = self._catalog_dialog_start_dir()
 
         _F_ALL  = (
             "All openable files "
@@ -8453,11 +8488,8 @@ class CellWindow(QMainWindow):
         selects that filter by default in the dialog.  The user can
         still switch filters to pick the other type.
         """
-        from pathlib import Path as _Path
-
-        # Start in the sample-catalog directory if it exists.
-        project_root = _Path(__file__).resolve().parent.parent.parent
-        start_dir = str(project_root / "sample-catalog")
+        # Start in the shared sample-catalog directory (a121: one helper).
+        start_dir = self._catalog_dialog_start_dir()
 
         _FILTER_TOOL = "ScripTree files (*.scriptree)"
         _FILTER_TREE = "ScripTreeTree files (*.scriptreetree)"
@@ -9085,20 +9117,23 @@ class CellWindow(QMainWindow):
         Create a new standalone ``CellWindow`` bound to ``catalog_path``
         (``None`` = blank).  The new hex starts from branding defaults
         (fresh UUID, no persisted settings), is positioned +120 logical px
-        right of this window and clamped to the primary screen's available
-        area, then wired into the running SnapEngine so drag-docking
-        engages.
+        right of this window and clamped to THIS window's screen (a121 —
+        ``screenAt(self.pos())`` with a primary-screen fallback, the
+        codebase-wide multi-monitor idiom; the old ``primaryScreen()``
+        clamp yanked the new cell onto the primary monitor whenever the
+        spawning cell lived on a secondary one), then wired into the
+        running SnapEngine so drag-docking engages.
         """
-        from scriptree.shell.cell_registry import CellRegistry  # noqa: F401
-
         # Offset: +120 logical px horizontally from this window's top-left.
         offset_x = 120
         offset_y = 0
         new_x = self.pos().x() + offset_x
         new_y = self.pos().y() + offset_y
 
-        # Clamp to screen working area.
-        screen = QApplication.primaryScreen()
+        # Clamp to the working area of the screen this cell is ON.
+        screen = QApplication.screenAt(self.pos())
+        if screen is None:
+            screen = QApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
             new_x = max(avail.left(), min(new_x, avail.right() - self._size_px))

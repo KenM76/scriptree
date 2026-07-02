@@ -155,21 +155,33 @@ Discover & populate runs the walker once and applies all results
 unconditionally — first-run is intentionally one-click; the user
 can tidy via the right-click menu after.
 
-## Right-click menu
+## Right-click menu (v0.8.0a117–a121 shape)
 
-The visible forest cell's context menu offers:
+The forest hub's context menu is a curated, grouped set (the pre-a117
+flat list and the a119 "Forest" wrapper submenu are both gone — the
+groups now sit directly in the menu, everyday actions first):
 
-* **Save forest** / **Save forest as…** / **Open forest…**
-* **Refresh from sources** — manual discovery + apply per the
-  configured `update_mode`.
-* **Auto-add from ScripTreeApps now** — force-runs the prompt
-  dialog regardless of `update_mode` (useful when `update_mode` is
-  `"off"` and you want a one-off discovery without changing the
-  setting permanently).
-* **Forest settings…** — edit `name` + everything in `auto_discover`.
-* **Manage excluded items…** — list view of `excluded` with
-  per-row Re-include / Forget buttons.
-* **About this forest** — summary of state.
+* **Open…** — one dialog that opens a `.scriptreering`, `.scriptree`,
+  or `.scriptreetree` (always spawns a NEW cell; it can never rebind
+  the hub itself).
+* **New ▸ Cell** — a fresh blank, unbound cell (not force-docked).
+* **File ▸** — **Save forest** / **Save forest as…** / **Open forest…**,
+  **Save layout** (quick-save to the remembered `.scriptreelayout`) /
+  **Save layout as…** / **Open layout…**, **Make a portable copy…**,
+  **Convert this install to portable…**.
+* **Sources ▸** — **Refresh from sources** (manual discovery + apply
+  per the configured `update_mode`), **Auto-add from ScripTreeApps
+  now** (force-runs the prompt dialog regardless of `update_mode`),
+  **Re-organise**, **App Discovery…** (edit `name` + everything in
+  `auto_discover`; this was called "Forest settings…" before a119),
+  **Manage excluded items…** (list view of `excluded` with per-row
+  Re-include / Forget buttons).
+* **Settings ▸** — **Visibility**, **Auto-load on startup**, **Debug**,
+  **More…** (the hub cell's own Shape/Colours/Label options), and
+  **Preferences…**.
+* **Recent layouts ▸** — MRU list of `.scriptreelayout` files.
+* **Bring all cells back on-screen**, **About…** (two tabs: About
+  ScripTree + This forest), and **Exit all** at the bottom.
 
 ## Per-user autoload
 
@@ -193,10 +205,12 @@ Two specific exemptions distinguish it from a regular master:
 
   1. ``_check_master_validity`` skips it (forest persists with 0
      members; a normal master with < 2 members tears itself down).
-  2. The right-click menu prepends a ``Forest`` submenu via the
-     ``_forest_menu_extension`` hook — workspace-level actions
-     (Save forest, Auto-add, Forest settings, …) on top of the
-     standard cell menu.
+  2. The right-click menu is REPLACED, not extended: the hub takes a
+     dedicated branch in ``_show_context_menu`` (no ring/cell
+     submenus, which could detach members), and the
+     ``_forest_menu_extension`` hook builds the workspace groups
+     (File / Sources / Settings / Recent layouts / About…, see
+     "Right-click menu" above) directly into that menu.
 
 ### Two-level groups
 
