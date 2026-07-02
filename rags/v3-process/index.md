@@ -81,6 +81,14 @@ diagnostics conventions.
   and had to revert. Ask before editing; consult
   `docs/LLM/glossary.md`; quote the referent back to confirm.
   → `rags/lessons/vocabulary_disambiguation_before_editing.md`
+- [v3-process] **lib_pypi_repo_size_tradeoff**: vendoring the render
+  stack (ezdxf+matplotlib+numpy+Pillow+fonttools+deps) adds ~115 MB to
+  lib/pypi. lib/pypi is NOT gitignored. Committing bloats the public repo
+  with SolidWorks-private deps nobody else can use. Three options: (A) commit
+  everything; (B) gitignore tool-specific packages; (C) separate
+  lib/pypi_tool_deps/ dir. UNRESOLVED — Ken decides. Holding pattern: deploy
+  to D:+R: but don't commit until decided.
+  → `rags/lessons/lib_pypi_repo_size_tradeoff.md`
 - [v3-process] **pip_target_existing_dir_clobbers_siblings**:
   ``pip install --target lib/pypi`` into the live vendor dir
   silently DELETES sibling-package files (PySide6 .exe entries

@@ -124,12 +124,52 @@ def _prepend_sys_path(directory: str) -> None:
     sys.path.insert(0, absdir)
 
 
+def _remove_shim_dir_from_path() -> None:
+    """Drop THIS shim's own directory (``scriptree/core``) from ``sys.path``.
+
+    When ScripTree spawns a tool it runs ``python <this-file> tool.py``,
+    so the interpreter auto-inserts the shim's directory —
+    ``scriptree/core`` — at ``sys.path[0]`` (Python's normal
+    "directory of the script being run" behaviour).
+
+    That directory is a PACKAGE dir full of modules whose top-level
+    names collide with the stdlib: ``platform.py`` (i.e.
+    ``scriptree.core.platform``), ``io.py``, and friends.  Leaving it on
+    ``sys.path`` means a tool — or, more insidiously, a *library the
+    tool imports* — that does a bare ``import platform`` / ``import io``
+    resolves it to ScripTree's package module instead of the stdlib.
+    The real-world symptom was ezdxf's font manager doing
+    ``platform.system()`` and dying with
+    ``AttributeError: module 'platform' has no attribute 'system'``.
+
+    The shim has finished importing everything it needs by the time it
+    hands control to the tool, so removing its own dir is safe — and it
+    is exactly the mess the shim exists to prevent for the tool's OWN
+    siblings.  Idempotent; case-folded absolute-path comparison so
+    ``C:\\Foo`` and ``c:/foo`` match on Windows; exception-safe per entry.
+    """
+    try:
+        shim_dir = os.path.dirname(os.path.abspath(__file__))
+    except (OSError, ValueError, NameError):
+        return
+    key = os.path.normcase(shim_dir)
+    kept = []
+    for entry in sys.path:
+        try:
+            if os.path.normcase(os.path.abspath(entry or ".")) == key:
+                continue  # this is the shim's own dir — drop it
+        except (OSError, ValueError):
+            pass
+        kept.append(entry)
+    sys.path[:] = kept
+
+
 def _setup_sys_path_for_tool(tool_script: str) -> None:
     """Apply the two ``sys.path`` prepends documented at the top of
-    this file.  Order matters: the tool's own folder lands at
-    ``sys.path[0]`` so ``import _sibling`` resolves to the file
-    next to the tool, not to a same-named module elsewhere on
-    PYTHONPATH or in the stdlib.
+    this file, then drop the shim's own directory.  Order matters: the
+    tool's own folder lands at ``sys.path[0]`` so ``import _sibling``
+    resolves to the file next to the tool, not to a same-named module
+    elsewhere on PYTHONPATH or in the stdlib.
     """
     # 1. SCRIPTREE_TOOL_DIR — the .scriptree's parent directory.
     #    Set by ``runner.inject_tool_dir_env`` for ScripTree-launched
@@ -151,6 +191,12 @@ def _setup_sys_path_for_tool(tool_script: str) -> None:
     script_dir = os.path.dirname(script_abs)
     if script_dir and os.path.isdir(script_dir):
         _prepend_sys_path(script_dir)
+
+    # 3. Finally, evict the shim's OWN directory (scriptree/core) that
+    #    Python auto-added at sys.path[0]. It holds stdlib-shadowing
+    #    package modules (platform.py, io.py, ...) that must never be
+    #    visible to a spawned tool or the libraries it imports.
+    _remove_shim_dir_from_path()
 
 
 def main() -> int:

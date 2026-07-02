@@ -198,6 +198,49 @@ class TestShimEndToEnd:
         assert "main.py" in result.stdout
         assert "_runtime_shim.py" not in result.stdout
 
+    def test_shim_evicts_own_dir_so_stdlib_wins(self, tmp_path: Path) -> None:
+        """Regression: the shim lives in ``scriptree/core``, which holds
+        package modules whose top-level names shadow the stdlib —
+        ``platform.py`` (``scriptree.core.platform``), ``io.py``, etc.
+        Python auto-inserts the shim's own directory at ``sys.path[0]``;
+        if the shim doesn't evict it, a spawned tool — or, worse, a
+        third-party library the tool imports (real case: ezdxf's font
+        manager calling ``platform.system()``) — resolves a bare
+        ``import platform`` to ScripTree's module and dies with
+        ``AttributeError: module 'platform' has no attribute 'system'``.
+
+        The tool below imports the stdlib ``platform``; it must get the
+        real one, not ``scriptree/core/platform.py``.
+        """
+        main = tmp_path / "main.py"
+        main.write_text(
+            "import platform\n"
+            "print('PLATFORM_FILE', platform.__file__)\n"
+            "print('HAS_SYSTEM', hasattr(platform, 'system'))\n"
+            "print('SYSTEM', platform.system())\n",
+            encoding="utf-8",
+        )
+        env = {
+            k: v for k, v in os.environ.items()
+            if k.upper() in ("SYSTEMROOT", "PATH", "PATHEXT", "TEMP", "TMP",
+                             "USERPROFILE", "WINDIR", "COMSPEC")
+        }
+        result = subprocess.run(
+            [str(_BUNDLED_PY), str(_SHIM), str(main)],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        assert result.returncode == 0, (
+            f"shim failed resolving stdlib platform:\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+        )
+        assert "HAS_SYSTEM True" in result.stdout
+        # The stdlib platform must win, NOT scriptree/core/platform.py.
+        core_dir = str((REPO / "scriptree" / "core").resolve())
+        assert core_dir not in result.stdout, (
+            "tool imported ScripTree's scriptree/core/platform.py instead "
+            f"of the stdlib:\n{result.stdout}"
+        )
+
     def test_shim_works_when_sitecustomize_missing(
         self, tmp_path: Path,
     ) -> None:

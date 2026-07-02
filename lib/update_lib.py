@@ -32,12 +32,19 @@ See ``lib/README.md`` for the rationale and full workflow.
 """
 from __future__ import annotations
 
+import sys
+
+# No-bytecode policy (docs/LLM/no_bytecode_policy.md): this maintenance script
+# runs INSIDE the install tree (often a cloud-synced R:\ / OneDrive folder), so
+# it must never leave .pyc files behind. Set before any further import so the
+# interpreter compiles in memory and discards.
+sys.dont_write_bytecode = True
+
 import argparse
 import datetime as _dt
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -318,6 +325,41 @@ TRIM_PLUGINS_KEEP = {
 }
 
 
+# --- Generic vendor trim (applies to EVERY vendored package, not just Qt) ---
+#
+# ``pip install --target`` drops runtime-irrelevant weight into lib/pypi:
+#   * ``__pycache__/`` bytecode — and this one is not merely wasteful, it
+#     VIOLATES the no-bytecode policy (docs/LLM/no_bytecode_policy.md).  A
+#     ScripTree install commonly lives on a cloud-synced drive (R:\ScripTree is
+#     a subst for a Dropbox folder; OneDrive installs are supported).  Hundreds
+#     of ``.pyc`` files inside that tree make the sync client flood its queue
+#     and hang 15-30 s per launch.  ``cmd_install`` now passes ``--no-compile``
+#     so fresh vendoring never writes them, and this trim strips any that a
+#     manual ``pip install`` (without the flag) left behind.
+#   * ``tests/`` suites — never imported at runtime (numpy alone ships ~14 MB).
+#   * ``*.pyi`` stubs — IDE/type-checker only.
+#   * per-package build/example extras (C headers, sample datasets).
+#
+# Making this part of ``--trim`` means a re-vendor + ``--trim`` reproduces a
+# lean, sync-safe lib/pypi rather than re-accumulating the bloat.
+
+# Directory BASENAMES removed anywhere under lib/pypi.  NOTE: ``testing`` is
+# deliberately absent — ``numpy.testing`` is public runtime API.  Only the
+# literal ``tests`` / ``test`` collection dirs go.
+GENERIC_TRIM_DIR_NAMES = {"__pycache__", "tests", "test"}
+
+# File globs removed anywhere under lib/pypi.  ``.pyi`` stubs are type-checker
+# hints only; ``py.typed`` markers are kept (they're not ``.pyi``).
+GENERIC_TRIM_FILE_GLOBS = {"*.pyi"}
+
+# Package-specific extras (paths relative to the top-level package dir) that are
+# build-time or example-only.  Conservative on purpose — only clearly-safe dirs.
+GENERIC_TRIM_PACKAGE_EXTRAS = {
+    "numpy": ["_core/include"],            # C headers for building against numpy
+    "matplotlib": ["mpl-data/sample_data"],  # example datasets, not needed to render
+}
+
+
 def _matches(name: str, patterns: set[str]) -> bool:
     """Return True if ``name`` matches any glob in ``patterns``."""
     import fnmatch
@@ -380,8 +422,64 @@ def _human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+def _trim_generic(
+    pypi_dir: Path, dry_run: bool = False
+) -> tuple[int, list[tuple[Path, int]]]:
+    """Strip runtime-irrelevant weight from EVERY vendored package.
+
+    Removes ``__pycache__`` (no-bytecode policy), ``tests``/``test`` dirs,
+    ``*.pyi`` stubs, and the per-package extras in
+    ``GENERIC_TRIM_PACKAGE_EXTRAS``.  Walks bottom-up so a ``__pycache__``
+    nested inside a ``tests`` dir isn't double-counted.  Idempotent.
+
+    With ``dry_run`` the sizes are tallied but nothing is deleted.
+
+    Returns ``(bytes_freed, [(path, size), ...])``.
+    """
+    import os
+
+    removed: list[tuple[Path, int]] = []
+    seen: set[Path] = set()
+
+    def _rm(p: Path) -> None:
+        if p in seen or not p.exists():
+            return
+        seen.add(p)
+        size = _dir_size(p)
+        if not dry_run:
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
+            except OSError as e:  # noqa: BLE001
+                print(f"  SKIP (error): {p} — {e}", file=sys.stderr)
+                return
+        removed.append((p, size))
+
+    for root, dirs, files in os.walk(pypi_dir, topdown=False):
+        rp = Path(root)
+        for d in list(dirs):
+            if d in GENERIC_TRIM_DIR_NAMES:
+                _rm(rp / d)
+        for f in files:
+            if _matches(f, GENERIC_TRIM_FILE_GLOBS):
+                _rm(rp / f)
+
+    for pkg, rels in GENERIC_TRIM_PACKAGE_EXTRAS.items():
+        base = pypi_dir / pkg
+        if not base.is_dir():
+            continue
+        for rel in rels:
+            _rm(base / rel)
+
+    freed = sum(s for _, s in removed)
+    return freed, removed
+
+
 def cmd_trim(args: argparse.Namespace) -> int:
-    """Remove unused Qt modules from lib/pypi/PySide6/.
+    """Trim lib/pypi: unused Qt modules from PySide6/ + a generic pass over
+    EVERY vendored package (``__pycache__``, ``tests``, ``*.pyi``, extras).
 
     Runs idempotently — re-running after a fresh install is safe.
     Writes a log to lib/_manifests/trim_log.md.
@@ -435,15 +533,24 @@ def cmd_trim(args: argparse.Namespace) -> int:
     total_freed = sum(s for _, s in sized)
 
     if args.dry_run:
-        print(f"\n-- dry run: would remove {len(sized)} item(s) --\n")
+        print(f"\n-- dry run: would remove {len(sized)} item(s) from PySide6 --\n")
         for p, size in sized:
             print(f"  {_human_size(size):>10s}  {p.relative_to(pyside)}")
-        print(f"\n  total to free: {_human_size(total_freed)}")
+        print(f"\n  total to free (PySide6): {_human_size(total_freed)}")
         print(f"  PySide6 current size: {_human_size(total_before)}")
         print(
             f"  PySide6 after trim:   "
             f"~{_human_size(total_before - total_freed)}"
         )
+        gfreed, gitems = _trim_generic(PYPI_DIR, dry_run=True)
+        print(f"\n-- dry run: would remove {len(gitems)} generic item(s) "
+              f"(__pycache__ / tests / *.pyi / extras) across lib/pypi --\n")
+        for p, size in sorted(gitems, key=lambda t: -t[1])[:25]:
+            print(f"  {_human_size(size):>10s}  {p.relative_to(PYPI_DIR)}")
+        if len(gitems) > 25:
+            print(f"  ... and {len(gitems) - 25} more")
+        print(f"\n  total to free (generic): ~{_human_size(gfreed)}")
+        print(f"  lib/pypi current size: {_human_size(_dir_size(PYPI_DIR))}")
         return 0
 
     print(f"\n-- trimming {len(sized)} item(s) from PySide6 --\n")
@@ -464,9 +571,26 @@ def cmd_trim(args: argparse.Namespace) -> int:
     total_after = _dir_size(pyside)
     freed = total_before - total_after
     print(
-        f"\nBefore: {_human_size(total_before)}  "
+        f"\nPySide6 — Before: {_human_size(total_before)}  "
         f"After: {_human_size(total_after)}  "
         f"Freed: {_human_size(freed)}"
+    )
+
+    # Generic pass over the whole vendor dir (all packages).
+    pypi_before = _dir_size(PYPI_DIR)
+    print(f"\n-- generic trim across lib/pypi "
+          f"(__pycache__ / tests / *.pyi / extras) --\n")
+    gfreed, gitems = _trim_generic(PYPI_DIR)
+    generic_log: list[str] = []
+    for p, size in sorted(gitems, key=lambda t: -t[1]):
+        rel = p.relative_to(PYPI_DIR)
+        generic_log.append(f"| {rel} | {_human_size(size)} |")
+    pypi_after = _dir_size(PYPI_DIR)
+    print(f"  removed {len(gitems)} item(s)")
+    print(
+        f"lib/pypi — Before: {_human_size(pypi_before)}  "
+        f"After: {_human_size(pypi_after)}  "
+        f"Freed: {_human_size(pypi_before - pypi_after)}"
     )
 
     # Write trim log.
@@ -479,16 +603,25 @@ def cmd_trim(args: argparse.Namespace) -> int:
         f"- **Platform:** {sys.platform}\n"
         f"- **PySide6 size before:** {_human_size(total_before)}\n"
         f"- **PySide6 size after:** {_human_size(total_after)}\n"
-        f"- **Space freed:** {_human_size(freed)}\n\n"
+        f"- **PySide6 freed:** {_human_size(freed)}\n"
+        f"- **lib/pypi size before generic trim:** {_human_size(pypi_before)}\n"
+        f"- **lib/pypi size after generic trim:** {_human_size(pypi_after)}\n"
+        f"- **Generic freed:** {_human_size(pypi_before - pypi_after)}\n\n"
         f"## Kept Qt modules\n\n"
         + "".join(f"- `{m}`\n" for m in sorted(TRIM_KEEP_MODULES))
         + "\n"
         f"## Kept Qt plugin directories\n\n"
         + "".join(f"- `{p}`\n" for p in sorted(TRIM_PLUGINS_KEEP))
         + "\n"
-        f"## Removed items\n\n"
+        f"## Removed PySide6 items\n\n"
         f"| Path | Size |\n|---|---|\n"
-        + "\n".join(removed_log) + "\n"
+        + "\n".join(removed_log) + "\n\n"
+        f"## Removed generic items (all packages)\n\n"
+        f"Categories: `__pycache__` (no-bytecode policy), `tests`/`test`, "
+        f"`*.pyi`, and per-package extras "
+        f"({', '.join(sorted(GENERIC_TRIM_PACKAGE_EXTRAS))}).\n\n"
+        f"| Path | Size |\n|---|---|\n"
+        + "\n".join(generic_log) + "\n"
     )
     log_path.write_text(log_content, encoding="utf-8")
     print(f"\nTrim log: {log_path}")
@@ -519,6 +652,11 @@ def cmd_install(args: argparse.Namespace) -> int:
     PYPI_DIR.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "pip", "install",
+        # --no-compile: never write .pyc into the install tree. Bytecode in a
+        # cloud-synced ScripTree (R:\ Dropbox, OneDrive) triggers sync storms —
+        # see docs/LLM/no_bytecode_policy.md. `--trim` also strips any that a
+        # manual pip run left behind.
+        "--no-compile",
         "--target", str(PYPI_DIR),
         "--upgrade" if args.upgrade else "--no-deps",
         "-r", str(REQUIREMENTS),

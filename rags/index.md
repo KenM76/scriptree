@@ -857,3 +857,66 @@ gives the per-topic slice.
   QPropertyAnimation is a WRITE-LATER — reading widget.pos() in the same turn you started a pos
   animation gives the OLD value; read endValue() or defer past the animation duration.
   → `rags/lessons/bloom_relocation_capture_race_a113.md`
+
+- [v3-architecture] **self_contained_python_tool_recipe**: portable .scriptree
+  Python tool recipe: `"executable": "%SCRIPTREE_LIB_PYTHON%/python.exe"`;
+  `"working_directory": "./."` for co-located scripts; do NOT use `-3.12`
+  (py-launcher flag rejected by python.exe). expandvars applied to
+  executable/wd/path_prepend at runner.py:resolve_tool_path. Five published
+  env vars: SCRIPTREE_HOME/LIB/LIB_PYPI/LIB_PYTHON/APPS.
+  → `rags/lessons/self_contained_python_tool_recipe.md`
+- [v3-architecture] **vendoring_tool_deps_into_lib_pypi**: install tool deps
+  with the BUNDLED interpreter for ABI match (cp314). Pin exact versions in
+  lib/requirements.txt. Runtime import requires explicit `sys.path.insert(0,
+  os.environ["SCRIPTREE_LIB_PYPI"])` — PYTHONPATH is ignored. Two-tree
+  deploy applies to lib/ too.
+  → `rags/lessons/vendoring_tool_deps_into_lib_pypi.md`
+- [v3-architecture] **embeddable_python_ignores_pythonpath**: GOTCHA — bundled
+  embeddable Python ignores PYTHONPATH (python314._pth disables site.py).
+  `PYTHONPATH=lib/pypi python -c "import numpy"` fails silently. Fix:
+  `sys.path.insert(0, os.environ["SCRIPTREE_LIB_PYPI"])` inside every tool
+  script. Empirically verified.
+  → `rags/lessons/embeddable_python_ignores_pythonpath.md`
+- [v3-architecture] **combridge_finder_scriptree_home_first**: canonical
+  combridge.exe discovery order for tool scripts: SCRIPTREE_COMBRIDGE override
+  → SCRIPTREE_HOME/lib/combridge → SCRIPTREE_LIB/combridge → PATH (prepended
+  by ScripTree) → D:/R: fallback. Validate SW plugin DLL; use bare
+  "combridge.exe" in .scriptree executable fields.
+  → `rags/lessons/combridge_finder_scriptree_home_first.md`
+- [v3-architecture] **drawing_gen_sw_bridge_to_combridge**: drawing-gen migrated
+  sw_bridge.exe (OneDrive-only, never bundled) → combridge. .csx ported verbatim
+  (same globals injected). Launcher: `sw_bridge.exe run-script <csx> <out>` →
+  `combridge solidworks run-script <csx> <out>`. Mirrors dxf_export.py migration.
+  → `rags/lessons/drawing_gen_sw_bridge_to_combridge.md`
+- [v3-process] **lib_pypi_repo_size_tradeoff**: render-stack vendoring adds
+  ~115 MB to lib/pypi (not gitignored). UNRESOLVED trade-off: commit everything
+  vs gitignore tool-specific wheels vs separate lib/pypi_tool_deps/ dir. Holding
+  pattern: deploy to D:+R: but don't commit until Ken decides.
+  → `rags/lessons/lib_pypi_repo_size_tradeoff.md`
+- [v3-architecture][git][release][hygiene][windows] **release_hygiene_two_remotes_gitignore_untrack**:
+  a116 (Ken: "release to git") — the runbook for a `main` release. FIVE gotchas: (1) TWO remotes —
+  `main` pushes to BOTH `internal` (private) and `public` (github.com/KenM76/scriptree); (2)
+  `.gitignore` does NOT untrack already-tracked files — `scriptree.ini` (machine paths, since ~a1)
+  and `scriptree/resources/concepts/01-05` (design art, since v0.1.15 fork) were tracked from before
+  and needed `git rm --cached`; scanning the DELTA misses them, sweep the whole tree with
+  `git ls-tree -r HEAD --name-only | grep -iE 'concepts/|^scriptree\.ini$|sw_bridge|\.csx$'`; (3)
+  verification must GATE the push (`if grep -q …; then abort; else push; fi`) — a bare `&&/|| echo`
+  does NOT stop `git push`; (4) Windows `json.load(sys.stdin)` decodes cp1252 → em-dash/arrow DOUBLE-
+  encode to mojibake in the commit subject; read files as `encoding='utf-8'` + `PYTHONIOENCODING=utf-8`;
+  (5) source push ≠ release zip — `make_portable.py` bundles SolidWorks SDK interop DLLs that must be
+  stripped before `gh release create`. Commit from the MAIN tree on `main`, never a stale worktree.
+  → `rags/lessons/release_hygiene_two_remotes_gitignore_untrack_a116.md`
+
+- [v3-architecture][review][data-loss][menus][testing] **menu_review_fix_batch_a121**:
+  a121 — the 44-finding max-effort review-fix batch of the a117-a120 menu overhaul. Reusable
+  rules: quick-save-to-remembered-path features need THREE guards (garbage-state capture, e.g.
+  collapsed forest -> (0,0) offsets; only arm the target after a SUCCESSFUL apply; clear the
+  target on workspace switch); silent log-only failure after an explicit user gesture is a bug
+  (mirror the twin's QMessageBox); menu hooks need a hook_ok + cell-native FALLBACK (and never
+  except-TypeError arity-sniff a callable you own — an internal TypeError re-ran the whole
+  builder and duplicated the menu); getattr(obj,'name',None) hides dead features (Uninstall read
+  catalog_path; only _catalog_path exists); resolve stored ids in the registry at decision time;
+  after a structural menu/tree change grep tests for positional accessors (actions()[0] silently
+  degraded carry_icons); every ForestController test needs the prefs/autoload isolation fixture;
+  never use fake drive letters in tests (Z:/ was a real blocked share -> OSError in resolve()).
+  -> `rags/lessons/menu_review_fix_batch_a121.md`

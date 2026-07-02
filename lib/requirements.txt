@@ -28,3 +28,13 @@ PySide6-QtAds==4.5.0.2
 # the regex helper dialog's "Library" tab to give users one-click
 # access to common patterns.  MIT licensed.  No transitive deps.
 CommonRegex==1.5.4
+
+# NOTE: the SolidWorks DXF-export render stack (ezdxf, matplotlib,
+# Pillow, numpy, fonttools, ...) is deliberately NOT vendored here.
+# Those tools are private and are NOT part of the public release zip,
+# so their ~90 MB of binary wheels have no business in the shared,
+# committed lib/pypi.  They ship WITH the tools instead, in
+# `ScripTreeApps/SolidWorks/Export/SwDxfExport/_vendor/`, and each
+# tool inserts that dir on sys.path at runtime (see the tool scripts'
+# `_ensure_scriptree_lib_on_path`).  Keep this file to ScripTree's own
+# GUI runtime deps only.

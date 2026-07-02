@@ -4,6 +4,15 @@ V1↔V3 layering, single-instance handoff, master cells, the
 .scriptreering format, and the v0.2.7 cell-metadata-in-catalog
 design.
 
+- [v3-architecture] **shim_leaks_core_dir_shadowing_stdlib**: the
+  runtime shim (`scriptree/core/_runtime_shim.py`) left its own dir
+  `scriptree/core` on the spawned tool's `sys.path`; that dir has
+  `platform.py`/`io.py` (package submodules) which SHADOW the stdlib,
+  so a tool (or a lib it imports — ezdxf) doing `import platform`
+  crashed with `module 'platform' has no attribute 'system'`. Fix:
+  shim now evicts its own dir. Regression test added.
+  → `rags/lessons/shim_leaks_core_dir_shadowing_stdlib.md`
+
 - [v3-architecture] **auto_organise_doubles_path_segment**: the
   category auto-organise generator writes leaf paths with a
   doubled `ScripTree/Apps/` segment because it computes
@@ -329,3 +338,44 @@ design.
   cells are clamped; group members are left to their master's repack.
   Clamping members independently stacks them. Fix (a72).
   → `rags/lessons/group_aware_rescue_repack.md`
+- [v3-architecture] **self_contained_python_tool_recipe**: portable
+  `.scriptree` Python tools: `"executable": "%SCRIPTREE_LIB_PYTHON%/python.exe"`;
+  `"working_directory": "./."` (co-located scripts by bare name); do NOT
+  pass `-3.12` (py-launcher flag, rejected by python.exe). expandvars
+  applied to executable/working_directory/path_prepend in
+  `runner.py:resolve_tool_path ~L289`. Env vars published at startup:
+  SCRIPTREE_HOME, SCRIPTREE_LIB, SCRIPTREE_LIB_PYPI, SCRIPTREE_LIB_PYTHON,
+  SCRIPTREE_APPS. Canonical docs: docs/LLM/scriptree_home_env_var.md,
+  docs/portable_python.md.
+  → `rags/lessons/self_contained_python_tool_recipe.md`
+- [v3-architecture] **vendoring_tool_deps_into_lib_pypi**: add packages
+  to lib/requirements.txt (pinned exact), install with the BUNDLED
+  interpreter (`lib\python\python.exe -m pip install --target lib\pypi`)
+  for ABI correctness (cp314). Then inject at runtime via
+  `sys.path.insert(0, os.environ["SCRIPTREE_LIB_PYPI"])` — PYTHONPATH
+  is ignored by the embedded interpreter. Two-tree deploy obligation
+  applies to lib/ too.
+  → `rags/lessons/vendoring_tool_deps_into_lib_pypi.md`
+- [v3-architecture] **embeddable_python_ignores_pythonpath**: GOTCHA —
+  the bundled embeddable Python ignores PYTHONPATH (controlled by
+  lib/python/python314._pth which disables site.py). Cannot rely on
+  `PYTHONPATH=lib/pypi` for child tool subprocesses. Must do
+  `sys.path.insert(0, os.environ["SCRIPTREE_LIB_PYPI"])` inside every
+  tool script. Empirically verified: env-var form fails, sys.path.insert
+  succeeds.
+  → `rags/lessons/embeddable_python_ignores_pythonpath.md`
+- [v3-architecture] **combridge_finder_scriptree_home_first**: canonical
+  combridge discovery order for tool scripts: (1) SCRIPTREE_COMBRIDGE env
+  override; (2) %SCRIPTREE_HOME%/lib/combridge/combridge.exe; (3)
+  %SCRIPTREE_LIB%/combridge/combridge.exe; (4) shutil.which (PATH prepend);
+  (5) D:/R: hardcoded fallback. Validate SolidWorks plugin DLL presence;
+  reject plugin-less dev builds early. For .scriptree executables, use bare
+  "combridge.exe" (PATH prepend resolves it).
+  → `rags/lessons/combridge_finder_scriptree_home_first.md`
+- [v3-architecture] **drawing_gen_sw_bridge_to_combridge**: drawing-gen
+  migrated from sw_bridge.exe (OneDrive-only, never bundled) to combridge.
+  .csx ported verbatim (combridge injects identical swApp/swDoc/swPart/swAssy/
+  swDrawing globals). Only launcher changed: `sw_bridge.exe run-script <csx>
+  <out>` → `combridge solidworks run-script <csx> <out>`. Mirrors
+  dxf_export.py migration. sw_bridge is legacy; new tools start with combridge.
+  → `rags/lessons/drawing_gen_sw_bridge_to_combridge.md`
